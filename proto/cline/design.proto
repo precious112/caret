@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package cline;
+
+option go_package = "github.com/cline/grpc-go/cline";
+option java_multiple_files = true;
+option java_package = "bot.cline.proto";
+
+import "cline/common.proto";
+
+service DesignService {
+  rpc initDesignLayer(EmptyRequest) returns (Empty);
+  rpc getFoundationTokens(EmptyRequest) returns (FoundationTokensResponse);
+  rpc updateFoundationTokens(UpdateFoundationTokensRequest) returns (Empty);
+  rpc generateTokenScale(GenerateTokenScaleRequest) returns (GenerateTokenScaleResponse);
+  rpc searchGoogleFonts(StringRequest) returns (GoogleFontsResponse);
+  rpc listDesignPages(EmptyRequest) returns (DesignPagesResponse);
+  rpc getRenderingShellUrl(EmptyRequest) returns (String);
+}
+
+message FoundationTokensResponse {
+  string tokens_json = 1;
+}
+
+message UpdateFoundationTokensRequest {
+  string tokens_json = 1;
+}
+
+message GenerateTokenScaleRequest {
+  string type = 1;
+  string seed_value = 2;
+  string options_json = 3;
+}
+
+message GenerateTokenScaleResponse {
+  string scale_json = 1;
+}
+
+message GoogleFontsResponse {
+  repeated GoogleFontItem fonts = 1;
+}
+
+message GoogleFontItem {
+  string family = 1;
+  string category = 2;
+  repeated string variants = 3;
+}
+
+message DesignPagesResponse {
+  repeated DesignPageInfo pages = 1;
+}
+
+message DesignPageInfo {
+  string id = 1;
+  string title = 2;
+  string type = 3;
+  repeated string states = 4;
+  repeated string tags = 5;
+}

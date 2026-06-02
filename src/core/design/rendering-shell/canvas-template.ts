@@ -1,0 +1,1521 @@
+import * as fs from "fs/promises"
+import * as path from "path"
+
+import { dedent } from "./template-utils"
+
+export async function generateCanvasFiles(caretDir: string): Promise<void> {
+	const libDir = path.join(caretDir, "lib")
+	const canvasDir = path.join(libDir, "canvas")
+
+	await fs.mkdir(canvasDir, { recursive: true })
+
+	await Promise.all([
+		fs.writeFile(path.join(canvasDir, "types.ts"), generateTypes()),
+		fs.writeFile(path.join(canvasDir, "CanvasApp.tsx"), generateCanvasApp()),
+		fs.writeFile(path.join(canvasDir, "CanvasView.tsx"), generateCanvasView()),
+		fs.writeFile(path.join(canvasDir, "PageThumbnail.tsx"), generatePageThumbnail()),
+		fs.writeFile(path.join(canvasDir, "FocusedPageView.tsx"), generateFocusedPageView()),
+		fs.writeFile(path.join(canvasDir, "ErrorBoundary.tsx"), generateErrorBoundary()),
+		fs.writeFile(path.join(canvasDir, "OverlayPainter.tsx"), generateOverlayPainter()),
+		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
+		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
+		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
+	])
+}
+
+function generateTypes(): string {
+	return dedent`
+		export interface PageInfo {
+		  id: string
+		  title: string
+		  type: string
+		  states: string[]
+		  tags: string[]
+		}
+
+		export interface CanvasTransform {
+		  x: number
+		  y: number
+		  scale: number
+		}
+
+		export type LayoutMode = "auto" | "manual"
+
+		export interface CanvasLayout {
+		  mode: LayoutMode
+		  positions: Record<string, { x: number; y: number }>
+		}
+	`
+}
+
+function generateCanvasApp(): string {
+	return dedent`
+		import React, { useState, useEffect, useCallback } from "react"
+		import { routes, pageMetas } from "virtual:caret-router"
+		import { CanvasView } from "./CanvasView"
+		import { FocusedPageView } from "./FocusedPageView"
+		import { ErrorBoundary } from "./ErrorBoundary"
+		import type { PageInfo } from "./types"
+		import "./canvas.css"
+
+		export function CanvasApp() {
+		  const [mode, setMode] = useState<"canvas" | "focused">("canvas")
+		  const [focusedPageId, setFocusedPageId] = useState<string | null>(null)
+		  const [pages, setPages] = useState<PageInfo[]>(pageMetas || [])
+
+		  useEffect(() => {
+		    if (import.meta.hot) {
+		      import.meta.hot.on("caret:pages-changed", () => {
+		        fetch("/__caret/pages-meta")
+		          .then(r => r.json())
+		          .then(metas => setPages(metas))
+		          .catch(() => {})
+		      })
+		    }
+		  }, [])
+
+		  const handleFocus = useCallback((pageId: string) => {
+		    setFocusedPageId(pageId)
+		    setMode("focused")
+		  }, [])
+
+		  const handleBack = useCallback(() => {
+		    setMode("canvas")
+		    setFocusedPageId(null)
+		  }, [])
+
+		  if (mode === "focused" && focusedPageId) {
+		    const route = routes.find(r => r.name === focusedPageId)
+		    const page = pages.find(p => p.id === focusedPageId)
+		    if (route) {
+		      return (
+		        <ErrorBoundary fallback={<FocusedErrorFallback onBack={() => { setMode("canvas"); setFocusedPageId(null) }} />}>
+		          <FocusedPageView
+		            pageId={focusedPageId}
+		            title={page?.title || focusedPageId}
+		            tags={page?.tags || []}
+		            PageComponent={route.component}
+		            onBack={handleBack}
+		          />
+		        </ErrorBoundary>
+		      )
+		    }
+		  }
+
+		  return (
+		    <ErrorBoundary fallback={<CanvasErrorFallback />}>
+		      <CanvasView
+		        pages={pages}
+		        routes={routes}
+		        onFocus={handleFocus}
+		      />
+		    </ErrorBoundary>
+		  )
+		}
+
+		function FocusedErrorFallback({ onBack }: { onBack: () => void }) {
+		  return (
+		    <div className="caret-focused">
+		      <button onClick={onBack} className="caret-focused-fab" title="Back to canvas">←</button>
+		      <div className="caret-canvas-error">
+		        <h2>Page failed to render</h2>
+		        <p>Check .caret/vite.log for compilation errors.</p>
+		      </div>
+		    </div>
+		  )
+		}
+
+		function CanvasErrorFallback() {
+		  return (
+		    <div className="caret-canvas-error">
+		      <h2>Canvas error</h2>
+		      <p>Something went wrong. Try reloading the preview.</p>
+		    </div>
+		  )
+		}
+	`
+}
+
+function generateCanvasView(): string {
+	return dedent`
+		import React, { useState, useRef, useCallback, useEffect } from "react"
+		import { PageThumbnail } from "./PageThumbnail"
+		import type { PageInfo, CanvasTransform, CanvasLayout, LayoutMode } from "./types"
+
+		const THUMB_WIDTH = 380
+		const THUMB_HEIGHT = 238
+		const FRAME_WIDTH = 1440
+		const FRAME_HEIGHT = 900
+		const GAP = 40
+		const COLS = 3
+		const MIN_SCALE = 0.1
+		const MAX_SCALE = 3.0
+		const DRAG_THRESHOLD = 5
+		const GROUP_HEADER_HEIGHT = 32
+		const GROUP_GAP = 48
+
+		interface Props {
+		  pages: PageInfo[]
+		  routes: Array<{ path: string; name: string; component: React.ComponentType }>
+		  onFocus: (pageId: string) => void
+		}
+
+		function groupPagesByTag(pages: PageInfo[]): Array<{ tag: string; pages: PageInfo[] }> {
+		  const groups: Record<string, PageInfo[]> = {}
+		  for (const page of pages) {
+		    const tag = page.tags?.[0] || "other"
+		    if (!groups[tag]) groups[tag] = []
+		    groups[tag].push(page)
+		  }
+		  return Object.entries(groups)
+		    .sort(([a], [b]) => (a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b)))
+		    .map(([tag, pages]) => ({ tag, pages }))
+		}
+
+		function computeAutoPositions(pages: PageInfo[]): Array<{ page: PageInfo; x: number; y: number; groupTag?: string }> {
+		  const groups = groupPagesByTag(pages)
+		  const items: Array<{ page: PageInfo; x: number; y: number; groupTag?: string }> = []
+		  let yOffset = 0
+
+		  for (const group of groups) {
+		    yOffset += GROUP_HEADER_HEIGHT
+		    group.pages.forEach((page, i) => {
+		      const col = i % COLS
+		      const row = Math.floor(i / COLS)
+		      items.push({
+		        page,
+		        x: col * (THUMB_WIDTH + GAP),
+		        y: yOffset + row * (THUMB_HEIGHT + GAP + 24),
+		        groupTag: i === 0 ? group.tag : undefined,
+		      })
+		    })
+		    const rows = Math.ceil(group.pages.length / COLS)
+		    yOffset += rows * (THUMB_HEIGHT + GAP + 24) + GROUP_GAP
+		  }
+		  return items
+		}
+
+		let saveTimeout: ReturnType<typeof setTimeout> | null = null
+		function saveLayout(layout: CanvasLayout) {
+		  if (saveTimeout) clearTimeout(saveTimeout)
+		  saveTimeout = setTimeout(() => {
+		    fetch("/__caret/canvas-layout", {
+		      method: "PUT",
+		      headers: { "Content-Type": "application/json" },
+		      body: JSON.stringify(layout),
+		    }).catch(() => {})
+		  }, 500)
+		}
+
+		export function CanvasView({ pages, routes, onFocus }: Props) {
+		  const [transform, setTransform] = useState<CanvasTransform>({ x: 40, y: 40, scale: 1 })
+		  const [isPanning, setIsPanning] = useState(false)
+		  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
+		  const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({})
+		  const [dragState, setDragState] = useState<{ pageId: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
+		  const containerRef = useRef<HTMLDivElement>(null)
+
+		  useEffect(() => {
+		    fetch("/__caret/canvas-layout")
+		      .then(r => r.ok ? r.json() : null)
+		      .then(data => {
+		        if (data?.mode) setLayoutMode(data.mode)
+		        if (data?.positions) setManualPositions(data.positions)
+		      })
+		      .catch(() => {})
+		  }, [])
+
+		  const handleWheel = useCallback((e: React.WheelEvent) => {
+		    e.preventDefault()
+		    if (e.ctrlKey || e.metaKey) {
+		      const rect = containerRef.current?.getBoundingClientRect()
+		      if (!rect) return
+		      const mx = e.clientX - rect.left
+		      const my = e.clientY - rect.top
+		      setTransform(prev => {
+		        const factor = e.deltaY > 0 ? 0.9 : 1.1
+		        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * factor))
+		        const ratio = newScale / prev.scale
+		        return { x: mx - (mx - prev.x) * ratio, y: my - (my - prev.y) * ratio, scale: newScale }
+		      })
+		    } else {
+		      setTransform(prev => ({ ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY }))
+		    }
+		  }, [])
+
+		  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+		    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+		      e.preventDefault()
+		      setIsPanning(true)
+		      setPanStart({ x: e.clientX, y: e.clientY })
+		      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+		    }
+		  }, [])
+
+		  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+		    if (dragState) {
+		      const dx = (e.clientX - dragState.startX) / transform.scale
+		      const dy = (e.clientY - dragState.startY) / transform.scale
+		      if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD || dragState.moved) {
+		        setDragState(prev => prev ? { ...prev, moved: true } : null)
+		        setManualPositions(prev => ({
+		          ...prev,
+		          [dragState.pageId]: { x: dragState.origX + dx, y: dragState.origY + dy },
+		        }))
+		      }
+		      return
+		    }
+		    if (!isPanning) return
+		    const dx = e.clientX - panStart.x
+		    const dy = e.clientY - panStart.y
+		    setPanStart({ x: e.clientX, y: e.clientY })
+		    setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
+		  }, [isPanning, panStart, dragState, transform.scale])
+
+		  const handlePointerUp = useCallback(() => {
+		    if (dragState?.moved) {
+		      saveLayout({ mode: layoutMode, positions: manualPositions })
+		    }
+		    setDragState(null)
+		    setIsPanning(false)
+		  }, [dragState, layoutMode, manualPositions])
+
+		  const handleThumbPointerDown = useCallback((pageId: string, x: number, y: number, e: React.PointerEvent) => {
+		    if (layoutMode !== "manual" || e.button !== 0) return
+		    e.stopPropagation()
+		    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+		    setDragState({ pageId, startX: e.clientX, startY: e.clientY, origX: x, origY: y, moved: false })
+		  }, [layoutMode])
+
+		  const fitAll = useCallback(() => {
+		    if (!containerRef.current || pages.length === 0) return
+		    const rect = containerRef.current.getBoundingClientRect()
+		    const positioned = layoutMode === "manual"
+		      ? pages.map((p, i) => manualPositions[p.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (THUMB_HEIGHT + GAP + 24) })
+		      : computeAutoPositions(pages).map(item => ({ x: item.x, y: item.y }))
+		    const maxX = Math.max(...positioned.map(p => p.x)) + THUMB_WIDTH
+		    const maxY = Math.max(...positioned.map(p => p.y)) + THUMB_HEIGHT + 24
+		    const padding = 60
+		    const scaleX = (rect.width - padding * 2) / maxX
+		    const scaleY = (rect.height - padding * 2) / maxY
+		    const scale = Math.min(scaleX, scaleY, 1.5)
+		    const x = (rect.width - maxX * scale) / 2
+		    const y = (rect.height - maxY * scale) / 2
+		    setTransform({ x, y, scale })
+		  }, [pages, layoutMode, manualPositions])
+
+		  useEffect(() => { fitAll() }, [pages.length])
+
+		  const toggleLayout = useCallback(() => {
+		    const newMode = layoutMode === "auto" ? "manual" : "auto"
+		    if (newMode === "manual" && Object.keys(manualPositions).length === 0) {
+		      const auto = computeAutoPositions(pages)
+		      const positions: Record<string, { x: number; y: number }> = {}
+		      auto.forEach(item => { positions[item.page.id] = { x: item.x, y: item.y } })
+		      setManualPositions(positions)
+		      saveLayout({ mode: newMode, positions })
+		    } else {
+		      saveLayout({ mode: newMode, positions: manualPositions })
+		    }
+		    setLayoutMode(newMode)
+		  }, [layoutMode, manualPositions, pages])
+
+		  if (pages.length === 0) {
+		    return (
+		      <div className="caret-canvas-empty">
+		        <div className="caret-canvas-empty-icon">◇</div>
+		        <h2>No pages yet</h2>
+		        <p>Use Caret in design mode to create pages.</p>
+		      </div>
+		    )
+		  }
+
+		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages) : null
+		  const iframeScale = THUMB_WIDTH / FRAME_WIDTH
+
+		  return (
+		    <div
+		      ref={containerRef}
+		      className="caret-canvas-container"
+		      onWheel={handleWheel}
+		      onPointerDown={handlePointerDown}
+		      onPointerMove={handlePointerMove}
+		      onPointerUp={handlePointerUp}
+		      style={{ cursor: isPanning ? "grabbing" : dragState ? "grabbing" : "default" }}
+		    >
+		      <div className="caret-canvas-toolbar">
+		        <button onClick={fitAll} className="caret-canvas-btn" title="Fit all">⊞</button>
+		        <button onClick={toggleLayout} className={"caret-canvas-btn" + (layoutMode === "manual" ? " active" : "")} title={layoutMode === "auto" ? "Switch to manual layout" : "Switch to auto layout"}>
+		          {layoutMode === "auto" ? "⊞" : "✋"}
+		        </button>
+		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
+		      </div>
+		      <div
+		        className="caret-canvas-content"
+		        style={{
+		          transform: \`translate(\${transform.x}px, \${transform.y}px) scale(\${transform.scale})\`,
+		          transformOrigin: "0 0",
+		        }}
+		      >
+		        {autoItems ? (
+		          autoItems.map(({ page, x, y, groupTag }) => {
+		            const hasRoute = routes.some(r => r.name === page.id)
+		            return (
+		              <React.Fragment key={page.id}>
+		                {groupTag && (
+		                  <div className="caret-canvas-group-header" style={{ position: "absolute", left: 0, top: y - GROUP_HEADER_HEIGHT, width: COLS * (THUMB_WIDTH + GAP) }}>
+		                    {groupTag}
+		                  </div>
+		                )}
+		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
+		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={FRAME_WIDTH} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
+		                </div>
+		              </React.Fragment>
+		            )
+		          })
+		        ) : (
+		          pages.map((page, i) => {
+		            const pos = manualPositions[page.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (THUMB_HEIGHT + GAP + 24) }
+		            const hasRoute = routes.some(r => r.name === page.id)
+		            return (
+		              <div
+		                key={page.id}
+		                className={"caret-canvas-thumb-wrapper" + (dragState?.pageId === page.id ? " dragging" : "")}
+		                style={{ position: "absolute", left: pos.x, top: pos.y }}
+		                onPointerDown={(e) => handleThumbPointerDown(page.id, pos.x, pos.y, e)}
+		              >
+		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={FRAME_WIDTH} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
+		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
+		              </div>
+		            )
+		          })
+		        )}
+		      </div>
+		    </div>
+		  )
+		}
+	`
+}
+
+function generatePageThumbnail(): string {
+	return dedent`
+		import React from "react"
+
+		interface Props {
+		  pageId: string
+		  title: string
+		  tags: string[]
+		  frameWidth: number
+		  frameHeight: number
+		  thumbWidth: number
+		  onClick?: () => void
+		}
+
+		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick }: Props) {
+		  const scale = thumbWidth / frameWidth
+		  const thumbHeight = frameHeight * scale
+
+		  return (
+		    <div className="caret-canvas-frame" onClick={onClick} style={{ cursor: onClick ? "pointer" : "default" }}>
+		      <div className="caret-canvas-frame-label">
+		        <span className="caret-canvas-frame-title">{title}</span>
+		        {tags.length > 0 && (
+		          <div className="caret-canvas-frame-tags">
+		            {tags.slice(0, 3).map(tag => (
+		              <span key={tag} className="caret-canvas-frame-tag">{tag}</span>
+		            ))}
+		          </div>
+		        )}
+		      </div>
+		      <div className="caret-canvas-frame-viewport" style={{ width: thumbWidth, height: thumbHeight }}>
+		        <iframe
+		          src={\`/?page=\${encodeURIComponent(pageId)}\`}
+		          className="caret-canvas-frame-iframe"
+		          title={title}
+		          style={{
+		            width: frameWidth,
+		            height: frameHeight,
+		            transform: \`scale(\${scale})\`,
+		          }}
+		          tabIndex={-1}
+		        />
+		      </div>
+		    </div>
+		  )
+		}
+	`
+}
+
+function generateFocusedPageView(): string {
+	return dedent`
+		import React, { useEffect, useState } from "react"
+		import { OverlayPainter } from "./OverlayPainter"
+
+		interface Props {
+		  pageId: string
+		  title: string
+		  tags: string[]
+		  PageComponent: React.ComponentType
+		  onBack: () => void
+		}
+
+		export function FocusedPageView({ pageId, title, tags, PageComponent, onBack }: Props) {
+		  const [paintMode, setPaintMode] = useState(false)
+
+		  useEffect(() => {
+		    (window as any).__CARET_FOCUSED_PAGE__ = {
+		      pageId,
+		      filePath: "pages/" + pageId + "/index.tsx",
+		    }
+		    const rg = (window as any).__REACT_GRAB__
+		    if (rg) {
+		      rg.activate()
+		      return () => { rg.deactivate(); (window as any).__CARET_FOCUSED_PAGE__ = null }
+		    }
+		    return () => { (window as any).__CARET_FOCUSED_PAGE__ = null }
+		  }, [pageId])
+
+		  return (
+		    <div className="caret-focused">
+		      <button onClick={onBack} className="caret-focused-fab" title="Back to canvas">←</button>
+		      <button
+		        onClick={() => setPaintMode(!paintMode)}
+		        className={"caret-focused-fab caret-focused-paint-btn" + (paintMode ? " active" : "")}
+		        title={paintMode ? "Exit paint mode" : "Paint to edit"}
+		      >
+		        ✎
+		      </button>
+		      <div className="caret-focused-content">
+		        <PageComponent />
+		      </div>
+		      {paintMode && <OverlayPainter onClose={() => setPaintMode(false)} />}
+		    </div>
+		  )
+		}
+	`
+}
+
+function generateErrorBoundary(): string {
+	return dedent`
+		import React from "react"
+
+		interface Props {
+		  children: React.ReactNode
+		  fallback: React.ReactNode
+		}
+
+		interface State {
+		  hasError: boolean
+		}
+
+		export class ErrorBoundary extends React.Component<Props, State> {
+		  constructor(props: Props) {
+		    super(props)
+		    this.state = { hasError: false }
+		  }
+
+		  static getDerivedStateFromError(): State {
+		    return { hasError: true }
+		  }
+
+		  componentDidCatch(error: Error, info: React.ErrorInfo) {
+		    console.error("Canvas error boundary caught:", error, info.componentStack)
+		  }
+
+		  render() {
+		    if (this.state.hasError) return this.props.fallback
+		    return this.props.children
+		  }
+		}
+	`
+}
+
+function generateOverlayPainter(): string {
+	return dedent`
+		import React, { useState, useRef, useCallback } from "react"
+		import { bridge } from "../bridge"
+
+		interface Props {
+		  onClose: () => void
+		}
+
+		export function OverlayPainter({ onClose }: Props) {
+		  const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+		  const [drawing, setDrawing] = useState(false)
+		  const [instruction, setInstruction] = useState("")
+		  const [sending, setSending] = useState(false)
+		  const startRef = useRef({ x: 0, y: 0 })
+
+		  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+		    if ((e.target as HTMLElement).closest(".caret-overlay-prompt")) return
+		    setDrawing(true)
+		    startRef.current = { x: e.clientX, y: e.clientY }
+		    setRect(null)
+		    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+		  }, [])
+
+		  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+		    if (!drawing) return
+		    const x = Math.min(startRef.current.x, e.clientX)
+		    const y = Math.min(startRef.current.y, e.clientY)
+		    const w = Math.abs(e.clientX - startRef.current.x)
+		    const h = Math.abs(e.clientY - startRef.current.y)
+		    setRect({ x, y, w, h })
+		  }, [drawing])
+
+		  const handlePointerUp = useCallback(() => {
+		    setDrawing(false)
+		  }, [])
+
+		  const handleSubmit = useCallback(async () => {
+		    if (!rect || !instruction.trim()) return
+		    setSending(true)
+
+		    try {
+		      const content = document.querySelector(".caret-focused-content")
+		      if (!content) return
+
+		      const canvas = document.createElement("canvas")
+		      const scrollX = window.scrollX
+		      const scrollY = window.scrollY
+		      canvas.width = rect.w
+		      canvas.height = rect.h
+		      const ctx = canvas.getContext("2d")
+		      if (!ctx) return
+
+		      const imgs = content.querySelectorAll("img")
+		      await Promise.all(Array.from(imgs).map(img =>
+		        img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r })
+		      ))
+
+		      let html = content.innerHTML
+
+		      // Proxy external images to avoid cross-origin SVG foreignObject failures
+		      const srcRegex = new RegExp('src="(https?://[^"]+)"', "g")
+		      const matches: string[] = []
+		      let srcMatch
+		      while ((srcMatch = srcRegex.exec(html)) !== null) {
+		        if (!matches.includes(srcMatch[1])) matches.push(srcMatch[1])
+		      }
+		      const externalSrcs = matches
+
+		      for (const src of externalSrcs) {
+		        try {
+		          const resp = await fetch("/__caret/image-proxy?url=" + encodeURIComponent(src))
+		          if (!resp.ok) continue
+		          const blob = await resp.blob()
+		          const dataUri: string = await new Promise((resolve) => {
+		            const reader = new FileReader()
+		            reader.onload = () => resolve(reader.result as string)
+		            reader.readAsDataURL(blob)
+		          })
+		          html = html.replaceAll(src, dataUri)
+		        } catch (e) {
+		          console.warn("image proxy failed for:", src, e)
+		        }
+		      }
+
+		      const style = Array.from(document.querySelectorAll("style, link[rel='stylesheet']"))
+		        .map(el => el.outerHTML).join("")
+		      const svgData = \`<svg xmlns="http://www.w3.org/2000/svg" width="\${window.innerWidth}" height="\${content.scrollHeight}">
+		        <foreignObject width="100%" height="100%">
+		          <div xmlns="http://www.w3.org/1999/xhtml">\${style}\${html}</div>
+		        </foreignObject>
+		      </svg>\`
+
+		      const img = new Image()
+		      const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" })
+		      const url = URL.createObjectURL(blob)
+
+		      await new Promise<void>((resolve, reject) => {
+		        img.onload = () => {
+		          ctx.drawImage(img, rect.x + scrollX, rect.y + scrollY, rect.w, rect.h, 0, 0, rect.w, rect.h)
+		          URL.revokeObjectURL(url)
+		          resolve()
+		        }
+		        img.onerror = () => { URL.revokeObjectURL(url); reject() }
+		        img.src = url
+		      })
+
+		      const focusedPage = (window as any).__CARET_FOCUSED_PAGE__
+		      bridge.send({
+		        type: "overlay-edit",
+		        payload: {
+		          instruction: instruction.trim(),
+		          screenshotDataUrl: canvas.toDataURL("image/png"),
+		          regionBounds: { x: rect.x, y: rect.y, width: rect.w, height: rect.h },
+		          filePath: focusedPage?.filePath || "",
+		        },
+		      })
+
+		      setRect(null)
+		      setInstruction("")
+		      onClose()
+		    } catch (err) {
+		      console.error("Overlay capture failed:", err)
+		    } finally {
+		      setSending(false)
+		    }
+		  }, [rect, instruction, onClose])
+
+		  return (
+		    <div
+		      className="caret-overlay"
+		      onPointerDown={handlePointerDown}
+		      onPointerMove={handlePointerMove}
+		      onPointerUp={handlePointerUp}
+		    >
+		      {rect && (
+		        <>
+		          <div className="caret-overlay-rect" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} />
+		          {!drawing && rect.w > 20 && rect.h > 20 && (
+		            <div className="caret-overlay-prompt" style={{ left: rect.x, top: rect.y + rect.h + 8 }}>
+		              <input
+		                autoFocus
+		                placeholder="Describe the change..."
+		                value={instruction}
+		                onChange={e => setInstruction(e.target.value)}
+		                onKeyDown={e => { if (e.key === "Enter") handleSubmit(); if (e.key === "Escape") { setRect(null); onClose() } }}
+		                disabled={sending}
+		              />
+		              <button onClick={handleSubmit} disabled={sending || !instruction.trim()}>
+		                {sending ? "..." : "→"}
+		              </button>
+		            </div>
+		          )}
+		        </>
+		      )}
+		    </div>
+		  )
+		}
+	`
+}
+
+function generateCanvasCSS(): string {
+	return dedent`
+		.caret-canvas-container {
+		  position: fixed;
+		  inset: 0;
+		  overflow: hidden;
+		  background: #0a0a0a;
+		  user-select: none;
+		}
+
+		.caret-canvas-content {
+		  position: absolute;
+		  top: 0;
+		  left: 0;
+		  will-change: transform;
+		}
+
+		.caret-canvas-toolbar {
+		  position: fixed;
+		  bottom: 16px;
+		  left: 50%;
+		  transform: translateX(-50%);
+		  display: flex;
+		  align-items: center;
+		  gap: 8px;
+		  padding: 6px 12px;
+		  background: #1a1a1a;
+		  border: 1px solid #333;
+		  border-radius: 8px;
+		  z-index: 100;
+		}
+
+		.caret-canvas-btn {
+		  background: none;
+		  border: 1px solid #444;
+		  color: #ccc;
+		  padding: 4px 8px;
+		  border-radius: 4px;
+		  cursor: pointer;
+		  font-size: 14px;
+		}
+		.caret-canvas-btn:hover { background: #333; }
+		.caret-canvas-btn.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+		.caret-canvas-zoom-label {
+		  color: #888;
+		  font-size: 12px;
+		  font-family: monospace;
+		  min-width: 40px;
+		  text-align: center;
+		}
+
+		.caret-canvas-empty {
+		  position: fixed;
+		  inset: 0;
+		  display: flex;
+		  flex-direction: column;
+		  align-items: center;
+		  justify-content: center;
+		  background: #0a0a0a;
+		  color: #666;
+		}
+		.caret-canvas-empty-icon { font-size: 48px; margin-bottom: 16px; }
+		.caret-canvas-empty h2 { font-size: 20px; color: #999; margin-bottom: 8px; }
+		.caret-canvas-empty p { font-size: 14px; }
+
+		/* Frame — Figma-style artboard */
+		.caret-canvas-frame {
+		  display: flex;
+		  flex-direction: column;
+		}
+
+		.caret-canvas-frame-label {
+		  display: flex;
+		  align-items: center;
+		  gap: 8px;
+		  padding: 0 0 6px;
+		  min-height: 20px;
+		}
+
+		.caret-canvas-frame-title {
+		  font-size: 12px;
+		  color: #888;
+		  font-weight: 500;
+		  white-space: nowrap;
+		  overflow: hidden;
+		  text-overflow: ellipsis;
+		}
+
+		.caret-canvas-frame:hover .caret-canvas-frame-title {
+		  color: #ddd;
+		}
+
+		.caret-canvas-frame-tags {
+		  display: flex;
+		  gap: 4px;
+		}
+
+		.caret-canvas-frame-tag {
+		  font-size: 9px;
+		  padding: 1px 5px;
+		  border-radius: 3px;
+		  background: #222;
+		  color: #666;
+		}
+
+		.caret-canvas-frame-viewport {
+		  position: relative;
+		  overflow: hidden;
+		  border-radius: 4px;
+		  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+		  background: #fff;
+		}
+
+		.caret-canvas-frame:hover .caret-canvas-frame-viewport {
+		  box-shadow: 0 2px 12px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,130,246,0.5);
+		}
+
+		.caret-canvas-frame-iframe {
+		  transform-origin: top left;
+		  border: none;
+		  pointer-events: none;
+		  display: block;
+		}
+
+		/* Focused page view */
+		.caret-focused {
+		  position: fixed;
+		  inset: 0;
+		  overflow-y: auto;
+		  background: #fff;
+		}
+
+		.caret-focused-fab {
+		  position: fixed;
+		  top: 12px;
+		  left: 12px;
+		  z-index: 9999;
+		  width: 36px;
+		  height: 36px;
+		  display: flex;
+		  align-items: center;
+		  justify-content: center;
+		  background: rgba(255, 255, 255, 0.15);
+		  color: #fff;
+		  border: 1px solid rgba(255, 255, 255, 0.2);
+		  border-radius: 50%;
+		  cursor: pointer;
+		  font-size: 16px;
+		  backdrop-filter: blur(12px);
+		  -webkit-backdrop-filter: blur(12px);
+		  transition: background 0.15s, border-color 0.15s;
+		  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+		  padding: 0;
+		  line-height: 1;
+		}
+		.caret-focused-fab:hover {
+		  background: rgba(255, 255, 255, 0.25);
+		  border-color: rgba(255, 255, 255, 0.35);
+		}
+
+		.caret-focused-content {
+		  min-height: 100%;
+		}
+
+		/* Group headers */
+		.caret-canvas-group-header {
+		  font-size: 12px;
+		  font-weight: 600;
+		  color: #666;
+		  text-transform: uppercase;
+		  letter-spacing: 0.05em;
+		  padding: 4px 0;
+		  white-space: nowrap;
+		}
+
+		/* Drag states */
+		.caret-canvas-thumb-wrapper.dragging {
+		  z-index: 10;
+		  opacity: 0.85;
+		}
+		.caret-canvas-thumb-wrapper {
+		  transition: none;
+		}
+
+		/* Error fallback */
+		.caret-canvas-error {
+		  display: flex;
+		  flex-direction: column;
+		  align-items: center;
+		  justify-content: center;
+		  min-height: 50vh;
+		  color: #888;
+		  text-align: center;
+		}
+		.caret-canvas-error h2 { font-size: 18px; color: #ccc; margin-bottom: 8px; }
+		.caret-canvas-error p { font-size: 13px; }
+
+		/* Paint mode button */
+		.caret-focused-paint-btn {
+		  top: 12px;
+		  left: 56px;
+		}
+		.caret-focused-paint-btn.active {
+		  background: rgba(59, 130, 246, 0.4);
+		  border-color: rgba(59, 130, 246, 0.6);
+		}
+
+		/* Overlay painter */
+		.caret-overlay {
+		  position: fixed;
+		  inset: 0;
+		  z-index: 9998;
+		  cursor: crosshair;
+		  background: rgba(0, 0, 0, 0.1);
+		}
+
+		.caret-overlay-rect {
+		  position: fixed;
+		  border: 2px solid #3b82f6;
+		  background: rgba(59, 130, 246, 0.08);
+		  pointer-events: none;
+		}
+
+		.caret-overlay-prompt {
+		  position: fixed;
+		  display: flex;
+		  gap: 4px;
+		  z-index: 9999;
+		}
+
+		.caret-overlay-prompt input {
+		  padding: 6px 10px;
+		  border: 1px solid #555;
+		  border-radius: 6px;
+		  background: #1a1a1a;
+		  color: #eee;
+		  font-size: 13px;
+		  width: 280px;
+		  outline: none;
+		}
+		.caret-overlay-prompt input:focus {
+		  border-color: #3b82f6;
+		}
+
+		.caret-overlay-prompt button {
+		  padding: 6px 10px;
+		  border: 1px solid #555;
+		  border-radius: 6px;
+		  background: #3b82f6;
+		  color: #fff;
+		  cursor: pointer;
+		  font-size: 13px;
+		}
+		.caret-overlay-prompt button:disabled {
+		  opacity: 0.5;
+		  cursor: default;
+		}
+	`
+}
+
+function generateBridge(): string {
+	return dedent`
+		type MessageHandler = (data: any) => void
+
+		const listeners: Map<string, Set<MessageHandler>> = new Map()
+
+		function showToast(message: string, isError: boolean) {
+		  const el = document.createElement("div")
+		  el.textContent = message
+		  Object.assign(el.style, {
+		    position: "fixed", bottom: "20px", right: "20px", zIndex: "99999",
+		    padding: "8px 16px", borderRadius: "6px", fontSize: "13px",
+		    background: isError ? "#dc2626" : "#16a34a", color: "#fff",
+		    boxShadow: "0 2px 8px rgba(0,0,0,0.3)", transition: "opacity 0.3s",
+		  })
+		  document.body.appendChild(el)
+		  setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 300) }, 2500)
+		}
+
+		window.addEventListener("message", (e) => {
+		  if (e.data?.source !== "caret-extension") return
+
+		  if (e.data.type === "edit-result") {
+		    const { success, error } = e.data.payload
+		    if (!success) showToast(error || "Edit failed", true)
+		  }
+
+		  const handlers = listeners.get(e.data.type)
+		  if (handlers) {
+		    handlers.forEach(fn => fn(e.data.payload))
+		  }
+		})
+
+		export const bridge = {
+		  send(message: { type: string; payload: unknown }) {
+		    window.parent.postMessage({ source: "caret-vite", ...message }, "*")
+		  },
+
+		  on(type: string, handler: MessageHandler) {
+		    if (!listeners.has(type)) listeners.set(type, new Set())
+		    listeners.get(type)!.add(handler)
+		    return () => { listeners.get(type)?.delete(handler) }
+		  },
+		}
+	`
+}
+
+function generateCaretGrabPlugin(): string {
+	return dedent`
+		import { bridge } from "./bridge"
+
+		function log(...args: unknown[]) {
+		  console.log("[caret-grab]", ...args)
+		  bridge.send({ type: "log", payload: { level: "info", message: args.map(String).join(" ") } })
+		}
+
+		function logError(...args: unknown[]) {
+		  console.error("[caret-grab]", ...args)
+		  bridge.send({ type: "log", payload: { level: "error", message: args.map(String).join(" ") } })
+		}
+
+		function getFocusedPage(): { pageId: string; filePath: string } | null {
+		  return (window as any).__CARET_FOCUSED_PAGE__ || null
+		}
+
+		function isCanvasInfraFile(fp: string): boolean {
+		  if (!fp) return true
+		  return fp.includes("/lib/canvas/") || fp.includes("CanvasApp") || fp.includes("FocusedPageView") || fp.includes("PageThumbnail") || fp.includes("ErrorBoundary")
+		}
+
+		function getFiberFromElement(element: Element | Node): any {
+		  let el: any = element
+		  if (el.nodeType === 3) el = el.parentElement
+		  if (!el) return null
+
+		  const fiberKey = Object.keys(el).find((k: string) => k.startsWith("__reactFiber$"))
+		  if (fiberKey) return el[fiberKey]
+
+		  let parent = el.parentElement
+		  while (parent) {
+		    const key = Object.keys(parent).find((k: string) => k.startsWith("__reactFiber$"))
+		    if (key) return parent[key]
+		    parent = parent.parentElement
+		  }
+		  return null
+		}
+
+		function parseDebugStack(debugStack: any): { filePath: string; lineNumber: number; componentName: string } | null {
+		  if (!debugStack) return null
+
+		  let stackStr: string
+		  if (typeof debugStack === "string") {
+		    stackStr = debugStack
+		  } else if (debugStack instanceof Error || typeof debugStack?.stack === "string") {
+		    stackStr = debugStack.stack
+		  } else {
+		    return null
+		  }
+
+		  const lines = stackStr.split("\\n")
+		  for (const line of lines) {
+		    const match = line.match(/at\\s+(?:(\\S+)\\s+)?\\(?https?:\\/\\/[^/]+\\/(.+?):(\\d+):(\\d+)\\)?/)
+		    if (!match) continue
+
+		    const [, componentName, urlPath, lineStr] = match
+		    const lineNumber = parseInt(lineStr, 10)
+
+		    if (isCanvasInfraFile(urlPath)) continue
+		    if (urlPath.includes("node_modules/")) continue
+		    if (urlPath.startsWith("@") || urlPath.startsWith("vite/")) continue
+
+		    return { filePath: urlPath, lineNumber, componentName: componentName || "" }
+		  }
+		  return null
+		}
+
+		function resolveSourceFromFiber(element: Element | Node): { filePath: string; lineNumber: number; componentName: string } | null {
+		  try {
+		    const fiber = getFiberFromElement(element)
+		    if (!fiber) return null
+
+		    const sourceMap: WeakMap<object, any> | undefined = (window as any).__caretSourceMap
+
+		    let current = fiber
+		    let depth = 0
+		    while (current && depth < 30) {
+		      // Priority 1: SWC __source via patched jsxDEV (exact line numbers)
+		      if (sourceMap) {
+		        const props = current.memoizedProps || current.pendingProps
+		        if (props && typeof props === "object") {
+		          const caretSource = sourceMap.get(props)
+		          if (caretSource && caretSource.fileName) {
+		            const rawPath = caretSource.fileName as string
+		            const urlMatch = rawPath.match(/https?:\\/\\/[^/]+\\/(.+)/)
+		            const filePath = urlMatch ? urlMatch[1] : rawPath
+		            if (!isCanvasInfraFile(filePath) && !filePath.includes("node_modules/")) {
+		              const componentName = typeof current.type === "function" ? (current.type.displayName || current.type.name || "") : ""
+		              log("resolveSourceFromFiber: __caretSource hit", filePath, "line:", caretSource.lineNumber)
+		              return { filePath, lineNumber: caretSource.lineNumber || 0, componentName }
+		            }
+		          }
+		        }
+		      }
+		      // Priority 2: _debugStack from React 19 (approximate line numbers)
+		      if (current._debugStack) {
+		        const result = parseDebugStack(current._debugStack)
+		        if (result) return result
+		      }
+		      current = current.return
+		      depth++
+		    }
+		    return null
+		  } catch (err) {
+		    logError("resolveSourceFromFiber failed:", err)
+		    return null
+		  }
+		}
+
+		let lastResolvedSource: { filePath: string; lineNumber: number; componentName: string } | null = null
+
+		function resolveElementSource(rgSource: any, element?: Element | Node): { filePath: string; lineNumber: number; componentName: string } | null {
+		  const page = getFocusedPage()
+		  if (!page) return rgSource || null
+
+		  if (element) {
+		    const fiberSource = resolveSourceFromFiber(element)
+		    if (fiberSource && !isCanvasInfraFile(fiberSource.filePath)) {
+		      log("resolveElementSource: fiber hit", JSON.stringify(fiberSource))
+		      lastResolvedSource = fiberSource
+		      return fiberSource
+		    }
+		  }
+
+		  if (rgSource && !isCanvasInfraFile(rgSource.filePath)) {
+		    lastResolvedSource = rgSource
+		    return rgSource
+		  }
+
+		  const fallback = { filePath: page.filePath, lineNumber: 0, componentName: rgSource?.componentName || "" }
+		  lastResolvedSource = fallback
+		  return fallback
+		}
+
+		function showToast(message: string, type: "success" | "error") {
+		  const toast = document.createElement("div")
+		  toast.textContent = message
+		  toast.style.cssText = \`position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 20px;border-radius:8px;font-size:13px;font-family:system-ui,sans-serif;color:#fff;pointer-events:none;opacity:0;transition:opacity 0.2s;\${type === "success" ? "background:#16a34a;" : "background:#dc2626;"}\`
+		  document.body.appendChild(toast)
+		  requestAnimationFrame(() => { toast.style.opacity = "1" })
+		  setTimeout(() => {
+		    toast.style.opacity = "0"
+		    setTimeout(() => toast.remove(), 200)
+		  }, 3000)
+		}
+
+		function showAiEditFallback(errorMessage: string) {
+		  const existing = document.getElementById("caret-ai-edit-fallback")
+		  if (existing) existing.remove()
+
+		  const card = document.createElement("div")
+		  card.id = "caret-ai-edit-fallback"
+		  card.style.cssText = "position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;background:#1e1e2e;border:1px solid #444;border-radius:12px;padding:16px 20px;font-family:system-ui,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,0.4);max-width:400px;width:90%;"
+
+		  const closeBtn = document.createElement("button")
+		  closeBtn.textContent = "×"
+		  closeBtn.style.cssText = "position:absolute;top:8px;right:12px;background:none;border:none;color:#a1a1aa;font-size:20px;cursor:pointer;padding:0;line-height:1;"
+		  closeBtn.addEventListener("click", () => card.remove())
+		  card.appendChild(closeBtn)
+
+		  const msg = document.createElement("p")
+		  msg.textContent = errorMessage
+		  msg.style.cssText = "margin:0 0 12px;font-size:13px;color:#f87171;line-height:1.4;padding-right:20px;"
+		  card.appendChild(msg)
+
+		  const label = document.createElement("p")
+		  label.textContent = "Describe what you want to change:"
+		  label.style.cssText = "margin:0 0 8px;font-size:12px;color:#a1a1aa;"
+		  card.appendChild(label)
+
+		  const row = document.createElement("div")
+		  row.style.cssText = "display:flex;gap:8px;"
+
+		  const input = document.createElement("input")
+		  input.type = "text"
+		  input.placeholder = "e.g. Change text to 'Hello World'"
+		  input.style.cssText = "flex:1;padding:8px 12px;border-radius:6px;border:1px solid #555;background:#2a2a3e;color:#fff;font-size:13px;outline:none;"
+		  row.appendChild(input)
+
+		  const btn = document.createElement("button")
+		  btn.textContent = "Send"
+		  btn.style.cssText = "padding:8px 16px;border-radius:6px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer;font-weight:500;"
+		  row.appendChild(btn)
+
+		  card.appendChild(row)
+		  document.body.appendChild(card)
+		  input.focus()
+
+		  const submit = () => {
+		    const text = input.value.trim()
+		    if (!text || !lastResolvedSource) return
+		    log("ai-edit-fallback: submitting", text)
+		    bridge.send({
+		      type: "ai-edit-request",
+		      payload: {
+		        instruction: text,
+		        filePath: lastResolvedSource.filePath,
+		        lineNumber: lastResolvedSource.lineNumber,
+		        componentName: lastResolvedSource.componentName,
+		        componentStack: "",
+		      },
+		    })
+		    card.remove()
+		  }
+
+		  btn.addEventListener("click", submit)
+		  input.addEventListener("keydown", (e: KeyboardEvent) => {
+		    if (e.key === "Enter") submit()
+		    if (e.key === "Escape") card.remove()
+		  })
+		}
+
+		async function initPlugin() {
+		  log("initializing caret-grab-plugin")
+
+		  bridge.on("edit-result", (payload: any) => {
+		    if (payload.success) {
+		      log("edit-result: SUCCESS")
+		      showToast("Edit applied", "success")
+		    } else if (payload.suggestAiEdit && lastResolvedSource) {
+		      logError("edit-result: FAILED (suggesting AI edit) -", payload.error)
+		      showAiEditFallback(payload.error || "This content can't be edited inline.")
+		    } else {
+		      logError("edit-result: FAILED -", payload.error || "unknown error")
+		      showToast(payload.error || "Edit failed", "error")
+		    }
+		  })
+
+		  const rg = await import("react-grab")
+		  const api = (window as any).__REACT_GRAB__
+		  log("react-grab loaded, api exists:", !!api)
+
+		  if (!api) {
+		    logError("window.__REACT_GRAB__ is null after import — react-grab failed to self-init")
+		    return
+		  }
+
+		  rg.registerPlugin({
+		    name: "caret",
+		    hooks: {
+		      async onElementSelect(element: Element) {
+		        try {
+		          const rgSource = await api.getSource(element)
+		          const source = resolveElementSource(rgSource, element)
+		          log("onElementSelect:", JSON.stringify(source), "(raw:", JSON.stringify(rgSource), ")")
+		          if (!source) return true
+		          bridge.send({
+		            type: "element-selected",
+		            payload: {
+		              filePath: source.filePath,
+		              lineNumber: source.lineNumber,
+		              componentName: source.componentName,
+		              tagName: element.tagName.toLowerCase(),
+		              props: {},
+		            },
+		          })
+		        } catch (err) {
+		          logError("onElementSelect error:", err)
+		        }
+		        return true
+		      },
+
+		      onOpenFile(filePath: string, lineNumber?: number) {
+		        const page = getFocusedPage()
+		        if (page && isCanvasInfraFile(filePath)) {
+		          const resolved = lastResolvedSource?.filePath || page.filePath
+		          const resolvedLine = lastResolvedSource?.lineNumber || lineNumber
+		          log("onOpenFile:", resolved, resolvedLine, "(from cached fiber source)")
+		          bridge.send({ type: "open-file", payload: { filePath: resolved, lineNumber: resolvedLine } })
+		        } else {
+		          log("onOpenFile:", filePath, lineNumber)
+		          bridge.send({ type: "open-file", payload: { filePath, lineNumber } })
+		        }
+		        return true
+		      },
+
+		      onPromptModeChange(isPrompt: boolean) {
+		        if (!isPrompt) return
+		        log("prompt mode activated, waiting for input element")
+
+		        let attempts = 0
+		        const tryAttach = () => {
+		          attempts++
+		          const host = document.querySelector("[data-react-grab]")
+		          if (!host?.shadowRoot) { logError("prompt mode: no shadow root"); return }
+		          const input = host.shadowRoot.querySelector("textarea") || host.shadowRoot.querySelector("input[type=text]") || host.shadowRoot.querySelector("input")
+		          if (!input) {
+		            if (attempts < 20) { setTimeout(tryAttach, 50); return }
+		            logError("prompt mode: no input element found after " + attempts + " attempts")
+		            return
+		          }
+		          log("prompt mode: input found after " + attempts + " attempts")
+		          let pendingValue = ""
+		          const onInput = () => { pendingValue = (input as HTMLInputElement | HTMLTextAreaElement).value }
+		          const handler = (e: KeyboardEvent) => {
+		            if (e.key !== "Enter" || e.shiftKey) return
+		            const prompt = pendingValue.trim() || (input as HTMLInputElement | HTMLTextAreaElement).value.trim()
+		            if (!prompt || !lastResolvedSource) {
+		              log("prompt submit skipped: prompt=" + JSON.stringify(prompt) + " source=" + JSON.stringify(lastResolvedSource))
+		              return
+		            }
+		            log("prompt submitted:", prompt, "source:", JSON.stringify(lastResolvedSource))
+		            bridge.send({
+		              type: "ai-edit-request",
+		              payload: {
+		                instruction: prompt,
+		                filePath: lastResolvedSource.filePath,
+		                lineNumber: lastResolvedSource.lineNumber,
+		                componentName: lastResolvedSource.componentName,
+		                componentStack: "",
+		              },
+		            })
+		            input.removeEventListener("keydown", handler, true)
+		            input.removeEventListener("input", onInput)
+		          }
+		          input.addEventListener("input", onInput)
+		          input.addEventListener("keydown", handler, true)
+		        }
+		        tryAttach()
+		      },
+		    },
+
+		    actions: [
+		      {
+		        id: "caret-ai-edit",
+		        label: "AI Edit",
+		        onAction(ctx: any) {
+		          const el = ctx.element
+		          if (el) {
+		            const source = resolveElementSource(null, el)
+		            log("ai-edit action: resolved source before prompt mode", JSON.stringify(source))
+		          }
+		          ctx.enterPromptMode?.()
+		        },
+		      },
+		      {
+		        id: "caret-edit-text",
+		        label: "Edit text",
+		        enabled: (ctx: any) => {
+		          const el = ctx.element
+		          if (!el) return false
+		          const directText = Array.from(el.childNodes).filter((n: any) => n.nodeType === 3).map((n: any) => n.textContent || "").join("")
+		          if (!directText.trim()) return false
+		          const allText = el.textContent || ""
+		          return directText.trim() === allText.trim()
+		        },
+		        async onAction(ctx: any) {
+		          const el = ctx.element
+		          if (!el) return
+		          const source = resolveElementSource(null, el)
+		          const filePath = source?.filePath
+		          if (!filePath) { logError("edit-text: no filePath"); return }
+		          const lineNumber = source?.lineNumber || 0
+		          log("edit-text action:", filePath, "line:", lineNumber, el.tagName, el.textContent?.slice(0, 40))
+
+		          const original = el.textContent || ""
+		          el.contentEditable = "true"
+		          el.focus()
+
+		          let editSent = false
+		          const finish = () => {
+		            if (editSent) return
+		            editSent = true
+		            el.contentEditable = "false"
+		            el.removeEventListener("blur", onBlur)
+		            el.removeEventListener("keydown", onKeyDown)
+		            const newText = el.textContent || ""
+		            if (newText !== original) {
+		              log("edit-text: sending", filePath, JSON.stringify(original), "->", JSON.stringify(newText))
+		              bridge.send({
+		                type: "inline-edit",
+		                payload: {
+		                  editType: "text",
+		                  filePath,
+		                  lineNumber,
+		                  oldValue: original,
+		                  newValue: newText,
+		                  tagName: el.tagName.toLowerCase(),
+		                  caretId: el.getAttribute("data-caret-id") || "",
+		                },
+		              })
+		            }
+		          }
+
+		          const onBlur = () => finish()
+		          const onKeyDown = (e: KeyboardEvent) => {
+		            if (e.key === "Enter" && !e.shiftKey) {
+		              e.preventDefault()
+		              finish()
+		            }
+		            if (e.key === "Escape") {
+		              editSent = true
+		              el.textContent = original
+		              el.contentEditable = "false"
+		              el.removeEventListener("blur", onBlur)
+		              el.removeEventListener("keydown", onKeyDown)
+		            }
+		          }
+
+		          el.addEventListener("blur", onBlur)
+		          el.addEventListener("keydown", onKeyDown)
+		        },
+		      },
+		      {
+		        id: "caret-edit-color",
+		        label: "Edit color",
+		        onAction(ctx: any) {
+		          const el = ctx.element
+		          if (!el) return
+		          const source = resolveElementSource(null, el)
+		          const filePath = source?.filePath
+		          if (!filePath) { logError("edit-color: no filePath"); return }
+		          const lineNumber = source?.lineNumber || 0
+		          log("edit-color action:", filePath, "line:", lineNumber)
+
+		          const computed = window.getComputedStyle(el)
+		          const currentColor = computed.backgroundColor || computed.color || "#000000"
+
+		          const toHex = (c: string): string => {
+		            const m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/)
+		            if (!m) return c.startsWith("#") ? c : "#000000"
+		            return "#" + [m[1], m[2], m[3]].map(v => parseInt(v).toString(16).padStart(2, "0")).join("")
+		          }
+
+		          const input = document.createElement("input")
+		          input.type = "color"
+		          input.value = toHex(currentColor)
+		          input.style.position = "fixed"
+		          input.style.opacity = "0"
+		          input.style.pointerEvents = "none"
+		          document.body.appendChild(input)
+
+		          input.addEventListener("input", (e) => {
+		            bridge.send({
+		              type: "inline-edit",
+		              payload: {
+		                editType: "color",
+		                filePath,
+		                lineNumber,
+		                oldValue: "",
+		                newValue: (e.target as HTMLInputElement).value,
+		                caretId: el.getAttribute("data-caret-id") || "",
+		              },
+		            })
+		          })
+
+		          const rg = (window as any).__REACT_GRAB__
+		          if (rg) rg.deactivate()
+
+		          input.addEventListener("change", () => {
+		            document.body.removeChild(input)
+		            if (rg) rg.activate()
+		          })
+
+		          input.click()
+		        },
+		      },
+		      {
+		        id: "caret-replace-image",
+		        label: "Replace image",
+		        enabled: (ctx: any) => ctx.element?.tagName === "IMG",
+		        onAction(ctx: any) {
+		          const el = ctx.element
+		          if (!el) return
+		          const source = resolveElementSource(null, el)
+		          const filePath = source?.filePath
+		          if (!filePath) { logError("replace-image: no filePath"); return }
+		          const lineNumber = source?.lineNumber || 0
+		          log("replace-image action:", filePath, "line:", lineNumber)
+
+		          const input = document.createElement("input")
+		          input.type = "file"
+		          input.accept = "image/*"
+
+		          const rg = (window as any).__REACT_GRAB__
+		          if (rg) rg.deactivate()
+
+		          input.addEventListener("change", () => {
+		            const file = input.files?.[0]
+		            if (!file) {
+		              if (rg) rg.activate()
+		              return
+		            }
+		            const reader = new FileReader()
+		            reader.onload = () => {
+		              bridge.send({
+		                type: "inline-edit",
+		                payload: {
+		                  editType: "image",
+		                  filePath,
+		                  lineNumber,
+		                  oldValue: "",
+		                  newValue: file.name,
+		                  imageData: reader.result as string,
+		                  caretId: el.getAttribute("data-caret-id") || "",
+		                },
+		              })
+		              if (rg) rg.activate()
+		            }
+		            reader.readAsDataURL(file)
+		          })
+
+		          input.click()
+		        },
+		      },
+		    ],
+		  })
+
+		  log("caret plugin registered")
+		}
+
+		initPlugin().catch((err) => {
+		  console.error("[caret-grab] initPlugin failed:", err)
+		  bridge.send({ type: "log", payload: { level: "error", message: "initPlugin failed: " + String(err) } })
+		})
+	`
+}
