@@ -18,4 +18,6 @@ export const baseTemplate = `{{${SystemPromptSection.AGENT_ROLE}}}
 
 ## {{${SystemPromptSection.SYSTEM_INFO}}}
 
-## {{${SystemPromptSection.USER_INSTRUCTIONS}}}`
+## {{${SystemPromptSection.USER_INSTRUCTIONS}}}
+
+{{${SystemPromptSection.DESIGN_LAYER}}}`

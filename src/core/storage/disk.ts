@@ -53,6 +53,7 @@ export const GlobalFileNames = {
 	basetenModels: "baseten_models.json",
 	hicapModels: "hicap_models.json",
 	mcpSettings: "cline_mcp_settings.json",
+	caretDir: ".caret",
 	clineRules: ".clinerules",
 	workflows: ".clinerules/workflows",
 	hooksDir: ".clinerules/hooks",

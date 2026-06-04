@@ -39,6 +39,7 @@ export const config = createVariant(ModelFamily.XS)
 		SystemPromptSection.SYSTEM_INFO,
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
+		SystemPromptSection.DESIGN_LAYER,
 	)
 	.tools(
 		ClineDefaultTool.BASH,

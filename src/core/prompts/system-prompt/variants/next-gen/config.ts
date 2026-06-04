@@ -46,6 +46,7 @@ export const config = createVariant(ModelFamily.NEXT_GEN)
 		SystemPromptSection.OBJECTIVE,
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
+		SystemPromptSection.DESIGN_LAYER,
 	)
 	.tools(
 		ClineDefaultTool.BASH,

@@ -13,6 +13,8 @@ export function normalizeOpenaiReasoningEffort(effort?: string): OpenaiReasoning
 
 export type Mode = "plan" | "act"
 
+export type DesignContext = "implementation" | "design"
+
 export interface BlobStoreSettings {
 	bucket: string
 	adapterType: "s3" | "r2" | "azure" | string

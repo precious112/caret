@@ -50,7 +50,7 @@ The design layer uses **Tailwind CSS v4** with the \`@tailwindcss/vite\` plugin.
 - For custom one-off values, use Tailwind's arbitrary value syntax with raw values: \`w-[380px]\`, \`text-[#1a1a1a]\`, \`grid-cols-[1fr_2fr]\`
 
 ### What you MUST NOT do
-- Do NOT use inline styles (\`style={{ }}\`) or \`React.CSSProperties\` — zero tolerance
+- **CRITICAL: Never use \`style={{}}\` or \`React.CSSProperties\`** — not even for one-off values. Use Tailwind arbitrary value syntax instead: \`style={{ padding: "13px" }}\` → \`className="p-[13px]"\`, \`style={{ color: "#ff0000" }}\` → \`className="text-[#ff0000]"\`
 - Do NOT use \`@apply\` anywhere
 - Do NOT import or reference \`tailwind.config\` — Tailwind v4 does not use config files
 - Do NOT create or modify any Tailwind configuration — the config is CSS-based and already set up
@@ -145,6 +145,14 @@ Add a unique \`data-caret-id\` attribute to every visible element (headings, par
 \`\`\`
 
 The inline editor uses these IDs to find the exact element in source code. Without them, elements on the same line (e.g. a heading with a nested span) may be ambiguous.
+
+**Do NOT add \`data-caret-id\` inside \`.map()\`, \`.forEach()\`, or other array iteration callbacks.** These elements render multiple times — IDs would be duplicated. The visual editor handles array-rendered content through AI Edit, not inline editing.
+
+When nesting inline elements (e.g. a span inside a heading), add \`data-caret-id\` to both the parent and each child:
+
+\`\`\`tsx
+<h1 data-caret-id="hero-title">Defy <span data-caret-id="hero-accent">Limits</span></h1>
+\`\`\`
 
 ### JSX Formatting
 Place each visible element's opening tag on its own line — the editor locates elements by source line number:

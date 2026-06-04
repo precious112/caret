@@ -43,6 +43,7 @@ export const config = createVariant(ModelFamily.NATIVE_NEXT_GEN)
 		SystemPromptSection.OBJECTIVE,
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
+		SystemPromptSection.DESIGN_LAYER,
 	)
 	.tools(
 		ClineDefaultTool.ASK,

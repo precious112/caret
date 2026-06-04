@@ -1,7 +1,7 @@
 import { mentionRegex, mentionRegexGlobal } from "@shared/context-mentions"
 import { StringRequest } from "@shared/proto/cline/common"
 import { FileSearchRequest, FileSearchType, RelativePathsRequest } from "@shared/proto/cline/file"
-import { PlanActMode, TogglePlanActModeRequest } from "@shared/proto/cline/state"
+import { PlanActMode, TogglePlanActModeRequest, UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { type SlashCommand } from "@shared/slashCommands"
 import { Mode } from "@shared/storage/types"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
@@ -93,6 +93,7 @@ interface GitCommit {
 
 const PLAN_MODE_COLOR = "var(--vscode-activityWarningBadge-background)"
 const ACT_MODE_COLOR = "var(--vscode-focusBorder)"
+const DESIGN_MODE_COLOR = "var(--vscode-terminal-ansiMagenta)"
 
 const SwitchContainer = styled.div<{ disabled: boolean }>`
 	display: flex;
@@ -118,6 +119,17 @@ const Slider = styled.div.withConfig({
 	background-color: ${(props) => (props.isPlan ? PLAN_MODE_COLOR : ACT_MODE_COLOR)};
 	transition: transform 0.2s ease;
 	transform: translateX(${(props) => (props.isAct ? "100%" : "0%")});
+`
+
+const DesignSlider = styled.div.withConfig({
+	shouldForwardProp: (prop) => !["isDesign"].includes(prop),
+})<{ isDesign: boolean }>`
+	position: absolute;
+	height: 100%;
+	width: 50%;
+	background-color: ${(props) => (props.isDesign ? DESIGN_MODE_COLOR : "var(--vscode-input-border)")};
+	transition: transform 0.2s ease;
+	transform: translateX(${(props) => (props.isDesign ? "0%" : "100%")});
 `
 
 const ButtonGroup = styled.div`
@@ -214,6 +226,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 	) => {
 		const {
 			mode,
+			designContext,
 			apiConfiguration,
 			openRouterModels,
 			platform,
@@ -222,6 +235,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			remoteWorkflowToggles,
 			remoteConfigSettings,
 			navigateToSettingsModelPicker,
+			navigateToTokenWizard,
 			mcpServers,
 		} = useExtensionState()
 		const [isTextAreaFocused, setIsTextAreaFocused] = useState(false)
@@ -1021,6 +1035,16 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		useShortcut(usePlatform().togglePlanActKeys, onModeToggle, { disableTextInputs: false }) // important that we don't disable the text input here
 
+		const onDesignContextToggle = useCallback(() => {
+			const newContext = designContext === "design" ? "implementation" : "design"
+			StateServiceClient.updateSettings(
+				UpdateSettingsRequest.create({ designContext: newContext }),
+			).catch(console.error)
+			if (newContext === "design") {
+				navigateToTokenWizard()
+			}
+		}, [designContext, navigateToTokenWizard])
+
 		const handleContextButtonClick = useCallback(() => {
 			// Focus the textarea first
 			textAreaRef.current?.focus()
@@ -1589,7 +1613,34 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</ModelContainer>
 						</ButtonGroup>
 					</div>
-					{/* Tooltip for Plan/Act toggle remains outside the conditional rendering */}
+					{/* Design/Code toggle */}
+					<Tooltip>
+						<TooltipContent className="text-xs px-2" side="top">
+							{designContext === "design"
+								? "Design mode: AI generates into .caret/ design layer"
+								: "Code mode: AI works on your application code"}
+						</TooltipContent>
+						<TooltipTrigger>
+							<SwitchContainer data-testid="design-switch" disabled={false} onClick={onDesignContextToggle}>
+								<DesignSlider isDesign={designContext === "design"} />
+								{["Design", "Code"].map((m) => (
+									<div
+										key={m}
+										aria-checked={designContext === (m === "Design" ? "design" : "implementation")}
+										className={cn(
+											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
+											designContext === (m === "Design" ? "design" : "implementation")
+												? "text-white"
+												: "text-input-foreground",
+										)}
+										role="switch">
+										{m}
+									</div>
+								))}
+							</SwitchContainer>
+						</TooltipTrigger>
+					</Tooltip>
+					{/* Plan/Act toggle */}
 					<Tooltip>
 						<TooltipContent
 							className="text-xs px-2 flex flex-col gap-1"

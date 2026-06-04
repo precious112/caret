@@ -45,6 +45,11 @@ export const VSCODE_ONLY_COMMANDS: SlashCommand[] = [
 		description: "Explain code changes between git refs (PRs, commits, branches, etc.)",
 		section: "default",
 	},
+	{
+		name: "design",
+		description: "Enter design mode and generate pages into the .caret/ design layer",
+		section: "default",
+	},
 ]
 
 // CLI-only slash commands (handled locally, not sent to backend)

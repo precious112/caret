@@ -853,6 +853,7 @@ export class Controller {
 		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
 		const preferredLanguage = this.stateManager.getGlobalSettingsKey("preferredLanguage")
 		const mode = this.stateManager.getGlobalSettingsKey("mode")
+		const designContext = this.stateManager.getGlobalSettingsKey("designContext")
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
@@ -932,6 +933,7 @@ export class Controller {
 			focusChainSettings,
 			preferredLanguage,
 			mode,
+			designContext,
 			strictPlanModeEnabled,
 			yoloModeToggled,
 			useAutoCondense,

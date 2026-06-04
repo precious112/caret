@@ -352,6 +352,25 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
 		}
 
+		if (request.designContext !== undefined) {
+			const value = request.designContext === "design" ? "design" : "implementation"
+			controller.stateManager.setGlobalState("designContext", value as any)
+			const { setDesignMode } = await import("@/core/design/DesignMode")
+			setDesignMode(value === "design", async (prompt: string, images?: string[]) => {
+				if (controller.task) {
+					const messages = controller.task.messageStateHandler?.getClineMessages() || []
+					const lastMessage = messages.at(-1)
+					const isIdle = lastMessage?.type === "ask" && lastMessage.ask === "completion_result"
+
+					if (isIdle) {
+						await controller.task.handleWebviewAskResponse("messageResponse", prompt, images)
+						return
+					}
+				}
+				await controller.initTask(prompt, images)
+			})
+		}
+
 		// Post updated state to webview
 		await controller.postStateToWebview()
 

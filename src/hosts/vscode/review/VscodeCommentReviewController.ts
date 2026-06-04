@@ -30,7 +30,7 @@ export class VscodeCommentReviewController extends CommentReviewController imple
 	constructor() {
 		super()
 		// Create the comment controller
-		this.commentController = vscode.comments.createCommentController("cline-ai-review", "Cline AI Review")
+		this.commentController = vscode.comments.createCommentController("caret-ai-review", "Caret AI Review")
 
 		// Configure options for the reply input
 		this.commentController.options = {
@@ -49,14 +49,14 @@ export class VscodeCommentReviewController extends CommentReviewController imple
 
 		// Register reply command - this is called when user clicks the Reply button
 		this.disposables.push(
-			vscode.commands.registerCommand("cline.reviewComment.reply", async (reply: vscode.CommentReply) => {
+			vscode.commands.registerCommand("caret.reviewComment.reply", async (reply: vscode.CommentReply) => {
 				await this.handleReply(reply)
 			}),
 		)
 
 		// Register add to chat command - sends the conversation to Cline's main chat
 		this.disposables.push(
-			vscode.commands.registerCommand("cline.reviewComment.addToChat", async (thread: vscode.CommentThread) => {
+			vscode.commands.registerCommand("caret.reviewComment.addToChat", async (thread: vscode.CommentThread) => {
 				await this.handleAddToChat(thread)
 			}),
 		)

@@ -38,20 +38,42 @@ For detailed design context behind each item, see [CARET-PLAN.md](./CARET-PLAN.m
 
 ---
 
-## [~] Phase 3: Visual Editing
+## [x] Phase 3: Visual Editing
 
 - [x] React Grab integration via npm dependency + Caret plugin (no fork needed — plugin system sufficient)
 - [x] Element selection via React Fiber → source file, line, component name, props (React Grab + Caret plugin)
 - [x] Message bridge: Vite iframe ↔ VS Code webview relay ↔ extension host (bidirectional postMessage)
-- [~] Wire React Grab context directly into Caret's AI pipeline (plugin hooks → bridge → controller.initTask)
-- [~] Inline text editing (right-click → "Edit text" → contentEditable → AST source write-back → HMR)
-- [~] Inline color editing (right-click → "Edit color" → native color picker → AST source write-back → HMR)
-- [~] Inline image editing (right-click → "Replace image" → file picker → save to assets → AST source write-back → HMR)
-- [~] AI-assisted edits via React Grab's built-in prompt mode (floating text input → enriched prompt → AI → HMR)
-- [x] Canvas overlay editor fallback (paint region → screenshot capture → instruction → AI locates and modifies code)
+- [x] Wire React Grab context directly into Caret's AI pipeline (plugin hooks → bridge → controller.initTask)
+- [x] Inline text editing (right-click → "Edit text" → contentEditable → AST source write-back → HMR)
+- [x] Inline color editing (right-click → "Edit color" → native color picker → AST source write-back → HMR)
+- [x] Inline image editing (right-click → "Replace image" → file picker → save to assets → AST source write-back → HMR)
+- [x] AI-assisted edits via React Grab's built-in prompt mode (floating text input → enriched prompt → AI → HMR)
+- [x] Canvas overlay editor fallback (paint region → screenshot capture via image proxy → instruction → AI locates and modifies code)
 - [x] Error feedback via toast notifications on edit-result messages
+- [x] `data-caret-id` element lookup pipeline (AST editor uses caret IDs for precise element targeting)
+- [x] Arbitrary Tailwind color class support (hex/rgb/hsl in `text-[#...]` / `bg-[#...]` patterns)
 
 **Deliverable:** Full visual editing — select any element, make simple edits instantly, describe complex changes to AI.
+
+---
+
+## [x] Phase 3.5: Visual Editing Reliability Hardening
+
+Goal: Make the visual editing algorithm more reliable and deterministic. The AI sometimes generates anti-patterns in design source code that break the inline editor — this phase auto-fixes deterministic issues and prevents users from hitting broken edit paths.
+
+- [x] Auto-add missing `data-caret-id` on visible elements (pre-computation adds IDs on page focus)
+- [x] Auto-convert inline styles to Tailwind arbitrary values (`style={{ color: "red" }}` → `className="text-[red]"`)
+- [x] Detect dynamic text expressions and disable inline text editing (source range check in `enabled` callback)
+- [x] Detect dynamic image sources and disable inline image replacement (source range check)
+- [x] Detect dynamically constructed Tailwind class names and disable inline color editing (source range check)
+- [x] Mark all `.map()`/`.forEach()`/`.flatMap()` content as non-inline-editable (iterator detection)
+- [x] Wire column number through fiber source resolution for precise same-line element disambiguation
+- [x] On-demand pre-computation on page focus + HMR (no file watchers, loading blocks interaction)
+- [x] Precise AI edit context with exact element extraction via `findJSXElementAtPosition` and `findJSXElementByCaretId`
+- [x] Harden AST editor: ambiguous fallback text replace refused, null guards, malformed JSX handled
+- [x] System prompt hardening (inline styles emphasis, `.map()` guidance, nested element guidance)
+
+**Deliverable:** Visual editing works reliably on real-world AI output. Anti-patterns are auto-fixed (caret-ids, inline styles) or prevented (dynamic content actions disabled at the source level).
 
 ---
 

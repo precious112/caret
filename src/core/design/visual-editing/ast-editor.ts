@@ -89,6 +89,33 @@ export function findJSXElementAtLine(
 	return match
 }
 
+export function findJSXElementAtPosition(
+	ast: ASTNode,
+	line: number,
+	column: number,
+): recast.types.namedTypes.JSXElement | null {
+	let match: recast.types.namedTypes.JSXElement | null = null
+
+	recast.types.visit(ast, {
+		visitJSXElement(path) {
+			const node = path.node
+			const loc = node.loc
+			if (!loc) return this.traverse(path)
+
+			const afterStart = line > loc.start.line || (line === loc.start.line && column >= loc.start.column)
+			const beforeEnd = line < loc.end.line || (line === loc.end.line && column <= loc.end.column)
+
+			if (afterStart && beforeEnd) {
+				match = node
+			}
+
+			this.traverse(path)
+		},
+	})
+
+	return match
+}
+
 export async function editJSXText(
 	filePath: string,
 	lineNumber: number,
@@ -116,7 +143,7 @@ export async function editJSXText(
 		}
 
 		for (const child of element.children || []) {
-			if (child.type === "JSXText" && child.value.trim()) {
+			if (child.type === "JSXText" && typeof child.value === "string" && child.value.trim()) {
 				const leading = child.value.match(/^(\s*)/)?.[1] || ""
 				const trailing = child.value.match(/(\s*)$/)?.[1] || ""
 				child.value = leading + newText + trailing
@@ -124,7 +151,7 @@ export async function editJSXText(
 				await fs.writeFile(filePath, output)
 				return true
 			}
-			if (child.type === "JSXExpressionContainer" && child.expression.type === "StringLiteral") {
+			if (child.type === "JSXExpressionContainer" && child.expression && child.expression.type === "StringLiteral") {
 				child.expression.value = newText
 				const output = recast.print(ast).code
 				await fs.writeFile(filePath, output)
@@ -161,6 +188,10 @@ async function fallbackTextReplace(filePath: string, source: string, oldText: st
 		console.warn(`[design] fallback: oldText not found in source: "${oldText.slice(0, 50)}"`)
 		return false
 	}
+	if (source.indexOf(oldText, idx + 1) !== -1) {
+		console.warn(`[design] fallback: oldText appears multiple times, refusing ambiguous replace: "${oldText.slice(0, 50)}"`)
+		return false
+	}
 	const updated = source.slice(0, idx) + newText + source.slice(idx + oldText.length)
 	await fs.writeFile(filePath, updated)
 	console.log(`[design] fallback: replaced text at offset ${idx}`)
@@ -181,12 +212,22 @@ const TAILWIND_COLOR_PREFIXES = [
 	"stroke-",
 ]
 
+const TAILWIND_COLOR_NAMES = new Set([
+	"slate", "gray", "zinc", "neutral", "stone", "red", "orange", "amber", "yellow", "lime",
+	"green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia",
+	"pink", "rose", "white", "black", "transparent", "inherit", "current",
+])
+
 function isTailwindColorClass(cls: string): boolean {
 	return TAILWIND_COLOR_PREFIXES.some((prefix) => {
 		if (!cls.startsWith(prefix)) return false
-		if (!cls.startsWith(`${prefix}[`)) return true
-		const value = cls.slice(prefix.length + 1, -1)
-		return /^#[0-9a-fA-F]{3,8}$/.test(value) || /^rgba?\(/.test(value) || /^hsla?\(/.test(value)
+		const suffix = cls.slice(prefix.length)
+		if (suffix.startsWith("[")) {
+			const value = suffix.slice(1, -1)
+			return /^#[0-9a-fA-F]{3,8}$/.test(value) || /^rgba?\(/.test(value) || /^hsla?\(/.test(value)
+		}
+		const parts = suffix.split("-")
+		return TAILWIND_COLOR_NAMES.has(parts[0])
 	})
 }
 

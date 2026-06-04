@@ -26,6 +26,7 @@ import * as NotificationHook from "@core/hooks/notification-hook"
 import { executePreCompactHookWithCleanup, HookCancellationError, HookExecution } from "@core/hooks/precompact-executor"
 import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { parseMentions } from "@core/mentions"
+import { getRenderingShellPort } from "@core/design/rendering-shell"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
 import { formatResponse } from "@core/prompts/responses"
@@ -1989,6 +1990,13 @@ export class Task {
 				this.stateManager.getGlobalStateKey("nativeToolCallEnabled"),
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			terminalExecutionMode: this.terminalExecutionMode,
+			designContext: this.stateManager.getGlobalSettingsKey("designContext"),
+			foundationTokensJson: this.stateManager.getGlobalSettingsKey("designContext") === "design"
+				? await this.getFoundationTokensJson()
+				: undefined,
+			renderingShellPort: this.stateManager.getGlobalSettingsKey("designContext") === "design"
+				? getRenderingShellPort() ?? undefined
+				: undefined,
 		}
 
 		// Notify user if any conditional rules were applied for this request
@@ -3545,6 +3553,16 @@ export class Task {
 			return `\n\n# Current Working Directory (Primary: ${primaryName}) Files\n`
 		}
 		return `\n\n# Current Working Directory (${this.cwd.toPosix()}) Files\n`
+	}
+
+	private async getFoundationTokensJson(): Promise<string | undefined> {
+		try {
+			const { readFoundationTokens } = await import("@/core/design/tokens")
+			const tokens = await readFoundationTokens(this.cwd)
+			return tokens ? JSON.stringify(tokens) : undefined
+		} catch {
+			return undefined
+		}
 	}
 
 	async getEnvironmentDetails(includeFileDetails = false) {

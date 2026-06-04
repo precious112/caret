@@ -26,7 +26,9 @@ export interface AiEditRequestPayload {
 	instruction: string
 	filePath: string
 	lineNumber: number
+	columnNumber: number
 	componentName: string
+	caretId: string
 	componentStack: string
 }
 
@@ -48,6 +50,21 @@ export interface LogPayload {
 	message: string
 }
 
+export interface PageFocusedPayload {
+	filePath: string
+}
+
+export interface PrecomputeResultPayload {
+	filePath: string
+	dynamicRanges: Array<{
+		startLine: number
+		startCol: number
+		endLine: number
+		endCol: number
+		diagnostics: string[]
+	}>
+}
+
 export type DesignMessage =
 	| { source: "caret-vite"; type: "element-selected"; payload: ElementSelectedPayload }
 	| { source: "caret-vite"; type: "open-file"; payload: OpenFilePayload }
@@ -55,4 +72,6 @@ export type DesignMessage =
 	| { source: "caret-vite"; type: "ai-edit-request"; payload: AiEditRequestPayload }
 	| { source: "caret-vite"; type: "overlay-edit"; payload: OverlayEditPayload }
 	| { source: "caret-vite"; type: "log"; payload: LogPayload }
+	| { source: "caret-vite"; type: "page-focused"; payload: PageFocusedPayload }
 	| { source: "caret-extension"; type: "edit-result"; payload: EditResultPayload }
+	| { source: "caret-extension"; type: "precompute-result"; payload: PrecomputeResultPayload }

@@ -14,6 +14,7 @@ const REQUIRED_DEPS: Record<string, string> = {
 	"react-grab": "^0.1.37",
 	tailwindcss: "^4.1.0",
 	"@tailwindcss/vite": "^4.1.0",
+	"html2canvas": "^1.4.1",
 }
 
 export async function startRenderingShell(workspacePath: string): Promise<{ port: number; dispose: () => void }> {

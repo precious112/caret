@@ -37,6 +37,9 @@ const useDevEnv = process.env.IS_DEV === "true" || process.env.CLINE_ENVIRONMENT
  * defined in the .github/workflows/publish.yml workflow.
  * NOTE: The development environment variables should be retrieved from 1password shared vault.
  */
+// TODO(caret-rebrand): Telemetry still routes to Cline's PostHog endpoint. Replace
+// `https://data.cline.bot` and the BUILD_CONSTANTS keys with Caret-owned infra (or disable telemetry)
+// before any external distribution. See REBRAND-TODO.md.
 export const posthogConfig: PostHogClientConfig = {
 	apiKey: BUILD_CONSTANTS.TELEMETRY_SERVICE_API_KEY,
 	errorTrackingApiKey: BUILD_CONSTANTS.ERROR_SERVICE_API_KEY,

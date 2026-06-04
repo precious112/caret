@@ -451,6 +451,7 @@ function generateFocusedPageView(): string {
 	return dedent`
 		import React, { useEffect, useState } from "react"
 		import { OverlayPainter } from "./OverlayPainter"
+		import { bridge } from "../bridge"
 
 		interface Props {
 		  pageId: string
@@ -464,16 +465,30 @@ function generateFocusedPageView(): string {
 		  const [paintMode, setPaintMode] = useState(false)
 
 		  useEffect(() => {
-		    (window as any).__CARET_FOCUSED_PAGE__ = {
-		      pageId,
-		      filePath: "pages/" + pageId + "/index.tsx",
+		    const filePath = "pages/" + pageId + "/index.tsx";
+		    (window as any).__CARET_FOCUSED_PAGE__ = { pageId, filePath }
+		    bridge.send({ type: "page-focused", payload: { filePath } })
+
+		    const hmrHandler = () => {
+		      bridge.send({ type: "page-focused", payload: { filePath } })
 		    }
+		    if (import.meta.hot) {
+		      import.meta.hot.on("vite:afterUpdate", hmrHandler)
+		    }
+
 		    const rg = (window as any).__REACT_GRAB__
 		    if (rg) {
 		      rg.activate()
-		      return () => { rg.deactivate(); (window as any).__CARET_FOCUSED_PAGE__ = null }
+		      return () => {
+		        rg.deactivate();
+		        (window as any).__CARET_FOCUSED_PAGE__ = null
+		        if (import.meta.hot) import.meta.hot.off("vite:afterUpdate", hmrHandler)
+		      }
 		    }
-		    return () => { (window as any).__CARET_FOCUSED_PAGE__ = null }
+		    return () => {
+		      (window as any).__CARET_FOCUSED_PAGE__ = null
+		      if (import.meta.hot) import.meta.hot.off("vite:afterUpdate", hmrHandler)
+		    }
 		  }, [pageId])
 
 		  return (
@@ -534,6 +549,7 @@ function generateErrorBoundary(): string {
 function generateOverlayPainter(): string {
 	return dedent`
 		import React, { useState, useRef, useCallback } from "react"
+		import html2canvas from "html2canvas"
 		import { bridge } from "../bridge"
 
 		interface Props {
@@ -573,77 +589,120 @@ function generateOverlayPainter(): string {
 		    setSending(true)
 
 		    try {
-		      const content = document.querySelector(".caret-focused-content")
-		      if (!content) return
-
-		      const canvas = document.createElement("canvas")
-		      const scrollX = window.scrollX
-		      const scrollY = window.scrollY
-		      canvas.width = rect.w
-		      canvas.height = rect.h
-		      const ctx = canvas.getContext("2d")
-		      if (!ctx) return
-
-		      const imgs = content.querySelectorAll("img")
-		      await Promise.all(Array.from(imgs).map(img =>
-		        img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r })
-		      ))
-
-		      let html = content.innerHTML
-
-		      // Proxy external images to avoid cross-origin SVG foreignObject failures
-		      const srcRegex = new RegExp('src="(https?://[^"]+)"', "g")
-		      const matches: string[] = []
-		      let srcMatch
-		      while ((srcMatch = srcRegex.exec(html)) !== null) {
-		        if (!matches.includes(srcMatch[1])) matches.push(srcMatch[1])
-		      }
-		      const externalSrcs = matches
-
-		      for (const src of externalSrcs) {
-		        try {
-		          const resp = await fetch("/__caret/image-proxy?url=" + encodeURIComponent(src))
-		          if (!resp.ok) continue
-		          const blob = await resp.blob()
-		          const dataUri: string = await new Promise((resolve) => {
-		            const reader = new FileReader()
-		            reader.onload = () => resolve(reader.result as string)
-		            reader.readAsDataURL(blob)
-		          })
-		          html = html.replaceAll(src, dataUri)
-		        } catch (e) {
-		          console.warn("image proxy failed for:", src, e)
-		        }
-		      }
-
-		      const style = Array.from(document.querySelectorAll("style, link[rel='stylesheet']"))
-		        .map(el => el.outerHTML).join("")
-		      const svgData = \`<svg xmlns="http://www.w3.org/2000/svg" width="\${window.innerWidth}" height="\${content.scrollHeight}">
-		        <foreignObject width="100%" height="100%">
-		          <div xmlns="http://www.w3.org/1999/xhtml">\${style}\${html}</div>
-		        </foreignObject>
-		      </svg>\`
-
-		      const img = new Image()
-		      const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" })
-		      const url = URL.createObjectURL(blob)
-
-		      await new Promise<void>((resolve, reject) => {
-		        img.onload = () => {
-		          ctx.drawImage(img, rect.x + scrollX, rect.y + scrollY, rect.w, rect.h, 0, 0, rect.w, rect.h)
-		          URL.revokeObjectURL(url)
-		          resolve()
-		        }
-		        img.onerror = () => { URL.revokeObjectURL(url); reject() }
-		        img.src = url
-		      })
-
 		      const focusedPage = (window as any).__CARET_FOCUSED_PAGE__
+		      let screenshotDataUrl = ""
+
+		      try {
+		        const colorFnRe = /(oklch|oklab|lab|lch|hwb|color-mix|color)\\([^)]*(?:\\([^)]*\\)[^)]*)*\\)/g
+		        const cache = new Map<string, string>()
+		        const cvs = document.createElement("canvas")
+		        cvs.width = 1
+		        cvs.height = 1
+		        const cvCtx = cvs.getContext("2d")!
+		        function toRgb(value: string): string {
+		          if (cache.has(value)) return cache.get(value)!
+		          try {
+		            cvCtx.clearRect(0, 0, 1, 1)
+		            cvCtx.fillStyle = "rgba(0,0,0,0)"
+		            cvCtx.fillStyle = value
+		            cvCtx.fillRect(0, 0, 1, 1)
+		            const [r, g, b, a] = cvCtx.getImageData(0, 0, 1, 1).data
+		            const rgb = a === 0 ? "transparent" : a === 255 ? "rgb(" + r + ", " + g + ", " + b + ")" : "rgba(" + r + ", " + g + ", " + b + ", " + (a / 255).toFixed(3) + ")"
+		            cache.set(value, rgb)
+		            return rgb
+		          } catch {
+		            return value
+		          }
+		        }
+		        const originals = new Map<HTMLStyleElement, string>()
+		        let replacedCount = 0
+
+		        document.querySelectorAll("style").forEach((s) => {
+		          if (s.textContent && colorFnRe.test(s.textContent)) {
+		            originals.set(s as HTMLStyleElement, s.textContent)
+		            colorFnRe.lastIndex = 0
+		            s.textContent = s.textContent.replace(colorFnRe, (m) => { replacedCount++; return toRgb(m) })
+		          }
+		        })
+
+		        let linkedSheetColors = 0
+		        for (const sheet of Array.from(document.styleSheets)) {
+		          if (sheet.ownerNode?.nodeName === "STYLE") continue
+		          try {
+		            const cssText = Array.from(sheet.cssRules).map(r => r.cssText).join(" ")
+		            const matches = cssText.match(colorFnRe)
+		            if (matches) linkedSheetColors += matches.length
+		          } catch {}
+		        }
+
+		        const origGCS = window.getComputedStyle
+		        const convertColorStr = (val: string): string => {
+		          colorFnRe.lastIndex = 0
+		          if (colorFnRe.test(val)) {
+		            colorFnRe.lastIndex = 0
+		            return val.replace(colorFnRe, (m) => toRgb(m))
+		          }
+		          return val
+		        }
+		        window.getComputedStyle = function(el: Element, pseudo?: string | null) {
+		          const style = origGCS.call(window, el, pseudo)
+		          return new Proxy(style, {
+		            get(target, prop) {
+		              if (prop === "getPropertyValue") {
+		                return function(name: string) {
+		                  const val = target.getPropertyValue(name)
+		                  return typeof val === "string" && val.length > 3 ? convertColorStr(val) : val
+		                }
+		              }
+		              const val = Reflect.get(target, prop)
+		              if (typeof val === "string" && val.length > 3) return convertColorStr(val)
+		              if (typeof val === "function") return val.bind(target)
+		              return val
+		            }
+		          }) as CSSStyleDeclaration
+		        }
+
+		        bridge.send({ type: "log", payload: { level: "info", message: "[caret] Color replacement: " + replacedCount + " in stylesheets, getComputedStyle patched" } })
+
+		        let viewportCanvas: HTMLCanvasElement
+		        try {
+		          viewportCanvas = await html2canvas(document.documentElement, {
+		            width: window.innerWidth,
+		            height: window.innerHeight,
+		            windowWidth: window.innerWidth,
+		            windowHeight: window.innerHeight,
+		            x: window.scrollX,
+		            y: window.scrollY,
+		            proxy: "/__caret/image-proxy",
+		            useCORS: true,
+		            scale: 1,
+		            logging: false,
+		            ignoreElements: (el: Element) => {
+		              return el.classList?.contains("caret-overlay") || el.classList?.contains("caret-focused-fab")
+		            },
+		          })
+		        } finally {
+		          window.getComputedStyle = origGCS
+		          originals.forEach((content, el) => { el.textContent = content })
+		        }
+
+		        const cropCanvas = document.createElement("canvas")
+		        cropCanvas.width = rect.w
+		        cropCanvas.height = rect.h
+		        const cropCtx = cropCanvas.getContext("2d")
+		        if (!cropCtx) throw new Error("Failed to get crop canvas context")
+		        cropCtx.drawImage(viewportCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
+
+		        screenshotDataUrl = cropCanvas.toDataURL("image/png")
+		      } catch (captureErr: any) {
+		        bridge.send({ type: "log", payload: { level: "error", message: "[caret] Screenshot capture failed: " + (captureErr?.message || captureErr) } })
+		      }
+
 		      bridge.send({
 		        type: "overlay-edit",
 		        payload: {
 		          instruction: instruction.trim(),
-		          screenshotDataUrl: canvas.toDataURL("image/png"),
+		          screenshotDataUrl,
 		          regionBounds: { x: rect.x, y: rect.y, width: rect.w, height: rect.h },
 		          filePath: focusedPage?.filePath || "",
 		        },
@@ -653,7 +712,7 @@ function generateOverlayPainter(): string {
 		      setInstruction("")
 		      onClose()
 		    } catch (err) {
-		      console.error("Overlay capture failed:", err)
+		      console.error("[caret] Overlay submit failed:", err)
 		    } finally {
 		      setSending(false)
 		    }
@@ -1040,7 +1099,9 @@ function generateCaretGrabPlugin(): string {
 		  return null
 		}
 
-		function parseDebugStack(debugStack: any): { filePath: string; lineNumber: number; componentName: string } | null {
+		type SourceLocation = { filePath: string; lineNumber: number; columnNumber: number; componentName: string }
+
+		function parseDebugStack(debugStack: any): SourceLocation | null {
 		  if (!debugStack) return null
 
 		  let stackStr: string
@@ -1064,12 +1125,12 @@ function generateCaretGrabPlugin(): string {
 		    if (urlPath.includes("node_modules/")) continue
 		    if (urlPath.startsWith("@") || urlPath.startsWith("vite/")) continue
 
-		    return { filePath: urlPath, lineNumber, componentName: componentName || "" }
+		    return { filePath: urlPath, lineNumber, columnNumber: 0, componentName: componentName || "" }
 		  }
 		  return null
 		}
 
-		function resolveSourceFromFiber(element: Element | Node): { filePath: string; lineNumber: number; componentName: string } | null {
+		function resolveSourceFromFiber(element: Element | Node): SourceLocation | null {
 		  try {
 		    const fiber = getFiberFromElement(element)
 		    if (!fiber) return null
@@ -1090,8 +1151,8 @@ function generateCaretGrabPlugin(): string {
 		            const filePath = urlMatch ? urlMatch[1] : rawPath
 		            if (!isCanvasInfraFile(filePath) && !filePath.includes("node_modules/")) {
 		              const componentName = typeof current.type === "function" ? (current.type.displayName || current.type.name || "") : ""
-		              log("resolveSourceFromFiber: __caretSource hit", filePath, "line:", caretSource.lineNumber)
-		              return { filePath, lineNumber: caretSource.lineNumber || 0, componentName }
+		              log("resolveSourceFromFiber: __caretSource hit", filePath, "line:", caretSource.lineNumber, "col:", caretSource.columnNumber)
+		              return { filePath, lineNumber: caretSource.lineNumber || 0, columnNumber: caretSource.columnNumber || 0, componentName }
 		            }
 		          }
 		        }
@@ -1111,9 +1172,22 @@ function generateCaretGrabPlugin(): string {
 		  }
 		}
 
-		let lastResolvedSource: { filePath: string; lineNumber: number; componentName: string } | null = null
+		let lastResolvedSource: SourceLocation | null = null
 
-		function resolveElementSource(rgSource: any, element?: Element | Node): { filePath: string; lineNumber: number; componentName: string } | null {
+		const dynamicRangesMap: Map<string, Array<{ startLine: number; startCol: number; endLine: number; endCol: number; diagnostics: string[] }>> = new Map()
+
+		function isInDynamicRange(filePath: string, line: number, col: number, diagnosticType?: string): boolean {
+		  const ranges = dynamicRangesMap.get(filePath)
+		  if (!ranges) return false
+		  return ranges.some(r => {
+		    const afterStart = line > r.startLine || (line === r.startLine && col >= r.startCol)
+		    const beforeEnd = line < r.endLine || (line === r.endLine && col <= r.endCol)
+		    const matches = afterStart && beforeEnd
+		    return matches && (!diagnosticType || r.diagnostics.includes(diagnosticType))
+		  })
+		}
+
+		function resolveElementSource(rgSource: any, element?: Element | Node): SourceLocation | null {
 		  const page = getFocusedPage()
 		  if (!page) return rgSource || null
 
@@ -1131,7 +1205,7 @@ function generateCaretGrabPlugin(): string {
 		    return rgSource
 		  }
 
-		  const fallback = { filePath: page.filePath, lineNumber: 0, componentName: rgSource?.componentName || "" }
+		  const fallback = { filePath: page.filePath, lineNumber: 0, columnNumber: 0, componentName: rgSource?.componentName || "" }
 		  lastResolvedSource = fallback
 		  return fallback
 		}
@@ -1200,7 +1274,9 @@ function generateCaretGrabPlugin(): string {
 		        instruction: text,
 		        filePath: lastResolvedSource.filePath,
 		        lineNumber: lastResolvedSource.lineNumber,
+		        columnNumber: lastResolvedSource.columnNumber,
 		        componentName: lastResolvedSource.componentName,
+		        caretId: "",
 		        componentStack: "",
 		      },
 		    })
@@ -1227,6 +1303,13 @@ function generateCaretGrabPlugin(): string {
 		    } else {
 		      logError("edit-result: FAILED -", payload.error || "unknown error")
 		      showToast(payload.error || "Edit failed", "error")
+		    }
+		  })
+
+		  bridge.on("precompute-result", (payload: any) => {
+		    if (payload.filePath && Array.isArray(payload.dynamicRanges)) {
+		      dynamicRangesMap.set(payload.filePath, payload.dynamicRanges)
+		      log("precompute-result: loaded", payload.dynamicRanges.length, "dynamic ranges for", payload.filePath)
 		    }
 		  })
 
@@ -1304,13 +1387,16 @@ function generateCaretGrabPlugin(): string {
 		              return
 		            }
 		            log("prompt submitted:", prompt, "source:", JSON.stringify(lastResolvedSource))
+		            const selectedEl = document.querySelector("[data-rg-selected]") as HTMLElement | null
 		            bridge.send({
 		              type: "ai-edit-request",
 		              payload: {
 		                instruction: prompt,
 		                filePath: lastResolvedSource.filePath,
 		                lineNumber: lastResolvedSource.lineNumber,
+		                columnNumber: lastResolvedSource.columnNumber,
 		                componentName: lastResolvedSource.componentName,
+		                caretId: selectedEl?.getAttribute("data-caret-id") || "",
 		                componentStack: "",
 		              },
 		            })
@@ -1346,7 +1432,10 @@ function generateCaretGrabPlugin(): string {
 		          const directText = Array.from(el.childNodes).filter((n: any) => n.nodeType === 3).map((n: any) => n.textContent || "").join("")
 		          if (!directText.trim()) return false
 		          const allText = el.textContent || ""
-		          return directText.trim() === allText.trim()
+		          if (directText.trim() !== allText.trim()) return false
+		          const source = resolveSourceFromFiber(el)
+		          if (source && isInDynamicRange(source.filePath, source.lineNumber, source.columnNumber, "dynamic-text")) return false
+		          return true
 		        },
 		        async onAction(ctx: any) {
 		          const el = ctx.element
@@ -1408,6 +1497,13 @@ function generateCaretGrabPlugin(): string {
 		      {
 		        id: "caret-edit-color",
 		        label: "Edit color",
+		        enabled: (ctx: any) => {
+		          const el = ctx.element
+		          if (!el) return false
+		          const source = resolveSourceFromFiber(el)
+		          if (source && isInDynamicRange(source.filePath, source.lineNumber, source.columnNumber, "dynamic-tailwind-class")) return false
+		          return true
+		        },
 		        onAction(ctx: any) {
 		          const el = ctx.element
 		          if (!el) return
@@ -1462,7 +1558,12 @@ function generateCaretGrabPlugin(): string {
 		      {
 		        id: "caret-replace-image",
 		        label: "Replace image",
-		        enabled: (ctx: any) => ctx.element?.tagName === "IMG",
+		        enabled: (ctx: any) => {
+		          if (ctx.element?.tagName !== "IMG") return false
+		          const source = resolveSourceFromFiber(ctx.element)
+		          if (source && isInDynamicRange(source.filePath, source.lineNumber, source.columnNumber, "dynamic-image-src")) return false
+		          return true
+		        },
 		        onAction(ctx: any) {
 		          const el = ctx.element
 		          if (!el) return

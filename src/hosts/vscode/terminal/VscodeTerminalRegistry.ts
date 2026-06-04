@@ -23,8 +23,8 @@ export class TerminalRegistry {
 	static createTerminal(cwd?: string | vscode.Uri | undefined, shellPath?: string): TerminalInfo {
 		const terminalOptions: vscode.TerminalOptions = {
 			cwd,
-			name: "Cline",
-			iconPath: new vscode.ThemeIcon("cline-icon"),
+			name: "Caret",
+			iconPath: new vscode.ThemeIcon("caret-icon"),
 			env: {
 				CLINE_ACTIVE: "true",
 			},

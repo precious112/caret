@@ -35,6 +35,7 @@ export const config = createVariant(ModelFamily.TRINITY)
 		SystemPromptSection.OBJECTIVE,
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
+		SystemPromptSection.DESIGN_LAYER,
 	)
 	.tools(
 		ClineDefaultTool.BASH,

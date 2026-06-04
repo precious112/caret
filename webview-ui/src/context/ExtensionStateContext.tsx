@@ -59,6 +59,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	showHistory: boolean
 	showAccount: boolean
 	showWorktrees: boolean
+	showTokenWizard: boolean
 	showAnnouncement: boolean
 	expandTaskHeader: boolean
 
@@ -106,6 +107,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	navigateToHistory: () => void
 	navigateToAccount: () => void
 	navigateToWorktrees: () => void
+	navigateToTokenWizard: () => void
 	navigateToChat: () => void
 
 	// Hide functions
@@ -113,6 +115,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	hideHistory: () => void
 	hideAccount: () => void
 	hideWorktrees: () => void
+	hideTokenWizard: () => void
 	hideAnnouncement: () => void
 	closeMcpView: () => void
 
@@ -134,6 +137,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [showHistory, setShowHistory] = useState(false)
 	const [showAccount, setShowAccount] = useState(false)
 	const [showWorktrees, setShowWorktrees] = useState(false)
+	const [showTokenWizard, setShowTokenWizard] = useState(false)
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 
 	// Helper for MCP view
@@ -151,6 +155,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const hideHistory = useCallback(() => setShowHistory(false), [setShowHistory])
 	const hideAccount = useCallback(() => setShowAccount(false), [setShowAccount])
 	const hideWorktrees = useCallback(() => setShowWorktrees(false), [setShowWorktrees])
+	const hideTokenWizard = useCallback(() => setShowTokenWizard(false), [setShowTokenWizard])
 	const hideAnnouncement = useCallback(() => setShowAnnouncement(false), [setShowAnnouncement])
 
 	// Navigation functions
@@ -215,8 +220,18 @@ export const ExtensionStateContextProvider: React.FC<{
 		closeMcpView()
 		setShowHistory(false)
 		setShowAccount(false)
+		setShowTokenWizard(false)
 		setShowWorktrees(true)
-	}, [setShowSettings, closeMcpView, setShowHistory, setShowAccount, setShowWorktrees])
+	}, [setShowSettings, closeMcpView, setShowHistory, setShowAccount, setShowTokenWizard, setShowWorktrees])
+
+	const navigateToTokenWizard = useCallback(() => {
+		setShowSettings(false)
+		closeMcpView()
+		setShowHistory(false)
+		setShowAccount(false)
+		setShowWorktrees(false)
+		setShowTokenWizard(true)
+	}, [setShowSettings, closeMcpView, setShowHistory, setShowAccount, setShowWorktrees, setShowTokenWizard])
 
 	const navigateToChat = useCallback(() => {
 		setShowSettings(false)
@@ -224,7 +239,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		setShowHistory(false)
 		setShowAccount(false)
 		setShowWorktrees(false)
-	}, [setShowSettings, closeMcpView, setShowHistory, setShowAccount, setShowWorktrees])
+		setShowTokenWizard(false)
+	}, [setShowSettings, closeMcpView, setShowHistory, setShowAccount, setShowWorktrees, setShowTokenWizard])
 
 	const [state, setState] = useState<ExtensionState>({
 		version: "",
@@ -236,6 +252,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		focusChainSettings: DEFAULT_FOCUS_CHAIN_SETTINGS,
 		preferredLanguage: "English",
 		mode: "act",
+		designContext: "implementation",
 		platform: DEFAULT_PLATFORM,
 		environment: Environment.production,
 		telemetrySetting: "unset",
@@ -810,6 +827,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		showHistory,
 		showAccount,
 		showWorktrees,
+		showTokenWizard,
 		showAnnouncement,
 		globalClineRulesToggles: state.globalClineRulesToggles || {},
 		localClineRulesToggles: state.localClineRulesToggles || {},
@@ -830,6 +848,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		navigateToHistory,
 		navigateToAccount,
 		navigateToWorktrees,
+		navigateToTokenWizard,
 		navigateToChat,
 
 		// Hide functions
@@ -837,6 +856,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		hideHistory,
 		hideAccount,
 		hideWorktrees,
+		hideTokenWizard,
 		hideAnnouncement,
 		setShowAnnouncement,
 		setShowWelcome,

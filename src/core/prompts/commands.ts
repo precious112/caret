@@ -318,3 +318,24 @@ export const deepPlanningToolResponse = (
 ) => {
 	return getDeepPlanningPrompt(focusChainSettings, providerInfo, enableNativeToolCalls)
 }
+
+export const designToolResponse = () =>
+	`<explicit_instructions type="design">
+You are now in design mode. You will generate UI pages and components into the .caret/ design layer.
+
+When the user describes what they want, you should:
+
+1. Check .caret/tokens/foundation.json for the current design tokens
+2. Check .caret/components/ for existing shared components to reuse
+3. Create new pages under .caret/pages/<page-name>/ with:
+   - index.tsx (React component using foundation tokens)
+   - meta.json (page metadata: id, title, type, states, tags)
+4. If creating patterns usable across pages, hoist them to .caret/components/
+
+Use foundation tokens via CSS custom properties (--color-brand-500, --font-size-lg, etc.) or import from "virtual:caret-tokens".
+
+The page will be rendered by a Vite dev server with HMR — standard React, no framework-specific features.
+
+If the user hasn't configured tokens yet, suggest they complete the Token Wizard first.
+</explicit_instructions>\n
+`

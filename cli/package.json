@@ -1,11 +1,11 @@
 {
-	"name": "cline",
+	"name": "caret",
 	"version": "2.15.0",
 	"description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
 	"main": "dist/lib.mjs",
 	"types": "dist/lib.d.ts",
 	"bin": {
-		"cline": "./dist/cli.mjs"
+		"caret": "./dist/cli.mjs"
 	},
 	"exports": {
 		".": {
@@ -22,7 +22,7 @@
 		"x64",
 		"arm64"
 	],
-	"man": "./man/cline.1",
+	"man": "./man/caret.1",
 	"type": "module",
 	"engines": {
 		"node": ">=20.0.0"
@@ -38,12 +38,12 @@
 		"clean": "rimraf dist",
 		"typecheck": "npx tsc --noEmit",
 		"link": "npm run build && npm link",
-		"unlink": "npm unlink -g cline",
+		"unlink": "npm unlink -g caret",
 		"test": "vitest",
 		"test:run": "vitest run"
 	},
 	"keywords": [
-		"cline",
+		"caret",
 		"claude",
 		"dev",
 		"mcp",

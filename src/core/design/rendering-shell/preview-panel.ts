@@ -6,6 +6,7 @@ import * as vscode from "vscode"
 import { Logger } from "@/shared/services/Logger"
 import { handleAiEditRequest } from "../visual-editing/ai-edit-handler"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
+import { precomputeAndApply } from "../visual-editing/post-generation-hook"
 import type { DesignMessage, InlineEditPayload, OverlayEditPayload } from "./messages"
 
 let panel: vscode.WebviewPanel | null = null
@@ -151,6 +152,10 @@ async function handleViteMessage(message: DesignMessage): Promise<void> {
 				console.error("[design] Overlay edit but currentWorkspacePath is null")
 			}
 			break
+
+		case "page-focused":
+			handlePageFocused(message.payload.filePath)
+			break
 	}
 }
 
@@ -227,31 +232,47 @@ async function handleOverlayEdit(payload: OverlayEditPayload): Promise<void> {
 	if (!currentWorkspacePath) return
 
 	try {
-		const imagePath = path.join(currentWorkspacePath, ".caret", "assets", `overlay-capture-${Date.now()}.png`)
-		await fs.mkdir(path.dirname(imagePath), { recursive: true })
-
-		const base64Data = payload.screenshotDataUrl.replace(/^data:image\/\w+;base64,/, "")
-		await fs.writeFile(imagePath, Buffer.from(base64Data, "base64"))
-
 		const resolvedFilePath = payload.filePath ? await resolveCaretPath(payload.filePath) : ""
+		const images = payload.screenshotDataUrl ? [payload.screenshotDataUrl] : undefined
 
 		const result = await handleAiEditRequest(
 			{
-				instruction: `${payload.instruction}\n\n[A screenshot of the selected region is attached. The region is at x=${payload.regionBounds.x}, y=${payload.regionBounds.y}, width=${payload.regionBounds.width}, height=${payload.regionBounds.height} on the page.]`,
+				instruction: payload.instruction,
 				filePath: resolvedFilePath,
 				lineNumber: 0,
+				columnNumber: 0,
 				componentName: "",
+				caretId: "",
 				componentStack: "",
 			},
 			currentWorkspacePath,
+			images,
 		)
 
-		await fs.unlink(imagePath).catch(() => {})
 		sendMessageToPreview({ source: "caret-extension", type: "edit-result", payload: result })
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Overlay edit failed: ${errorMsg}`)
 		sendMessageToPreview({ source: "caret-extension", type: "edit-result", payload: { success: false, error: errorMsg } })
+	}
+}
+
+async function handlePageFocused(rawFilePath: string): Promise<void> {
+	try {
+		const filePath = await resolveCaretPath(rawFilePath)
+		console.log(`[design] page-focused: running precompute on ${filePath}`)
+		const result = await precomputeAndApply(filePath)
+		sendMessageToPreview({
+			source: "caret-extension",
+			type: "precompute-result",
+			payload: {
+				filePath: rawFilePath,
+				dynamicRanges: result.dynamicRanges,
+			},
+		})
+		console.log(`[design] page-focused: sent ${result.dynamicRanges.length} dynamic ranges, modified=${result.modified}`)
+	} catch (err) {
+		console.error(`[design] page-focused: precompute failed for ${rawFilePath}:`, err)
 	}
 }
 

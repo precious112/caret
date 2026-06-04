@@ -49,6 +49,7 @@ export const config = createVariant(ModelFamily.NATIVE_GPT_5_1)
 		SystemPromptSection.OBJECTIVE,
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
+		SystemPromptSection.DESIGN_LAYER,
 	)
 	.tools(
 		ClineDefaultTool.BASH,

@@ -1,3 +1,3 @@
-@.clinerules/general.md
-@.clinerules/network.md
-@.clinerules/cli.md
+@.caretrules/general.md
+@.caretrules/network.md
+@.caretrules/cli.md

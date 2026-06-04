@@ -51,7 +51,9 @@ export const BASE = `{{${SystemPromptSection.AGENT_ROLE}}}
 
 ====
 
-{{${SystemPromptSection.USER_INSTRUCTIONS}}}`
+{{${SystemPromptSection.USER_INSTRUCTIONS}}}
+
+{{${SystemPromptSection.DESIGN_LAYER}}}`
 
 const RULES = (context: SystemPromptContext) => `RULES
 

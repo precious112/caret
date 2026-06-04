@@ -2,6 +2,7 @@ import { SystemPromptSection } from "../templates/placeholders"
 import { getActVsPlanModeSection } from "./act_vs_plan_mode"
 import { getAgentRoleSection } from "./agent_role"
 import { getCapabilitiesSection } from "./capabilities"
+import { getDesignLayerSection } from "./design_layer"
 import { getEditingFilesSection } from "./editing_files"
 import { getFeedbackSection } from "./feedback"
 import { getMcp } from "./mcp"
@@ -48,5 +49,6 @@ export function getSystemPromptComponents() {
 			fn: getFeedbackSection,
 		},
 		{ id: SystemPromptSection.TASK_PROGRESS, fn: getUpdatingTaskProgress },
+		{ id: SystemPromptSection.DESIGN_LAYER, fn: getDesignLayerSection },
 	]
 }

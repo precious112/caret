@@ -9,6 +9,7 @@ import {
 	editJSXImageSrc,
 	editJSXText,
 	findJSXElementAtLine,
+	findJSXElementAtPosition,
 	findJSXElementByCaretId,
 	parseSource,
 } from "../ast-editor"
@@ -209,6 +210,33 @@ describe("editJSXColor with caretId", () => {
 		output.should.containEql("text-[#00ff00]")
 		output.should.not.containEql("text-zinc-500")
 	})
+
+	it("should NOT replace text-4xl or other non-color text- classes", async () => {
+		const source = `<h1 data-caret-id="title" className="text-4xl font-bold text-white">Hello</h1>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#ff0000", "title")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("text-4xl")
+		output.should.containEql("font-bold")
+		output.should.containEql("text-[#ff0000]")
+	})
+
+	it("should NOT replace text-lg, text-sm, or text-center", async () => {
+		const source = `<p data-caret-id="desc" className="text-lg text-center text-slate-600">Desc</p>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#123456", "desc")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("text-lg")
+		output.should.containEql("text-center")
+		output.should.containEql("text-[#123456]")
+		output.should.not.containEql("text-slate-600")
+	})
 })
 
 describe("editJSXImageSrc with caretId", () => {
@@ -237,5 +265,70 @@ describe("editJSXImageSrc with caretId", () => {
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql('src="new.jpg"')
 		output.should.containEql('src="thumb.jpg"')
+	})
+})
+
+describe("findJSXElementAtPosition", () => {
+	it("should find the deepest element at a position", () => {
+		const source = `<div><h1>Title <span>Accent</span></h1></div>`
+		const ast = parseSource(source)
+		const result = findJSXElementAtPosition(ast, 1, 16)
+		should(result).not.be.null()
+		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
+		;(result?.openingElement.name as any).name.should.equal("span")
+	})
+
+	it("should find the outer element when position is on opening tag", () => {
+		const source = `<div><h1>Title</h1></div>`
+		const ast = parseSource(source)
+		const result = findJSXElementAtPosition(ast, 1, 5)
+		should(result).not.be.null()
+		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
+		;(result?.openingElement.name as any).name.should.equal("h1")
+	})
+
+	it("should return null for position outside any element", () => {
+		const source = `const x = 1`
+		const ast = parseSource(source)
+		const result = findJSXElementAtPosition(ast, 1, 0)
+		should(result).be.null()
+	})
+})
+
+describe("AST editor hardening", () => {
+	let tmpDir: string
+	let tmpFile: string
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-editor-test-"))
+		tmpFile = path.join(tmpDir, "test.tsx")
+	})
+
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true, force: true })
+	})
+
+	it("editJSXText should return false for malformed JSX", async () => {
+		await fs.writeFile(tmpFile, "<<<<not valid JSX>>>>")
+		const result = await editJSXText(tmpFile, 1, "h1", "New")
+		result.should.be.false()
+	})
+
+	it("editJSXColor should return false for malformed JSX", async () => {
+		await fs.writeFile(tmpFile, "<<<<not valid JSX>>>>")
+		const result = await editJSXColor(tmpFile, 1, "#ff0000")
+		result.should.be.false()
+	})
+
+	it("fallbackTextReplace should refuse ambiguous replacements", async () => {
+		const source = `<div>
+  <span>{items.map(x => <i>Hello</i>)}</span>
+  <span>{items.map(x => <i>Hello</i>)}</span>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		const result = await editJSXText(tmpFile, 99, "b", "World", "Hello")
+		result.should.be.false()
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.equal(source)
 	})
 })

@@ -138,6 +138,27 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand(commands.AccountButton, () => sendAccountButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.WorktreesButton, () => sendWorktreesButtonClickedEvent()))
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand("caret.initDesignLayer", async () => {
+			const workspaceFolders = vscode.workspace.workspaceFolders
+			if (!workspaceFolders || workspaceFolders.length === 0) {
+				vscode.window.showErrorMessage("No workspace folder open. Open a folder first to initialize the design layer.")
+				return
+			}
+			const { ensureCaretDirectoryExists } = await import("./core/design/scaffold")
+			const workspacePath = workspaceFolders[0].uri.fsPath
+			await ensureCaretDirectoryExists(workspacePath)
+			vscode.window.showInformationMessage("Design layer initialized at .caret/")
+		}),
+	)
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand("caret.toggleDesignMode", async () => {
+			const { isInDesignMode, setDesignMode } = await import("./core/design/DesignMode")
+			setDesignMode(!isInDesignMode())
+		}),
+	)
+
 	/*
 	We use the text document content provider API to show the left side for diff view by creating a
 	virtual document for the original content. This makes it readonly so users know to edit the right
@@ -180,9 +201,19 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 	context.subscriptions.push(vscode.window.registerUriHandler({ handleUri }))
 
+	// Initialize design mode detection (auto-detects .caret/ in workspace)
+	import("./core/design/DesignMode")
+		.then(async (module) => {
+			const disposables = await module.initializeDesignMode()
+			context.subscriptions.push(...disposables)
+		})
+		.catch((error) => {
+			Logger.error("Failed to initialize design mode: " + error)
+		})
+
 	// Register size testing commands in development mode
 	if (IS_DEV) {
-		vscode.commands.executeCommand("setContext", "cline.isDevMode", IS_DEV)
+		vscode.commands.executeCommand("setContext", "caret.isDevMode", IS_DEV)
 		// Use dynamic import to avoid loading the module in production
 		import("./dev/commands/tasks")
 			.then((module) => {
@@ -499,7 +530,7 @@ ${ctx.cellJson || "{}"}
 	// Register the openWalkthrough command handler
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.Walkthrough, async () => {
-			await vscode.commands.executeCommand("workbench.action.openWalkthrough", `${context.extension.id}#ClineWalkthrough`)
+			await vscode.commands.executeCommand("workbench.action.openWalkthrough", `${context.extension.id}#CaretWalkthrough`)
 			telemetryService.captureButtonClick("command_openWalkthrough")
 		}),
 	)

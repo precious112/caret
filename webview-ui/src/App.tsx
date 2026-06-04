@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react"
 import AccountView from "./components/account/AccountView"
 import ChatView from "./components/chat/ChatView"
 import ClineKanbanLaunchModal, { CLINE_KANBAN_MODAL_DISMISS_ID } from "./components/common/ClineKanbanLaunchModal"
+import { TokenWizard } from "./components/design-wizard/TokenWizard"
 import HistoryView from "./components/history/HistoryView"
 import McpView from "./components/mcp/configuration/McpConfigurationView"
 import OnboardingView from "./components/onboarding/OnboardingView"
@@ -27,6 +28,7 @@ const AppContent = () => {
 		showHistory,
 		showAccount,
 		showWorktrees,
+		showTokenWizard,
 		showAnnouncement,
 		onboardingModels,
 		setShowAnnouncement,
@@ -37,6 +39,7 @@ const AppContent = () => {
 		hideHistory,
 		hideAccount,
 		hideWorktrees,
+		hideTokenWizard,
 		hideAnnouncement,
 	} = useExtensionState()
 	const [showKanbanModal, setShowKanbanModal] = useState(false)
@@ -118,10 +121,11 @@ const AppContent = () => {
 				/>
 			)}
 			{showWorktrees && <WorktreesView onDone={hideWorktrees} />}
+			{showTokenWizard && <TokenWizard onDone={hideTokenWizard} />}
 			{/* Do not conditionally load ChatView, it's expensive and there's state we don't want to lose (user input, disableInput, askResponse promise, etc.) */}
 			<ChatView
 				hideAnnouncement={hideAnnouncement}
-				isHidden={showSettings || showHistory || showMcp || showAccount || showWorktrees}
+				isHidden={showSettings || showHistory || showMcp || showAccount || showWorktrees || showTokenWizard}
 				showAnnouncement={showAnnouncement}
 				showHistoryView={navigateToHistory}
 			/>
