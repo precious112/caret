@@ -167,11 +167,32 @@ Place each visible element's opening tag on its own line — the editor locates 
 
 ## Token Usage
 
-Reference foundation tokens via \`virtual:caret-tokens\` for data-driven values (product prices, dynamic content). For visual styling, prefer Tailwind utility classes directly:
+Reference foundation tokens via \`virtual:caret-tokens\` for data-driven values (product prices, dynamic content). For visual styling, map tokens to Tailwind choices:
+
+- **Color seed** → use as Tailwind arbitrary value: \`bg-[#1a2b3c]\`, \`text-[#ff6600]\`
+- **Radius character** → \`sharp\` = \`rounded-none\`, \`soft\` = \`rounded-lg\`, \`round\` = \`rounded-2xl\`, \`pill\` = \`rounded-full\`
+- **Spacing baseUnit** → 4 = use Tailwind's default scale, 8 = prefer multiples of 2 (\`p-2\`, \`p-4\`, \`p-8\`)
+- **Typography** → use Google Fonts via \`@import\` in a component, apply via arbitrary value: \`font-['Inter']\`
 
 \`\`\`tsx
 import tokens from "virtual:caret-tokens"
 // Use tokens for data/logic, not for className styling
+\`\`\`
+
+## Responsive Design
+
+Standard Tailwind responsive breakpoints (\`sm:\`, \`md:\`, \`lg:\`, \`xl:\`, \`2xl:\`) work correctly in the design preview. Prefer single-tree responsive patterns where content reflows rather than hide/show separate mobile/desktop trees:
+
+\`\`\`tsx
+// Preferred — single tree that reflows
+<div className="flex flex-col md:flex-row gap-4">
+  <aside className="w-full md:w-64">...</aside>
+  <main className="flex-1">...</main>
+</div>
+
+// Acceptable — conditional visibility for genuinely different layouts
+<nav className="hidden md:flex">...</nav>
+<nav className="md:hidden">...</nav>
 \`\`\`
 
 ## meta.json Format
@@ -185,6 +206,8 @@ import tokens from "virtual:caret-tokens"
   "tags": ["landing", "marketing"]
 }
 \`\`\`
+
+Always assign meaningful tags in meta.json for canvas grouping. Common tags: \`landing\`, \`auth\`, \`dashboard\`, \`settings\`, \`onboarding\`, \`checkout\`, \`marketing\`, \`error\`. Pages without tags show under "other" on the canvas.
 
 ## Component Hoisting
 

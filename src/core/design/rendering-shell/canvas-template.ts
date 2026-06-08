@@ -17,6 +17,9 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "FocusedPageView.tsx"), generateFocusedPageView()),
 		fs.writeFile(path.join(canvasDir, "ErrorBoundary.tsx"), generateErrorBoundary()),
 		fs.writeFile(path.join(canvasDir, "OverlayPainter.tsx"), generateOverlayPainter()),
+		fs.writeFile(path.join(canvasDir, "CaretStateContext.tsx"), generateCaretStateContext()),
+		fs.writeFile(path.join(canvasDir, "CaretNavigator.tsx"), generateCaretNavigator()),
+		fs.writeFile(path.join(canvasDir, "SimulationView.tsx"), generateSimulationView()),
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
@@ -45,6 +48,30 @@ function generateTypes(): string {
 		  mode: LayoutMode
 		  positions: Record<string, { x: number; y: number }>
 		}
+
+		export type ViewportPreset = "desktop-1440" | "desktop-1280" | "tablet-768" | "mobile-390" | "mobile-375"
+
+		export const VIEWPORT_PRESETS: Record<ViewportPreset, { name: string; width: number; icon: string }> = {
+		  "desktop-1440": { name: "Desktop", width: 1440, icon: "🖥" },
+		  "desktop-1280": { name: "Laptop", width: 1280, icon: "💻" },
+		  "tablet-768":   { name: "Tablet", width: 768, icon: "📱" },
+		  "mobile-390":   { name: "iPhone 14", width: 390, icon: "📱" },
+		  "mobile-375":   { name: "iPhone SE", width: 375, icon: "📱" },
+		}
+
+		export interface FlowStep {
+		  page: string
+		  label?: string
+		  next: string[]
+		  onError?: string[]
+		}
+
+		export interface FlowDefinition {
+		  id: string
+		  name: string
+		  description?: string
+		  steps: FlowStep[]
+		}
 	`
 }
 
@@ -55,20 +82,34 @@ function generateCanvasApp(): string {
 		import { CanvasView } from "./CanvasView"
 		import { FocusedPageView } from "./FocusedPageView"
 		import { ErrorBoundary } from "./ErrorBoundary"
-		import type { PageInfo } from "./types"
+		import { SimulationView } from "./SimulationView"
+		import type { PageInfo, ViewportPreset, FlowDefinition } from "./types"
 		import "./canvas.css"
 
 		export function CanvasApp() {
-		  const [mode, setMode] = useState<"canvas" | "focused">("canvas")
+		  const [mode, setMode] = useState<"canvas" | "focused" | "simulation">("canvas")
 		  const [focusedPageId, setFocusedPageId] = useState<string | null>(null)
 		  const [pages, setPages] = useState<PageInfo[]>(pageMetas || [])
+		  const [viewport, setViewport] = useState<ViewportPreset>("desktop-1440")
+		  const [flows, setFlows] = useState<FlowDefinition[]>([])
 
 		  useEffect(() => {
+		    fetch("/__caret/flows-meta")
+		      .then(r => r.ok ? r.json() : [])
+		      .then(f => setFlows(f))
+		      .catch(() => {})
+
 		    if (import.meta.hot) {
 		      import.meta.hot.on("caret:pages-changed", () => {
 		        fetch("/__caret/pages-meta")
 		          .then(r => r.json())
 		          .then(metas => setPages(metas))
+		          .catch(() => {})
+		      })
+		      import.meta.hot.on("caret:flows-changed", () => {
+		        fetch("/__caret/flows-meta")
+		          .then(r => r.ok ? r.json() : [])
+		          .then(f => setFlows(f))
 		          .catch(() => {})
 		      })
 		    }
@@ -84,22 +125,44 @@ function generateCanvasApp(): string {
 		    setFocusedPageId(null)
 		  }, [])
 
+		  const handleSimulate = useCallback(() => {
+		    setMode("simulation")
+		  }, [])
+
+		  const handleExitSimulation = useCallback(() => {
+		    setMode("focused")
+		  }, [])
+
+		  if (mode === "simulation" && focusedPageId) {
+		    return (
+		      <ErrorBoundary fallback={<CanvasErrorFallback />}>
+		        <SimulationView
+		          initialPageId={focusedPageId}
+		          pages={pages}
+		          viewport={viewport}
+		          onSetViewport={setViewport}
+		          onExit={handleExitSimulation}
+		        />
+		      </ErrorBoundary>
+		    )
+		  }
+
 		  if (mode === "focused" && focusedPageId) {
-		    const route = routes.find(r => r.name === focusedPageId)
 		    const page = pages.find(p => p.id === focusedPageId)
-		    if (route) {
-		      return (
-		        <ErrorBoundary fallback={<FocusedErrorFallback onBack={() => { setMode("canvas"); setFocusedPageId(null) }} />}>
-		          <FocusedPageView
-		            pageId={focusedPageId}
-		            title={page?.title || focusedPageId}
-		            tags={page?.tags || []}
-		            PageComponent={route.component}
-		            onBack={handleBack}
-		          />
-		        </ErrorBoundary>
-		      )
-		    }
+		    return (
+		      <ErrorBoundary fallback={<FocusedErrorFallback onBack={() => { setMode("canvas"); setFocusedPageId(null) }} />}>
+		        <FocusedPageView
+		          pageId={focusedPageId}
+		          title={page?.title || focusedPageId}
+		          tags={page?.tags || []}
+		          states={page?.states || []}
+		          onBack={handleBack}
+		          onSimulate={handleSimulate}
+		          viewport={viewport}
+		          onSetViewport={setViewport}
+		        />
+		      </ErrorBoundary>
+		    )
 		  }
 
 		  return (
@@ -108,6 +171,9 @@ function generateCanvasApp(): string {
 		        pages={pages}
 		        routes={routes}
 		        onFocus={handleFocus}
+		        flows={flows}
+		        viewport={viewport}
+		        onSetViewport={setViewport}
 		      />
 		    </ErrorBoundary>
 		  )
@@ -115,8 +181,10 @@ function generateCanvasApp(): string {
 
 		function FocusedErrorFallback({ onBack }: { onBack: () => void }) {
 		  return (
-		    <div className="caret-focused">
-		      <button onClick={onBack} className="caret-focused-fab" title="Back to canvas">←</button>
+		    <div className="caret-focused-shell">
+		      <div className="caret-focused-toolbar">
+		        <button onClick={onBack} className="caret-focused-toolbar-btn" title="Back to canvas">←</button>
+		      </div>
 		      <div className="caret-canvas-error">
 		        <h2>Page failed to render</h2>
 		        <p>Check .caret/vite.log for compilation errors.</p>
@@ -140,7 +208,8 @@ function generateCanvasView(): string {
 	return dedent`
 		import React, { useState, useRef, useCallback, useEffect } from "react"
 		import { PageThumbnail } from "./PageThumbnail"
-		import type { PageInfo, CanvasTransform, CanvasLayout, LayoutMode } from "./types"
+		import type { PageInfo, CanvasTransform, CanvasLayout, LayoutMode, ViewportPreset, FlowDefinition } from "./types"
+		import { VIEWPORT_PRESETS } from "./types"
 
 		const THUMB_WIDTH = 380
 		const THUMB_HEIGHT = 238
@@ -158,6 +227,9 @@ function generateCanvasView(): string {
 		  pages: PageInfo[]
 		  routes: Array<{ path: string; name: string; component: React.ComponentType }>
 		  onFocus: (pageId: string) => void
+		  flows: FlowDefinition[]
+		  viewport: ViewportPreset
+		  onSetViewport: (v: ViewportPreset) => void
 		}
 
 		function groupPagesByTag(pages: PageInfo[]): Array<{ tag: string; pages: PageInfo[] }> {
@@ -207,8 +279,9 @@ function generateCanvasView(): string {
 		  }, 500)
 		}
 
-		export function CanvasView({ pages, routes, onFocus }: Props) {
+		export function CanvasView({ pages, routes, onFocus, flows, viewport, onSetViewport }: Props) {
 		  const [transform, setTransform] = useState<CanvasTransform>({ x: 40, y: 40, scale: 1 })
+		  const [showFlows, setShowFlows] = useState(false)
 		  const [isPanning, setIsPanning] = useState(false)
 		  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
 		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
@@ -349,7 +422,19 @@ function generateCanvasView(): string {
 		        <button onClick={toggleLayout} className={"caret-canvas-btn" + (layoutMode === "manual" ? " active" : "")} title={layoutMode === "auto" ? "Switch to manual layout" : "Switch to auto layout"}>
 		          {layoutMode === "auto" ? "⊞" : "✋"}
 		        </button>
+		        {flows.length > 0 && (
+		          <button onClick={() => setShowFlows(!showFlows)} className={"caret-canvas-btn" + (showFlows ? " active" : "")} title={showFlows ? "Hide flows" : "Show flows"}>
+		            ⇢
+		          </button>
+		        )}
 		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
+		        <div className="caret-canvas-viewport-selector">
+		          {(Object.entries(VIEWPORT_PRESETS) as [ViewportPreset, { name: string; width: number; icon: string }][]).map(([key, p]) => (
+		            <button key={key} onClick={() => onSetViewport(key)} className={"caret-canvas-btn caret-canvas-viewport-btn" + (viewport === key ? " active" : "")} title={p.name}>
+		              {p.icon}
+		            </button>
+		          ))}
+		        </div>
 		      </div>
 		      <div
 		        className="caret-canvas-content"
@@ -391,6 +476,37 @@ function generateCanvasView(): string {
 		            )
 		          })
 		        )}
+		        {showFlows && flows.length > 0 && (() => {
+		          const getPos = (pageId: string) => {
+		            if (autoItems) {
+		              const item = autoItems.find(i => i.page.id === pageId)
+		              if (item) return { cx: item.x + THUMB_WIDTH / 2, cy: item.y + THUMB_HEIGHT / 2 }
+		            } else {
+		              const pos = manualPositions[pageId]
+		              if (pos) return { cx: pos.x + THUMB_WIDTH / 2, cy: pos.y + THUMB_HEIGHT / 2 }
+		            }
+		            return null
+		          }
+		          return (
+		            <svg className="caret-canvas-flow-overlay">
+		              <defs>
+		                <marker id="caret-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+		                  <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+		                </marker>
+		              </defs>
+		              {flows.flatMap(flow =>
+		                flow.steps.flatMap(step => {
+		                  const from = getPos(step.page)
+		                  return step.next.map(nextPage => {
+		                    const to = getPos(nextPage)
+		                    if (!from || !to) return null
+		                    return <line key={flow.id + "-" + step.page + "-" + nextPage} x1={from.cx} y1={from.cy} x2={to.cx} y2={to.cy} stroke="#3b82f6" strokeWidth={2} opacity={0.6} markerEnd="url(#caret-arrowhead)" />
+		                  })
+		                })
+		              )}
+		            </svg>
+		          )
+		        })()}
 		      </div>
 		    </div>
 		  )
@@ -449,62 +565,73 @@ function generatePageThumbnail(): string {
 
 function generateFocusedPageView(): string {
 	return dedent`
-		import React, { useEffect, useState } from "react"
-		import { OverlayPainter } from "./OverlayPainter"
-		import { bridge } from "../bridge"
+		import React, { useRef, useEffect } from "react"
+		import type { ViewportPreset } from "./types"
+		import { VIEWPORT_PRESETS } from "./types"
 
 		interface Props {
 		  pageId: string
 		  title: string
 		  tags: string[]
-		  PageComponent: React.ComponentType
+		  states: string[]
 		  onBack: () => void
+		  onSimulate: () => void
+		  viewport: ViewportPreset
+		  onSetViewport: (v: ViewportPreset) => void
 		}
 
-		export function FocusedPageView({ pageId, title, tags, PageComponent, onBack }: Props) {
-		  const [paintMode, setPaintMode] = useState(false)
+		export function FocusedPageView({ pageId, title, states, onBack, onSimulate, viewport, onSetViewport }: Props) {
+		  const iframeRef = useRef<HTMLIFrameElement>(null)
+		  const preset = VIEWPORT_PRESETS[viewport]
 
 		  useEffect(() => {
-		    const filePath = "pages/" + pageId + "/index.tsx";
-		    (window as any).__CARET_FOCUSED_PAGE__ = { pageId, filePath }
-		    bridge.send({ type: "page-focused", payload: { filePath } })
+		    const handler = (e: MessageEvent) => {
+		      const iframe = iframeRef.current
+		      if (!iframe?.contentWindow) return
 
-		    const hmrHandler = () => {
-		      bridge.send({ type: "page-focused", payload: { filePath } })
-		    }
-		    if (import.meta.hot) {
-		      import.meta.hot.on("vite:afterUpdate", hmrHandler)
-		    }
+		      if (e.data?.source === "caret-vite" && e.source === iframe.contentWindow) {
+		        window.parent.postMessage(e.data, "*")
+		        return
+		      }
 
-		    const rg = (window as any).__REACT_GRAB__
-		    if (rg) {
-		      rg.activate()
-		      return () => {
-		        rg.deactivate();
-		        (window as any).__CARET_FOCUSED_PAGE__ = null
-		        if (import.meta.hot) import.meta.hot.off("vite:afterUpdate", hmrHandler)
+		      if (e.data?.source === "caret-extension") {
+		        iframe.contentWindow.postMessage(e.data, "*")
+		        return
+		      }
+
+		      if (e.data?.source === "caret-page-iframe" && e.source === iframe.contentWindow) {
+		        if (e.data.type === "back") onBack()
+		        if (e.data.type === "simulate") onSimulate()
+		        return
 		      }
 		    }
-		    return () => {
-		      (window as any).__CARET_FOCUSED_PAGE__ = null
-		      if (import.meta.hot) import.meta.hot.off("vite:afterUpdate", hmrHandler)
-		    }
-		  }, [pageId])
+
+		    window.addEventListener("message", handler)
+		    return () => window.removeEventListener("message", handler)
+		  }, [onBack, onSimulate])
 
 		  return (
-		    <div className="caret-focused">
-		      <button onClick={onBack} className="caret-focused-fab" title="Back to canvas">←</button>
-		      <button
-		        onClick={() => setPaintMode(!paintMode)}
-		        className={"caret-focused-fab caret-focused-paint-btn" + (paintMode ? " active" : "")}
-		        title={paintMode ? "Exit paint mode" : "Paint to edit"}
-		      >
-		        ✎
-		      </button>
-		      <div className="caret-focused-content">
-		        <PageComponent />
+		    <div className="caret-focused-shell">
+		      <div className="caret-focused-toolbar">
+		        <button onClick={onBack} className="caret-focused-toolbar-btn" title="Back to canvas">←</button>
+		        <span className="caret-focused-toolbar-title">{title}</span>
+		        <div className="caret-focused-viewport-selector">
+		          {(Object.entries(VIEWPORT_PRESETS) as [ViewportPreset, { name: string; width: number; icon: string }][]).map(([key, p]) => (
+		            <button key={key} onClick={() => onSetViewport(key)} className={"caret-focused-toolbar-btn" + (viewport === key ? " active" : "")} title={p.name}>
+		              {p.icon} {p.width}
+		            </button>
+		          ))}
+		        </div>
 		      </div>
-		      {paintMode && <OverlayPainter onClose={() => setPaintMode(false)} />}
+		      <div className="caret-focused-iframe-container">
+		        <iframe
+		          ref={iframeRef}
+		          src={"/?page=" + encodeURIComponent(pageId) + "&mode=focused"}
+		          className="caret-focused-iframe"
+		          style={{ width: preset.width }}
+		          title={title}
+		        />
+		      </div>
 		    </div>
 		  )
 		}
@@ -542,6 +669,116 @@ function generateErrorBoundary(): string {
 		    if (this.state.hasError) return this.props.fallback
 		    return this.props.children
 		  }
+		}
+	`
+}
+
+function generateCaretStateContext(): string {
+	return dedent`
+		import React, { createContext, useContext } from "react"
+
+		const CaretStateContext = createContext<string>("default")
+
+		export function CaretStateProvider({ value, children }: { value: string; children: React.ReactNode }) {
+		  return <CaretStateContext.Provider value={value}>{children}</CaretStateContext.Provider>
+		}
+
+		export function useCaretState() {
+		  return useContext(CaretStateContext)
+		}
+	`
+}
+
+function generateCaretNavigator(): string {
+	return dedent`
+		import { useState, useCallback } from "react"
+
+		export function useCaretNavigator(initialPageId: string) {
+		  const [history, setHistory] = useState<string[]>([initialPageId])
+		  const [historyIndex, setHistoryIndex] = useState(0)
+
+		  const currentPageId = history[historyIndex]
+
+		  const navigate = useCallback((pageId: string) => {
+		    setHistory(prev => [...prev.slice(0, historyIndex + 1), pageId])
+		    setHistoryIndex(prev => prev + 1)
+		  }, [historyIndex])
+
+		  const goBack = useCallback(() => {
+		    if (historyIndex > 0) setHistoryIndex(prev => prev - 1)
+		  }, [historyIndex])
+
+		  const goForward = useCallback(() => {
+		    if (historyIndex < history.length - 1) setHistoryIndex(prev => prev + 1)
+		  }, [historyIndex])
+
+		  const canGoBack = historyIndex > 0
+		  const canGoForward = historyIndex < history.length - 1
+
+		  return { currentPageId, navigate, goBack, goForward, canGoBack, canGoForward }
+		}
+	`
+}
+
+function generateSimulationView(): string {
+	return dedent`
+		import React, { useRef, useEffect } from "react"
+		import { useCaretNavigator } from "./CaretNavigator"
+		import type { ViewportPreset, PageInfo } from "./types"
+		import { VIEWPORT_PRESETS } from "./types"
+
+		interface Props {
+		  initialPageId: string
+		  pages: PageInfo[]
+		  viewport: ViewportPreset
+		  onSetViewport: (v: ViewportPreset) => void
+		  onExit: () => void
+		}
+
+		export function SimulationView({ initialPageId, pages, viewport, onSetViewport, onExit }: Props) {
+		  const { currentPageId, navigate, goBack, goForward, canGoBack, canGoForward } = useCaretNavigator(initialPageId)
+		  const iframeRef = useRef<HTMLIFrameElement>(null)
+		  const preset = VIEWPORT_PRESETS[viewport]
+		  const currentPage = pages.find(p => p.id === currentPageId)
+
+		  useEffect(() => {
+		    const handler = (e: MessageEvent) => {
+		      if (e.data?.source === "caret-sim-navigate") {
+		        navigate(e.data.pageId)
+		      }
+		    }
+		    window.addEventListener("message", handler)
+		    return () => window.removeEventListener("message", handler)
+		  }, [navigate])
+
+		  return (
+		    <div className="caret-simulation-shell">
+		      <div className="caret-simulation-toolbar">
+		        <button onClick={onExit} className="caret-sim-btn" title="Exit simulation">✕</button>
+		        <button onClick={goBack} className="caret-sim-btn" disabled={!canGoBack} title="Back">←</button>
+		        <button onClick={goForward} className="caret-sim-btn" disabled={!canGoForward} title="Forward">→</button>
+		        <span className="caret-sim-page-label">{currentPage?.title || currentPageId}</span>
+		        <div className="caret-sim-viewport-selector">
+		          {(Object.entries(VIEWPORT_PRESETS) as [ViewportPreset, { name: string; width: number; icon: string }][]).map(([key, p]) => (
+		            <button key={key} onClick={() => onSetViewport(key)} className={"caret-sim-btn" + (viewport === key ? " active" : "")} title={p.name}>
+		              {p.icon} {p.width}
+		            </button>
+		          ))}
+		        </div>
+		      </div>
+		      <div className="caret-simulation-content">
+		        <div className="caret-simulation-device-frame" style={{ width: preset.width, maxWidth: "100%" }}>
+		          <iframe
+		            ref={iframeRef}
+		            key={currentPageId}
+		            src={"/?page=" + encodeURIComponent(currentPageId)}
+		            className="caret-simulation-iframe"
+		            title={currentPage?.title || currentPageId}
+		          />
+		        </div>
+		      </div>
+		    </div>
+		  )
 		}
 	`
 }
@@ -949,10 +1186,171 @@ function generateCanvasCSS(): string {
 		.caret-canvas-error h2 { font-size: 18px; color: #ccc; margin-bottom: 8px; }
 		.caret-canvas-error p { font-size: 13px; }
 
+		/* Focused shell (thin iframe wrapper) */
+		.caret-focused-shell {
+		  position: fixed;
+		  inset: 0;
+		  display: flex;
+		  flex-direction: column;
+		  background: #0a0a0a;
+		}
+
+		.caret-focused-toolbar {
+		  display: flex;
+		  align-items: center;
+		  gap: 8px;
+		  padding: 6px 12px;
+		  background: #1a1a1a;
+		  border-bottom: 1px solid #333;
+		  z-index: 10;
+		  flex-shrink: 0;
+		}
+
+		.caret-focused-toolbar-btn {
+		  background: none;
+		  border: 1px solid #444;
+		  color: #ccc;
+		  padding: 4px 8px;
+		  border-radius: 4px;
+		  cursor: pointer;
+		  font-size: 13px;
+		  white-space: nowrap;
+		}
+		.caret-focused-toolbar-btn:hover { background: #333; }
+		.caret-focused-toolbar-btn.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+		.caret-focused-toolbar-title {
+		  color: #999;
+		  font-size: 13px;
+		  font-weight: 500;
+		  margin-right: auto;
+		  white-space: nowrap;
+		  overflow: hidden;
+		  text-overflow: ellipsis;
+		}
+
+		.caret-focused-viewport-selector {
+		  display: flex;
+		  gap: 4px;
+		}
+
+		.caret-focused-iframe-container {
+		  flex: 1;
+		  display: flex;
+		  justify-content: center;
+		  overflow: auto;
+		  background: #111;
+		}
+
+		.caret-focused-iframe {
+		  border: none;
+		  height: 100%;
+		  background: #fff;
+		  max-width: 100%;
+		}
+
+		/* Simulation mode */
+		.caret-simulation-shell {
+		  position: fixed;
+		  inset: 0;
+		  display: flex;
+		  flex-direction: column;
+		  background: #0a0a0a;
+		}
+
+		.caret-simulation-toolbar {
+		  display: flex;
+		  align-items: center;
+		  gap: 8px;
+		  padding: 6px 12px;
+		  background: #1a1a1a;
+		  border-bottom: 1px solid #333;
+		  z-index: 10;
+		  flex-shrink: 0;
+		}
+
+		.caret-sim-btn {
+		  background: none;
+		  border: 1px solid #444;
+		  color: #ccc;
+		  padding: 4px 8px;
+		  border-radius: 4px;
+		  cursor: pointer;
+		  font-size: 13px;
+		  white-space: nowrap;
+		}
+		.caret-sim-btn:hover { background: #333; }
+		.caret-sim-btn:disabled { opacity: 0.4; cursor: default; }
+		.caret-sim-btn.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+		.caret-sim-page-label {
+		  color: #999;
+		  font-size: 13px;
+		  margin-right: auto;
+		}
+
+		.caret-sim-viewport-selector {
+		  display: flex;
+		  gap: 4px;
+		}
+
+		.caret-simulation-content {
+		  flex: 1;
+		  display: flex;
+		  justify-content: center;
+		  align-items: flex-start;
+		  overflow: auto;
+		  padding: 24px;
+		}
+
+		.caret-simulation-device-frame {
+		  background: #fff;
+		  border-radius: 8px;
+		  overflow: hidden;
+		  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+		  height: calc(100vh - 100px);
+		}
+
+		.caret-simulation-iframe {
+		  width: 100%;
+		  height: 100%;
+		  border: none;
+		}
+
+		/* Canvas flow overlay */
+		.caret-canvas-flow-overlay {
+		  position: absolute;
+		  top: 0;
+		  left: 0;
+		  width: 100%;
+		  height: 100%;
+		  pointer-events: none;
+		  overflow: visible;
+		}
+
+		/* Canvas viewport selector */
+		.caret-canvas-viewport-selector {
+		  display: flex;
+		  gap: 2px;
+		  margin-left: 8px;
+		  padding-left: 8px;
+		  border-left: 1px solid #444;
+		}
+
+		.caret-canvas-viewport-btn {
+		  padding: 4px 6px !important;
+		  font-size: 12px !important;
+		}
+
 		/* Paint mode button */
 		.caret-focused-paint-btn {
 		  top: 12px;
 		  left: 56px;
+		}
+
+		.caret-focused-sim-btn {
+		  top: 12px;
+		  left: 100px;
 		}
 		.caret-focused-paint-btn.active {
 		  background: rgba(59, 130, 246, 0.4);

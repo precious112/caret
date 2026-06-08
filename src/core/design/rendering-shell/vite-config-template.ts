@@ -104,6 +104,51 @@ function caretTokensPlugin() {
   }
 }
 
+// Virtual module for flow definitions
+function caretFlowsPlugin() {
+  const flowsDir = resolve(__dirname, "flows")
+
+  function buildModule() {
+    if (!existsSync(flowsDir)) return "export default []"
+    try {
+      const files = readdirSync(flowsDir).filter(f => f.endsWith(".flow.json"))
+      const flows = files.map(f => {
+        try {
+          return JSON.parse(readFileSync(join(flowsDir, f), "utf-8"))
+        } catch { return null }
+      }).filter(Boolean)
+      return "export default " + JSON.stringify(flows)
+    } catch {
+      return "export default []"
+    }
+  }
+
+  return {
+    name: "caret-flows",
+    resolveId(id) {
+      if (id === "virtual:caret-flows") return "\\0virtual:caret-flows"
+      return null
+    },
+    load(id) {
+      if (id === "\\0virtual:caret-flows") return buildModule()
+      return null
+    },
+    configureServer(server) {
+      if (existsSync(flowsDir)) server.watcher.add(flowsDir)
+      const handleFlowChange = (p) => {
+        if (p.endsWith(".flow.json")) {
+          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-flows")
+          if (mod) server.moduleGraph.invalidateModule(mod)
+          server.ws.send({ type: "custom", event: "caret:flows-changed" })
+        }
+      }
+      server.watcher.on("change", handleFlowChange)
+      server.watcher.on("add", handleFlowChange)
+      server.watcher.on("unlink", handleFlowChange)
+    },
+  }
+}
+
 // Screenshot + pages-meta + canvas-layout API middleware
 function caretApiPlugin() {
   const thumbnailsDir = resolve(__dirname, "thumbnails")
@@ -180,6 +225,29 @@ function caretApiPlugin() {
             })
             res.setHeader("Content-Type", "application/json")
             res.end(JSON.stringify(metas))
+          } catch {
+            res.statusCode = 500
+            res.end("[]")
+          }
+          return
+        }
+
+        // GET /__caret/flows-meta
+        if (req.method === "GET" && req.url === "/__caret/flows-meta") {
+          const flowsDir = resolve(__dirname, "flows")
+          try {
+            if (!existsSync(flowsDir)) {
+              res.setHeader("Content-Type", "application/json")
+              res.end("[]")
+              return
+            }
+            const files = readdirSync(flowsDir).filter(f => f.endsWith(".flow.json"))
+            const flows = files.map(f => {
+              try { return JSON.parse(readFileSync(join(flowsDir, f), "utf-8")) }
+              catch { return null }
+            }).filter(Boolean)
+            res.setHeader("Content-Type", "application/json")
+            res.end(JSON.stringify(flows))
           } catch {
             res.statusCode = 500
             res.end("[]")
@@ -271,7 +339,7 @@ function caretSourceCapturePlugin() {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTokensPlugin(), caretApiPlugin()],
+  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTokensPlugin(), caretFlowsPlugin(), caretApiPlugin()],
   server: {
     host: "localhost",
     strictPort: false,

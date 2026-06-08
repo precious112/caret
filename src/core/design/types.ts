@@ -68,6 +68,20 @@ export interface PageMeta {
 	tags: string[]
 }
 
+export interface FlowStep {
+	page: string
+	label?: string
+	next: string[]
+	onError?: string[]
+}
+
+export interface FlowDefinition {
+	id: string
+	name: string
+	description?: string
+	steps: FlowStep[]
+}
+
 export interface SyncState {
 	lastSyncedCommit: string | null
 }

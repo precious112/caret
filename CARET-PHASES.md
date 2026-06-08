@@ -77,15 +77,15 @@ Goal: Make the visual editing algorithm more reliable and deterministic. The AI 
 
 ---
 
-## [ ] Phase 4: Flows + Simulation + State
+## [x] Phase 4: Flows + Simulation + State
 
-- [ ] Flow definition files (`.caret/flows/*.flow.json` with page references, next/onError edges)
-- [ ] Flow view overlay (user-toggled; React Flow or similar; color-coded per flow)
-- [ ] Flow restructuring (drag edges → update `.flow.json` → AI prompts to update JSX navigation)
-- [ ] Simulation mode (hide editor chrome, show single page in device frame, navigate via JSX links)
-- [ ] Viewport presets (desktop 1440/1280, tablet 768, mobile 390/375) via iframe resize
-- [ ] Desktop/tablet/mobile toggle persistent in toolbar (works in both canvas and simulation)
-- [ ] State selector (dropdown populated from `meta.json` states; jump to any state without triggering it manually)
+- [x] Flow definition files (`.caret/flows/*.flow.json` with page references, next/onError edges)
+- [x] Flow view overlay (user-toggled; React Flow or similar; color-coded per flow)
+- [x] Flow restructuring (drag edges → update `.flow.json` → AI prompts to update JSX navigation)
+- [x] Simulation mode (hide editor chrome, show single page in device frame, navigate via JSX links)
+- [x] Viewport presets (desktop 1440/1280, tablet 768, mobile 390/375) via iframe resize
+- [x] Desktop/tablet/mobile toggle persistent in toolbar (works in both canvas and simulation)
+- [x] State selector (dropdown populated from `meta.json` states; jump to any state without triggering it manually)
 
 **Deliverable:** Flow visualization, user-flow simulation, responsive preview, state inspection.
 
