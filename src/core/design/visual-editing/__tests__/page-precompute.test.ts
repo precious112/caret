@@ -1,8 +1,8 @@
 import { describe, it } from "mocha"
 import "should"
 
+import type { DynamicRange } from "../page-precompute"
 import { precomputePage } from "../page-precompute"
-import type { DynamicRange, PrecomputeResult } from "../page-precompute"
 
 function hasRange(ranges: DynamicRange[], diagnostic: string): boolean {
 	return ranges.some((r) => r.diagnostics.includes(diagnostic as any))

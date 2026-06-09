@@ -65,6 +65,18 @@ export interface PrecomputeResultPayload {
 	}>
 }
 
+export interface FlowEdgeCreatePayload {
+	flowId: string
+	fromPage: string
+	toPage: string
+}
+
+export interface FlowEdgeDeletePayload {
+	flowId: string
+	fromPage: string
+	toPage: string
+}
+
 export type DesignMessage =
 	| { source: "caret-vite"; type: "element-selected"; payload: ElementSelectedPayload }
 	| { source: "caret-vite"; type: "open-file"; payload: OpenFilePayload }
@@ -73,5 +85,7 @@ export type DesignMessage =
 	| { source: "caret-vite"; type: "overlay-edit"; payload: OverlayEditPayload }
 	| { source: "caret-vite"; type: "log"; payload: LogPayload }
 	| { source: "caret-vite"; type: "page-focused"; payload: PageFocusedPayload }
+	| { source: "caret-vite"; type: "flow-edge-create"; payload: FlowEdgeCreatePayload }
+	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-extension"; type: "edit-result"; payload: EditResultPayload }
 	| { source: "caret-extension"; type: "precompute-result"; payload: PrecomputeResultPayload }
