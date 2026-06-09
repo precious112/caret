@@ -315,7 +315,7 @@ function generateCanvasView(): string {
 		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
 		  const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({})
 		  const [dragState, setDragState] = useState<{ pageId: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
-		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; reassignFlowId?: string; reassignOldTo?: string } | null>(null)
+		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; originX: number; originY: number; reassignFlowId?: string; reassignOldTo?: string } | null>(null)
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
@@ -334,6 +334,95 @@ function generateCanvasView(): string {
 		    })
 		    return out
 		  }, [pages, manualPositions, layoutScaleY])
+
+		  // y + LABEL_H so edges anchor on the visible frame, not the title label above it.
+		  const getRect = (pageId: string) => {
+		    if (autoItems) {
+		      const item = autoItems.find(i => i.page.id === pageId)
+		      if (item) return { x: item.x, y: item.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
+		    } else {
+		      const pos = manualDisplayPositions[pageId]
+		      if (pos) return { x: pos.x, y: pos.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
+		    }
+		    return null
+		  }
+
+		  const visibleFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
+
+		  // Edge "ports": every edge endpoint — and the right-side connector ring — gets
+		  // its own slot along the card side it touches, ordered by where the other end
+		  // of the edge lies. Endpoints therefore never stack on each other or on the
+		  // connector. SIDE_DIRS are the outward normals used for bezier control points.
+		  const edgePorts = (() => {
+		    const SIDE_DIRS: Record<string, { dx: number; dy: number }> = {
+		      left: { dx: -1, dy: 0 }, right: { dx: 1, dy: 0 }, top: { dx: 0, dy: -1 }, bottom: { dx: 0, dy: 1 },
+		    }
+		    const groups: Record<string, Array<{ key: string; sortVal: number }>> = {}
+		    const addItem = (pageId: string, side: string, key: string, sortVal: number) => {
+		      const gk = pageId + "|" + side
+		      if (!groups[gk]) groups[gk] = []
+		      groups[gk].push({ key, sortVal })
+		    }
+		    pages.forEach(p => addItem(p.id, "right", "connector", Infinity))
+		    const edges: Array<{ key: string; from: string; to: string; fromSide: string; toSide: string }> = []
+		    if (showFlows) {
+		      for (const flow of visibleFlows) {
+		        for (const step of flow.steps) {
+		          const targets = [
+		            ...step.next.map(t => ({ to: t, err: "n" })),
+		            ...(step.onError || []).map(t => ({ to: t, err: "e" })),
+		          ]
+		          for (const t of targets) {
+		            const fr = getRect(step.page), tr = getRect(t.to)
+		            if (!fr || !tr) continue
+		            const fcx = fr.x + fr.w / 2, fcy = fr.y + fr.h / 2
+		            const tcx = tr.x + tr.w / 2, tcy = tr.y + tr.h / 2
+		            const dx = tcx - fcx, dy = tcy - fcy
+		            const horizontal = Math.abs(dx) > Math.abs(dy)
+		            const fromSide = horizontal ? (dx > 0 ? "right" : "left") : (dy > 0 ? "bottom" : "top")
+		            const toSide = horizontal ? (dx > 0 ? "left" : "right") : (dy > 0 ? "top" : "bottom")
+		            const key = flow.id + "|" + step.page + "|" + t.to + "|" + t.err
+		            edges.push({ key, from: step.page, to: t.to, fromSide, toSide })
+		            addItem(step.page, fromSide, key + "|from", horizontal ? tcy : tcx)
+		            addItem(t.to, toSide, key + "|to", horizontal ? fcy : fcx)
+		          }
+		        }
+		      }
+		    }
+		    const portPos: Record<string, { x: number; y: number }> = {}
+		    for (const gk of Object.keys(groups)) {
+		      const sep = gk.lastIndexOf("|")
+		      const rect = getRect(gk.slice(0, sep))
+		      if (!rect) continue
+		      const side = gk.slice(sep + 1)
+		      const items = groups[gk].slice().sort((a, b) => (a.sortVal - b.sortVal) || (a.key < b.key ? -1 : 1))
+		      items.forEach((item, i) => {
+		        const frac = (i + 1) / (items.length + 1)
+		        portPos[gk + "|" + item.key] =
+		          side === "left" ? { x: rect.x, y: rect.y + rect.h * frac }
+		          : side === "right" ? { x: rect.x + rect.w, y: rect.y + rect.h * frac }
+		          : side === "top" ? { x: rect.x + rect.w * frac, y: rect.y }
+		          : { x: rect.x + rect.w * frac, y: rect.y + rect.h }
+		      })
+		    }
+		    const anchors: Record<string, { fx: number; fy: number; tx: number; ty: number; fdx: number; fdy: number; tdx: number; tdy: number }> = {}
+		    for (const e of edges) {
+		      const fp = portPos[e.from + "|" + e.fromSide + "|" + e.key + "|from"]
+		      const tp = portPos[e.to + "|" + e.toSide + "|" + e.key + "|to"]
+		      if (!fp || !tp) continue
+		      anchors[e.key] = {
+		        fx: fp.x, fy: fp.y, tx: tp.x, ty: tp.y,
+		        fdx: SIDE_DIRS[e.fromSide].dx, fdy: SIDE_DIRS[e.fromSide].dy,
+		        tdx: SIDE_DIRS[e.toSide].dx, tdy: SIDE_DIRS[e.toSide].dy,
+		      }
+		    }
+		    const connectors: Record<string, { x: number; y: number }> = {}
+		    pages.forEach(p => {
+		      const cp = portPos[p.id + "|right|connector"]
+		      if (cp) connectors[p.id] = cp
+		    })
+		    return { anchors, connectors }
+		  })()
 
 		  useEffect(() => {
 		    fetch("/__caret/canvas-layout")
@@ -592,6 +681,7 @@ function generateCanvasView(): string {
 		        {autoItems ? (
 		          autoItems.map(({ page, x, y, groupTag }) => {
 		            const hasRoute = routes.some(r => r.name === page.id)
+		            const conn = edgePorts.connectors[page.id] || { x: x + THUMB_WIDTH, y: y + LABEL_H + activeThumbHeight / 2 }
 		            return (
 		              <React.Fragment key={page.id}>
 		                {groupTag && (
@@ -602,7 +692,7 @@ function generateCanvasView(): string {
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
 		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
 		                  {showFlows && (
-		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + LABEL_H + activeThumbHeight / 2 }) }} />
+		                    <div className="caret-edge-connector" style={{ top: conn.y - y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
 		                  )}
 		                </div>
 		              </React.Fragment>
@@ -612,6 +702,7 @@ function generateCanvasView(): string {
 		          pages.map((page) => {
 		            const pos = manualDisplayPositions[page.id]
 		            const hasRoute = routes.some(r => r.name === page.id)
+		            const conn = edgePorts.connectors[page.id] || { x: pos.x + THUMB_WIDTH, y: pos.y + LABEL_H + activeThumbHeight / 2 }
 		            return (
 		              <div
 		                key={page.id}
@@ -622,7 +713,7 @@ function generateCanvasView(): string {
 		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
 		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
 		                {showFlows && (
-		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + LABEL_H + activeThumbHeight / 2 }) }} />
+		                  <div className="caret-edge-connector" style={{ top: conn.y - pos.y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
 		                )}
 		              </div>
 		            )
@@ -630,49 +721,17 @@ function generateCanvasView(): string {
 		        )}
 		        {showFlows && flows.length > 0 && (() => {
 		          const FLOW_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"]
-		          // y + LABEL_H so edges anchor on the visible frame, not the title label above it.
-		          const getRect = (pageId: string) => {
-		            if (autoItems) {
-		              const item = autoItems.find(i => i.page.id === pageId)
-		              if (item) return { x: item.x, y: item.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
-		            } else {
-		              const pos = manualDisplayPositions[pageId]
-		              if (pos) return { x: pos.x, y: pos.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
-		            }
-		            return null
-		          }
-		          // Anchors carry outward unit vectors: fdx/fdy leaving the source side,
-		          // tdx/tdy pointing away from the target side. Control points extend along
-		          // them, so the end tangent always enters the destination and orient="auto"
-		          // arrowheads face forward regardless of which way the edge travels.
-		          const getEdgeAnchors = (fromId: string, toId: string) => {
-		            const fr = getRect(fromId), tr = getRect(toId)
-		            if (!fr || !tr) return null
-		            const fcx = fr.x + fr.w / 2, fcy = fr.y + fr.h / 2
-		            const tcx = tr.x + tr.w / 2, tcy = tr.y + tr.h / 2
-		            const dx = tcx - fcx, dy = tcy - fcy
-		            if (Math.abs(dx) > Math.abs(dy)) {
-		              const sign = dx > 0 ? 1 : -1
-		              return {
-		                fx: sign > 0 ? fr.x + fr.w : fr.x, fy: fcy,
-		                tx: sign > 0 ? tr.x : tr.x + tr.w, ty: tcy,
-		                fdx: sign, fdy: 0, tdx: -sign, tdy: 0,
-		              }
-		            } else {
-		              const sign = dy > 0 ? 1 : -1
-		              return {
-		                fx: fcx, fy: sign > 0 ? fr.y + fr.h : fr.y,
-		                tx: tcx, ty: sign > 0 ? tr.y : tr.y + tr.h,
-		                fdx: 0, fdy: sign, tdx: 0, tdy: -sign,
-		              }
-		            }
-		          }
+		          // Anchors come from the shared port distribution (edgePorts) so endpoints
+		          // never collide with each other or the connector ring. The outward unit
+		          // vectors (fdx/fdy, tdx/tdy) make the bezier end tangent enter the
+		          // destination, keeping orient="auto" arrowheads pointing forward.
+		          const getEdgeAnchors = (flowId: string, fromId: string, toId: string, err: string) =>
+		            edgePorts.anchors[flowId + "|" + fromId + "|" + toId + "|" + err] || null
 		          const makePath = (a: { fx: number; fy: number; tx: number; ty: number; fdx: number; fdy: number; tdx: number; tdy: number }) => {
 		            const dist = Math.sqrt((a.tx - a.fx) ** 2 + (a.ty - a.fy) ** 2)
 		            const cp = Math.max(20, Math.min(dist * 0.4, 150))
 		            return "M " + a.fx + " " + a.fy + " C " + (a.fx + a.fdx * cp) + " " + (a.fy + a.fdy * cp) + ", " + (a.tx + a.tdx * cp) + " " + (a.ty + a.tdy * cp) + ", " + a.tx + " " + a.ty
 		          }
-		          const visibleFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
 		          return (
 		            <svg className="caret-canvas-flow-overlay" style={{ width: 10000, height: 10000 }}>
 		              {/* userSpaceOnUse keeps arrows a fixed size (no stroke-width scaling);
@@ -691,36 +750,33 @@ function generateCanvasView(): string {
 		                const color = FLOW_COLORS[flows.indexOf(flow) % 5]
 		                return flow.steps.flatMap(step => {
 		                  const nextEdges = step.next.map(nextPage => {
-		                    const anchors = getEdgeAnchors(step.page, nextPage)
+		                    const anchors = getEdgeAnchors(flow.id, step.page, nextPage, "n")
 		                    if (!anchors) return null
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === nextPage
 		                    return <g key={flow.id + "-" + step.page + "-" + nextPage}>
 		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : color} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} style={{ pointerEvents: "none" }} />
-		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : color} stroke={isSelected ? color : "#0a0a0a"} strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + nextPage + " flow=" + flow.id); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, reassignFlowId: flow.id, reassignOldTo: nextPage }) }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : color} stroke={isSelected ? color : "#0a0a0a"} strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + nextPage + " flow=" + flow.id); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: nextPage }) }} />
 		                    </g>
 		                  })
 		                  const errorEdges = (step.onError || []).map(errorPage => {
-		                    const anchors = getEdgeAnchors(step.page, errorPage)
+		                    const anchors = getEdgeAnchors(flow.id, step.page, errorPage, "e")
 		                    if (!anchors) return null
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === errorPage
 		                    return <g key={flow.id + "-error-" + step.page + "-" + errorPage}>
 		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : "#ef4444"} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} strokeDasharray="6 3" markerEnd="url(#caret-arrow-error)" style={{ pointerEvents: "none" }} />
-		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : "#ef4444"} stroke="#0a0a0a" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + errorPage + " flow=" + flow.id + " (error)"); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, reassignFlowId: flow.id, reassignOldTo: errorPage }) }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : "#ef4444"} stroke="#0a0a0a" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + errorPage + " flow=" + flow.id + " (error)"); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: errorPage }) }} />
 		                    </g>
 		                  })
 		                  return [...nextEdges, ...errorEdges]
 		                })
 		              })}
-		              {edgeDrag && (() => {
-		                const fr = getRect(edgeDrag.fromPage)
-		                if (!fr) return null
-		                const fx = fr.x + fr.w, fy = fr.y + fr.h / 2
-		                return <line x1={fx} y1={fy} x2={edgeDrag.mouseX} y2={edgeDrag.mouseY} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} style={{ pointerEvents: "none" }} />
-		              })()}
+		              {edgeDrag && (
+		                <line x1={edgeDrag.originX} y1={edgeDrag.originY} x2={edgeDrag.mouseX} y2={edgeDrag.mouseY} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} style={{ pointerEvents: "none" }} />
+		              )}
 		            </svg>
 		          )
 		        })()}
@@ -1628,7 +1684,7 @@ function generateCanvasCSS(): string {
 		.caret-edge-connector {
 		  position: absolute;
 		  right: -7px;
-		  top: calc(50% + 13px); /* centered on the frame below the 26px label */
+		  /* top is set inline per page from the edge-port distribution */
 		  transform: translateY(-50%);
 		  width: 14px;
 		  height: 14px;

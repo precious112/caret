@@ -158,7 +158,10 @@ if (isolatedPageId && mode === "focused") {
 `
 
 	// global.css — Tailwind v4 + Caret overrides
-	const globalCss = `@import "tailwindcss";
+	// source(none) disables Tailwind's automatic content detection, which would
+	// otherwise scan the whole .caret dir — its Vite plugin then force-reloads every
+	// client whenever any scanned file (e.g. flows/*.flow.json) changes.
+	const globalCss = `@import "tailwindcss" source(none);
 
 @source "./pages/**/*.tsx";
 @source "./components/**/*.tsx";
