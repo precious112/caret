@@ -77,7 +77,7 @@ function generateTypes(): string {
 
 function generateCanvasApp(): string {
 	return dedent`
-		import React, { useState, useEffect, useCallback } from "react"
+		import React, { useState, useEffect, useCallback, useRef } from "react"
 		import { routes, pageMetas } from "virtual:caret-router"
 		import { CanvasView } from "./CanvasView"
 		import { FocusedPageView } from "./FocusedPageView"
@@ -129,12 +129,27 @@ function generateCanvasApp(): string {
 		    setFocusedPageId(null)
 		  }, [])
 
+		  // Tracks where simulation was entered from so exiting returns there.
+		  const simOrigin = useRef<"canvas" | "focused">("focused")
+
 		  const handleSimulate = useCallback(() => {
+		    simOrigin.current = "focused"
+		    setMode("simulation")
+		  }, [])
+
+		  const handleSimulateFromCanvas = useCallback((pageId: string) => {
+		    simOrigin.current = "canvas"
+		    setFocusedPageId(pageId)
 		    setMode("simulation")
 		  }, [])
 
 		  const handleExitSimulation = useCallback(() => {
-		    setMode("focused")
+		    if (simOrigin.current === "canvas") {
+		      setMode("canvas")
+		      setFocusedPageId(null)
+		    } else {
+		      setMode("focused")
+		    }
 		  }, [])
 
 		  if (mode === "simulation" && focusedPageId) {
@@ -175,6 +190,7 @@ function generateCanvasApp(): string {
 		        pages={pages}
 		        routes={routes}
 		        onFocus={handleFocus}
+		        onSimulate={handleSimulateFromCanvas}
 		        flows={flows}
 		        viewport={viewport}
 		        onSetViewport={setViewport}
@@ -226,11 +242,17 @@ function generateCanvasView(): string {
 		const DRAG_THRESHOLD = 5
 		const GROUP_HEADER_HEIGHT = 32
 		const GROUP_GAP = 48
+		// Height of the title label above each thumbnail frame (20px min-height + 6px padding).
+		const LABEL_H = 26
+		// Manual positions are stored in reference space: thumbnail height at desktop-1440.
+		// Other viewports scale y at render time so saved layouts stay viewport-independent.
+		const REF_THUMB_HEIGHT = FRAME_HEIGHT * (THUMB_WIDTH / 1440)
 
 		interface Props {
 		  pages: PageInfo[]
 		  routes: Array<{ path: string; name: string; component: React.ComponentType }>
 		  onFocus: (pageId: string) => void
+		  onSimulate: (pageId: string) => void
 		  flows: FlowDefinition[]
 		  viewport: ViewportPreset
 		  onSetViewport: (v: ViewportPreset) => void
@@ -284,7 +306,7 @@ function generateCanvasView(): string {
 		  }, 500)
 		}
 
-		export function CanvasView({ pages, routes, onFocus, flows, viewport, onSetViewport }: Props) {
+		export function CanvasView({ pages, routes, onFocus, onSimulate, flows, viewport, onSetViewport }: Props) {
 		  const [transform, setTransform] = useState<CanvasTransform>({ x: 40, y: 40, scale: 1 })
 		  const [showFlows, setShowFlows] = useState(false)
 		  const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
@@ -297,6 +319,21 @@ function generateCanvasView(): string {
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
+
+		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
+		  const activeThumbHeight = FRAME_HEIGHT * (THUMB_WIDTH / activeFrameWidth)
+		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages, activeThumbHeight) : null
+		  // Scaling the full card pitch (thumb + label) keeps cards that fit at the
+		  // reference viewport from ever overlapping at taller viewports.
+		  const layoutScaleY = (activeThumbHeight + LABEL_H) / (REF_THUMB_HEIGHT + LABEL_H)
+		  const manualDisplayPositions = React.useMemo(() => {
+		    const out: Record<string, { x: number; y: number }> = {}
+		    pages.forEach((p, i) => {
+		      const ref = manualPositions[p.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (REF_THUMB_HEIGHT + GAP + LABEL_H) }
+		      out[p.id] = { x: ref.x, y: ref.y * layoutScaleY }
+		    })
+		    return out
+		  }, [pages, manualPositions, layoutScaleY])
 
 		  useEffect(() => {
 		    fetch("/__caret/canvas-layout")
@@ -351,7 +388,7 @@ function generateCanvasView(): string {
 		        setDragState(prev => prev ? { ...prev, moved: true } : null)
 		        setManualPositions(prev => ({
 		          ...prev,
-		          [dragState.pageId]: { x: dragState.origX + dx, y: dragState.origY + dy },
+		          [dragState.pageId]: { x: dragState.origX + dx, y: dragState.origY + dy / layoutScaleY },
 		        }))
 		      }
 		      return
@@ -361,11 +398,7 @@ function generateCanvasView(): string {
 		    const dy = e.clientY - panStart.y
 		    setPanStart({ x: e.clientX, y: e.clientY })
 		    setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
-		  }, [isPanning, panStart, dragState, transform.scale, edgeDrag, transform.x, transform.y])
-
-		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
-		  const activeThumbHeight = FRAME_HEIGHT * (THUMB_WIDTH / activeFrameWidth)
-		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages, activeThumbHeight) : null
+		  }, [isPanning, panStart, dragState, transform.scale, edgeDrag, transform.x, transform.y, layoutScaleY])
 
 		  const handlePointerUp = useCallback((e: React.PointerEvent) => {
 		    if (edgeDrag) {
@@ -373,10 +406,10 @@ function generateCanvasView(): string {
 		      if (rect) {
 		        const canvasX = (e.clientX - rect.left - transform.x) / transform.scale
 		        const canvasY = (e.clientY - rect.top - transform.y) / transform.scale
-		        const wrapperHeight = activeThumbHeight + 26
+		        const wrapperHeight = activeThumbHeight + LABEL_H
 		        const allPositions = autoItems
 		          ? autoItems.map(i => ({ id: i.page.id, x: i.x, y: i.y }))
-		          : pages.map((p, idx) => ({ id: p.id, ...(manualPositions[p.id] || { x: (idx % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(idx / COLS) * (activeThumbHeight + GAP + 24) }) }))
+		          : pages.map(p => ({ id: p.id, ...manualDisplayPositions[p.id] }))
 		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + wrapperHeight)
 		        const flowId = edgeDrag.reassignFlowId || activeFlowId || (flows.length > 0 ? flows[0].id : null)
 		        if (target && flowId) {
@@ -401,23 +434,25 @@ function generateCanvasView(): string {
 		    }
 		    setDragState(null)
 		    setIsPanning(false)
-		  }, [dragState, layoutMode, manualPositions, edgeDrag, transform, autoItems, pages, activeFlowId, flows, activeThumbHeight])
+		  }, [dragState, layoutMode, manualPositions, manualDisplayPositions, edgeDrag, transform, autoItems, pages, activeFlowId, flows, activeThumbHeight])
 
 		  const handleThumbPointerDown = useCallback((pageId: string, x: number, y: number, e: React.PointerEvent) => {
 		    if (layoutMode !== "manual" || e.button !== 0) return
 		    e.stopPropagation()
 		    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-		    setDragState({ pageId, startX: e.clientX, startY: e.clientY, origX: x, origY: y, moved: false })
-		  }, [layoutMode])
+		    // x/y arrive in display space; the drag origin is kept in reference space
+		    // because drag moves write back into manualPositions (reference space).
+		    setDragState({ pageId, startX: e.clientX, startY: e.clientY, origX: x, origY: y / layoutScaleY, moved: false })
+		  }, [layoutMode, layoutScaleY])
 
 		  const fitAll = useCallback(() => {
 		    if (!containerRef.current || pages.length === 0) return
 		    const rect = containerRef.current.getBoundingClientRect()
 		    const positioned = layoutMode === "manual"
-		      ? pages.map((p, i) => manualPositions[p.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (activeThumbHeight + GAP + 24) })
+		      ? pages.map(p => manualDisplayPositions[p.id])
 		      : computeAutoPositions(pages, activeThumbHeight).map(item => ({ x: item.x, y: item.y }))
 		    const maxX = Math.max(...positioned.map(p => p.x)) + THUMB_WIDTH
-		    const maxY = Math.max(...positioned.map(p => p.y)) + activeThumbHeight + 24
+		    const maxY = Math.max(...positioned.map(p => p.y)) + activeThumbHeight + LABEL_H
 		    const padding = 60
 		    const scaleX = (rect.width - padding * 2) / maxX
 		    const scaleY = (rect.height - padding * 2) / maxY
@@ -425,7 +460,7 @@ function generateCanvasView(): string {
 		    const x = (rect.width - maxX * scale) / 2
 		    const y = (rect.height - maxY * scale) / 2
 		    setTransform({ x, y, scale })
-		  }, [pages, layoutMode, manualPositions, activeThumbHeight])
+		  }, [pages, layoutMode, manualDisplayPositions, activeThumbHeight])
 
 		  useEffect(() => { fitAll() }, [fitAll])
 
@@ -448,7 +483,7 @@ function generateCanvasView(): string {
 		  const toggleLayout = useCallback(() => {
 		    const newMode = layoutMode === "auto" ? "manual" : "auto"
 		    if (newMode === "manual" && Object.keys(manualPositions).length === 0) {
-		      const auto = computeAutoPositions(pages, activeThumbHeight)
+		      const auto = computeAutoPositions(pages, REF_THUMB_HEIGHT)
 		      const positions: Record<string, { x: number; y: number }> = {}
 		      auto.forEach(item => { positions[item.page.id] = { x: item.x, y: item.y } })
 		      setManualPositions(positions)
@@ -459,6 +494,33 @@ function generateCanvasView(): string {
 		    setLayoutMode(newMode)
 		  }, [layoutMode, manualPositions, pages])
 
+		  React.useEffect(() => {
+		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth + " activeThumbHeight=" + activeThumbHeight.toFixed(0))
+		  }, [viewport, activeFrameWidth])
+
+		  // The simulation entry point is the page no flow edge points to (the flow root).
+		  // Cyclic flows have no root, so fall back to the first step, then the first page.
+		  const getSimStartPage = (): string | null => {
+		    const pageExists = (id: string) => pages.some(p => p.id === id)
+		    const candidateFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
+		    const targets = new Set<string>()
+		    for (const flow of candidateFlows) {
+		      for (const step of flow.steps) {
+		        step.next.forEach(t => targets.add(t))
+		        ;(step.onError || []).forEach(t => targets.add(t))
+		      }
+		    }
+		    for (const flow of candidateFlows) {
+		      const root = flow.steps.find(s => !targets.has(s.page) && pageExists(s.page))
+		      if (root) return root.page
+		    }
+		    for (const flow of candidateFlows) {
+		      const first = flow.steps.find(s => pageExists(s.page))
+		      if (first) return first.page
+		    }
+		    return pages.length > 0 ? pages[0].id : null
+		  }
+
 		  if (pages.length === 0) {
 		    return (
 		      <div className="caret-canvas-empty">
@@ -468,10 +530,6 @@ function generateCanvasView(): string {
 		      </div>
 		    )
 		  }
-
-		  React.useEffect(() => {
-		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth + " activeThumbHeight=" + activeThumbHeight.toFixed(0))
-		  }, [viewport, activeFrameWidth])
 
 		  return (
 		    <div
@@ -519,7 +577,7 @@ function generateCanvasView(): string {
 		            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h4M10 8h4M8 4v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M6 8l2-2 2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
 		          </button>
 		        )}
-		        <button onClick={() => { if (pages.length > 0) onFocus(pages[0].id) }} className="caret-tb-btn" title="Simulate">
+		        <button onClick={() => { const start = getSimStartPage(); if (start) onSimulate(start) }} className="caret-tb-btn" title="Simulate">
 		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" fill="currentColor"/></svg>
 		        </button>
 		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
@@ -544,15 +602,15 @@ function generateCanvasView(): string {
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
 		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
 		                  {showFlows && (
-		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + activeThumbHeight / 2 }) }} />
+		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + LABEL_H + activeThumbHeight / 2 }) }} />
 		                  )}
 		                </div>
 		              </React.Fragment>
 		            )
 		          })
 		        ) : (
-		          pages.map((page, i) => {
-		            const pos = manualPositions[page.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (activeThumbHeight + GAP + 24) }
+		          pages.map((page) => {
+		            const pos = manualDisplayPositions[page.id]
 		            const hasRoute = routes.some(r => r.name === page.id)
 		            return (
 		              <div
@@ -564,7 +622,7 @@ function generateCanvasView(): string {
 		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
 		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
 		                {showFlows && (
-		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + activeThumbHeight / 2 }) }} />
+		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + LABEL_H + activeThumbHeight / 2 }) }} />
 		                )}
 		              </div>
 		            )
@@ -572,16 +630,21 @@ function generateCanvasView(): string {
 		        )}
 		        {showFlows && flows.length > 0 && (() => {
 		          const FLOW_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"]
+		          // y + LABEL_H so edges anchor on the visible frame, not the title label above it.
 		          const getRect = (pageId: string) => {
 		            if (autoItems) {
 		              const item = autoItems.find(i => i.page.id === pageId)
-		              if (item) return { x: item.x, y: item.y, w: THUMB_WIDTH, h: activeThumbHeight }
+		              if (item) return { x: item.x, y: item.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
 		            } else {
-		              const pos = manualPositions[pageId]
-		              if (pos) return { x: pos.x, y: pos.y, w: THUMB_WIDTH, h: activeThumbHeight }
+		              const pos = manualDisplayPositions[pageId]
+		              if (pos) return { x: pos.x, y: pos.y + LABEL_H, w: THUMB_WIDTH, h: activeThumbHeight }
 		            }
 		            return null
 		          }
+		          // Anchors carry outward unit vectors: fdx/fdy leaving the source side,
+		          // tdx/tdy pointing away from the target side. Control points extend along
+		          // them, so the end tangent always enters the destination and orient="auto"
+		          // arrowheads face forward regardless of which way the edge travels.
 		          const getEdgeAnchors = (fromId: string, toId: string) => {
 		            const fr = getRect(fromId), tr = getRect(toId)
 		            if (!fr || !tr) return null
@@ -589,34 +652,38 @@ function generateCanvasView(): string {
 		            const tcx = tr.x + tr.w / 2, tcy = tr.y + tr.h / 2
 		            const dx = tcx - fcx, dy = tcy - fcy
 		            if (Math.abs(dx) > Math.abs(dy)) {
-		              return dx > 0
-		                ? { fx: fr.x + fr.w, fy: fcy, tx: tr.x, ty: tcy, dir: "h" as const }
-		                : { fx: fr.x, fy: fcy, tx: tr.x + tr.w, ty: tcy, dir: "h" as const }
+		              const sign = dx > 0 ? 1 : -1
+		              return {
+		                fx: sign > 0 ? fr.x + fr.w : fr.x, fy: fcy,
+		                tx: sign > 0 ? tr.x : tr.x + tr.w, ty: tcy,
+		                fdx: sign, fdy: 0, tdx: -sign, tdy: 0,
+		              }
 		            } else {
-		              return dy > 0
-		                ? { fx: fcx, fy: fr.y + fr.h, tx: tcx, ty: tr.y, dir: "v" as const }
-		                : { fx: fcx, fy: fr.y, tx: tcx, ty: tr.y + tr.h, dir: "v" as const }
+		              const sign = dy > 0 ? 1 : -1
+		              return {
+		                fx: fcx, fy: sign > 0 ? fr.y + fr.h : fr.y,
+		                tx: tcx, ty: sign > 0 ? tr.y : tr.y + tr.h,
+		                fdx: 0, fdy: sign, tdx: 0, tdy: -sign,
+		              }
 		            }
 		          }
-		          const makePath = (a: { fx: number; fy: number; tx: number; ty: number; dir: "h" | "v" }) => {
+		          const makePath = (a: { fx: number; fy: number; tx: number; ty: number; fdx: number; fdy: number; tdx: number; tdy: number }) => {
 		            const dist = Math.sqrt((a.tx - a.fx) ** 2 + (a.ty - a.fy) ** 2)
-		            const cp = Math.min(dist * 0.4, 150)
-		            if (a.dir === "h") {
-		              return \`M \${a.fx} \${a.fy} C \${a.fx + cp} \${a.fy}, \${a.tx - cp} \${a.ty}, \${a.tx} \${a.ty}\`
-		            } else {
-		              return \`M \${a.fx} \${a.fy} C \${a.fx} \${a.fy + cp}, \${a.tx} \${a.ty - cp}, \${a.tx} \${a.ty}\`
-		            }
+		            const cp = Math.max(20, Math.min(dist * 0.4, 150))
+		            return "M " + a.fx + " " + a.fy + " C " + (a.fx + a.fdx * cp) + " " + (a.fy + a.fdy * cp) + ", " + (a.tx + a.tdx * cp) + " " + (a.ty + a.tdy * cp) + ", " + a.tx + " " + a.ty
 		          }
 		          const visibleFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
 		          return (
 		            <svg className="caret-canvas-flow-overlay" style={{ width: 10000, height: 10000 }}>
+		              {/* userSpaceOnUse keeps arrows a fixed size (no stroke-width scaling);
+		                  refX=21 parks the tip 7px short of the endpoint, on the rim of the r=7 dot. */}
 		              <defs>
 		                {flows.map((flow, i) => (
-		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="14" markerHeight="10" refX="24" refY="5" orient="auto">
+		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="14" markerHeight="10" refX="21" refY="5" orient="auto" markerUnits="userSpaceOnUse">
 		                    <polygon points="0 0, 14 5, 0 10" fill={FLOW_COLORS[i % 5]} />
 		                  </marker>
 		                ))}
-		                <marker id="caret-arrow-error" markerWidth="14" markerHeight="10" refX="24" refY="5" orient="auto">
+		                <marker id="caret-arrow-error" markerWidth="14" markerHeight="10" refX="21" refY="5" orient="auto" markerUnits="userSpaceOnUse">
 		                  <polygon points="0 0, 14 5, 0 10" fill="#ef4444" />
 		                </marker>
 		              </defs>
@@ -1561,7 +1628,7 @@ function generateCanvasCSS(): string {
 		.caret-edge-connector {
 		  position: absolute;
 		  right: -7px;
-		  top: 50%;
+		  top: calc(50% + 13px); /* centered on the frame below the 26px label */
 		  transform: translateY(-50%);
 		  width: 14px;
 		  height: 14px;
