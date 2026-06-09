@@ -94,10 +94,11 @@ function generateCanvasApp(): string {
 		  const [flows, setFlows] = useState<FlowDefinition[]>([])
 
 		  useEffect(() => {
+		    console.log("[caret] CanvasApp mounted, fetching flows-meta...")
 		    fetch("/__caret/flows-meta")
-		      .then(r => r.ok ? r.json() : [])
-		      .then(f => setFlows(f))
-		      .catch(() => {})
+		      .then(r => { console.log("[caret] flows-meta response:", r.status); return r.ok ? r.json() : [] })
+		      .then(f => { console.log("[caret] flows loaded:", f.length, f.map((x: any) => x.id)); setFlows(f) })
+		      .catch(e => console.warn("[caret] flows-meta fetch failed:", e))
 
 		    if (import.meta.hot) {
 		      import.meta.hot.on("caret:pages-changed", () => {
@@ -282,6 +283,7 @@ function generateCanvasView(): string {
 		export function CanvasView({ pages, routes, onFocus, flows, viewport, onSetViewport }: Props) {
 		  const [transform, setTransform] = useState<CanvasTransform>({ x: 40, y: 40, scale: 1 })
 		  const [showFlows, setShowFlows] = useState(false)
+		  const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
 		  const [isPanning, setIsPanning] = useState(false)
 		  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
 		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
@@ -417,24 +419,46 @@ function generateCanvasView(): string {
 		      onPointerUp={handlePointerUp}
 		      style={{ cursor: isPanning ? "grabbing" : dragState ? "grabbing" : "default" }}
 		    >
-		      <div className="caret-canvas-toolbar">
-		        <button onClick={fitAll} className="caret-canvas-btn" title="Fit all">⊞</button>
-		        <button onClick={toggleLayout} className={"caret-canvas-btn" + (layoutMode === "manual" ? " active" : "")} title={layoutMode === "auto" ? "Switch to manual layout" : "Switch to auto layout"}>
-		          {layoutMode === "auto" ? "⊞" : "✋"}
-		        </button>
-		        {flows.length > 0 && (
-		          <button onClick={() => setShowFlows(!showFlows)} className={"caret-canvas-btn" + (showFlows ? " active" : "")} title={showFlows ? "Hide flows" : "Show flows"}>
-		            ⇢
-		          </button>
-		        )}
-		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
-		        <div className="caret-canvas-viewport-selector">
-		          {(Object.entries(VIEWPORT_PRESETS) as [ViewportPreset, { name: string; width: number; icon: string }][]).map(([key, p]) => (
-		            <button key={key} onClick={() => onSetViewport(key)} className={"caret-canvas-btn caret-canvas-viewport-btn" + (viewport === key ? " active" : "")} title={p.name}>
-		              {p.icon}
-		            </button>
+		      {showFlows && flows.length > 0 && (
+		        <div className="caret-flow-legend">
+		          {flows.map((flow, i) => (
+		            <span key={flow.id} className={"caret-flow-legend-item" + (activeFlowId === flow.id ? " active" : "")} onClick={() => setActiveFlowId(activeFlowId === flow.id ? null : flow.id)}>
+		              <span className="caret-flow-legend-dot" style={{ background: ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"][i % 5] }} />
+		              {flow.name}
+		            </span>
 		          ))}
 		        </div>
+		      )}
+		      <div className="caret-canvas-toolbar">
+		        <button onClick={fitAll} className="caret-tb-btn" title="Fit all">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/></svg>
+		        </button>
+		        <button onClick={toggleLayout} className={"caret-tb-btn" + (layoutMode === "manual" ? " active" : "")} title={layoutMode === "auto" ? "Switch to manual layout" : "Switch to auto layout"}>
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v4M6 4h4M3 8h10M3 8c-1 0-1.5.5-1.5 1.5S2.5 11 3 12M13 8c1 0 1.5.5 1.5 1.5S13.5 11 13 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+		        </button>
+		        <div className="caret-tb-sep" />
+		        <button onClick={() => onSetViewport("desktop-1440")} className={"caret-tb-btn" + (viewport === "desktop-1440" ? " active" : "")} title="Desktop 1440">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="10" rx="1" stroke="currentColor" strokeWidth="1.5"/><path d="M5 14h6M8 12v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+		        </button>
+		        <button onClick={() => onSetViewport("desktop-1280")} className={"caret-tb-btn" + (viewport === "desktop-1280" ? " active" : "")} title="Laptop 1280">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="8" rx="1" stroke="currentColor" strokeWidth="1.5"/><path d="M1 13h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+		        </button>
+		        <button onClick={() => onSetViewport("tablet-768")} className={"caret-tb-btn" + (viewport === "tablet-768" ? " active" : "")} title="Tablet 768">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="1" width="10" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/><circle cx="8" cy="13" r="0.5" fill="currentColor"/></svg>
+		        </button>
+		        <button onClick={() => onSetViewport("mobile-390")} className={"caret-tb-btn" + (viewport === "mobile-390" ? " active" : "")} title="Mobile 390">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="4" y="1" width="8" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/><path d="M7 13h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+		        </button>
+		        <div className="caret-tb-sep" />
+		        {flows.length > 0 && (
+		          <button onClick={() => setShowFlows(!showFlows)} className={"caret-tb-btn" + (showFlows ? " active" : "")} title={showFlows ? "Hide flows" : "Show flows"}>
+		            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h4M10 8h4M8 4v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M6 8l2-2 2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+		          </button>
+		        )}
+		        <button onClick={() => { if (pages.length > 0) onFocus(pages[0].id) }} className="caret-tb-btn" title="Simulate">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" fill="currentColor"/></svg>
+		        </button>
+		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
 		      </div>
 		      <div
 		        className="caret-canvas-content"
@@ -477,6 +501,7 @@ function generateCanvasView(): string {
 		          })
 		        )}
 		        {showFlows && flows.length > 0 && (() => {
+		          const FLOW_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"]
 		          const getPos = (pageId: string) => {
 		            if (autoItems) {
 		              const item = autoItems.find(i => i.page.id === pageId)
@@ -487,23 +512,27 @@ function generateCanvasView(): string {
 		            }
 		            return null
 		          }
+		          const visibleFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
 		          return (
 		            <svg className="caret-canvas-flow-overlay">
 		              <defs>
-		                <marker id="caret-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-		                  <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
-		                </marker>
+		                {flows.map((flow, i) => (
+		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+		                    <polygon points="0 0, 10 3.5, 0 7" fill={FLOW_COLORS[i % 5]} />
+		                  </marker>
+		                ))}
 		              </defs>
-		              {flows.flatMap(flow =>
-		                flow.steps.flatMap(step => {
+		              {visibleFlows.map((flow, fi) => {
+		                const color = FLOW_COLORS[flows.indexOf(flow) % 5]
+		                return flow.steps.flatMap(step => {
 		                  const from = getPos(step.page)
 		                  return step.next.map(nextPage => {
 		                    const to = getPos(nextPage)
 		                    if (!from || !to) return null
-		                    return <line key={flow.id + "-" + step.page + "-" + nextPage} x1={from.cx} y1={from.cy} x2={to.cx} y2={to.cy} stroke="#3b82f6" strokeWidth={2} opacity={0.6} markerEnd="url(#caret-arrowhead)" />
+		                    return <line key={flow.id + "-" + step.page + "-" + nextPage} x1={from.cx} y1={from.cy} x2={to.cx} y2={to.cy} stroke={color} strokeWidth={2} opacity={0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} />
 		                  })
 		                })
-		              )}
+		              })}
 		            </svg>
 		          )
 		        })()}
@@ -585,21 +614,25 @@ function generateFocusedPageView(): string {
 		  const preset = VIEWPORT_PRESETS[viewport]
 
 		  useEffect(() => {
+		    console.log("[caret] FocusedPageView mounted, pageId:", pageId, "viewport:", viewport)
 		    const handler = (e: MessageEvent) => {
 		      const iframe = iframeRef.current
 		      if (!iframe?.contentWindow) return
 
 		      if (e.data?.source === "caret-vite" && e.source === iframe.contentWindow) {
+		        console.log("[caret] relay: iframe->parent (caret-vite)", e.data.type)
 		        window.parent.postMessage(e.data, "*")
 		        return
 		      }
 
 		      if (e.data?.source === "caret-extension") {
+		        console.log("[caret] relay: parent->iframe (caret-extension)", e.data.type)
 		        iframe.contentWindow.postMessage(e.data, "*")
 		        return
 		      }
 
 		      if (e.data?.source === "caret-page-iframe" && e.source === iframe.contentWindow) {
+		        console.log("[caret] relay: iframe control message:", e.data.type)
 		        if (e.data.type === "back") onBack()
 		        if (e.data.type === "simulate") onSimulate()
 		        return
@@ -1012,32 +1045,81 @@ function generateCanvasCSS(): string {
 		  transform: translateX(-50%);
 		  display: flex;
 		  align-items: center;
-		  gap: 8px;
-		  padding: 6px 12px;
-		  background: #1a1a1a;
+		  gap: 2px;
+		  padding: 4px 6px;
+		  background: #1e1e1e;
 		  border: 1px solid #333;
-		  border-radius: 8px;
+		  border-radius: 24px;
 		  z-index: 100;
+		  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
 		}
 
-		.caret-canvas-btn {
+		.caret-tb-btn {
 		  background: none;
-		  border: 1px solid #444;
-		  color: #ccc;
-		  padding: 4px 8px;
-		  border-radius: 4px;
+		  border: none;
+		  color: #999;
+		  width: 32px;
+		  height: 32px;
+		  display: flex;
+		  align-items: center;
+		  justify-content: center;
+		  border-radius: 50%;
 		  cursor: pointer;
-		  font-size: 14px;
+		  padding: 0;
+		  transition: background 0.15s, color 0.15s;
 		}
-		.caret-canvas-btn:hover { background: #333; }
-		.caret-canvas-btn.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+		.caret-tb-btn:hover { background: #333; color: #ddd; }
+		.caret-tb-btn.active { background: #2563eb; color: #fff; }
+
+		.caret-tb-sep {
+		  width: 1px;
+		  height: 20px;
+		  background: #444;
+		  margin: 0 4px;
+		  flex-shrink: 0;
+		}
 
 		.caret-canvas-zoom-label {
 		  color: #888;
-		  font-size: 12px;
+		  font-size: 11px;
 		  font-family: monospace;
-		  min-width: 40px;
+		  min-width: 36px;
 		  text-align: center;
+		  padding: 0 4px;
+		}
+
+		.caret-flow-legend {
+		  position: fixed;
+		  bottom: 60px;
+		  left: 50%;
+		  transform: translateX(-50%);
+		  display: flex;
+		  gap: 16px;
+		  padding: 6px 14px;
+		  background: #1e1e1e;
+		  border: 1px solid #333;
+		  border-radius: 8px;
+		  z-index: 100;
+		  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+		}
+
+		.caret-flow-legend-item {
+		  display: flex;
+		  align-items: center;
+		  gap: 6px;
+		  font-size: 12px;
+		  color: #999;
+		  cursor: pointer;
+		  white-space: nowrap;
+		}
+		.caret-flow-legend-item:hover { color: #ddd; }
+		.caret-flow-legend-item.active { color: #fff; }
+
+		.caret-flow-legend-dot {
+		  width: 8px;
+		  height: 8px;
+		  border-radius: 50%;
+		  flex-shrink: 0;
 		}
 
 		.caret-canvas-empty {
@@ -1246,7 +1328,6 @@ function generateCanvasCSS(): string {
 		  border: none;
 		  height: 100%;
 		  background: #fff;
-		  max-width: 100%;
 		}
 
 		/* Simulation mode */
@@ -1328,19 +1409,7 @@ function generateCanvasCSS(): string {
 		  overflow: visible;
 		}
 
-		/* Canvas viewport selector */
-		.caret-canvas-viewport-selector {
-		  display: flex;
-		  gap: 2px;
-		  margin-left: 8px;
-		  padding-left: 8px;
-		  border-left: 1px solid #444;
-		}
-
-		.caret-canvas-viewport-btn {
-		  padding: 4px 6px !important;
-		  font-size: 12px !important;
-		}
+		/* (old canvas viewport selector removed — integrated into toolbar) */
 
 		/* Paint mode button */
 		.caret-focused-paint-btn {
