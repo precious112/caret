@@ -500,14 +500,16 @@ function generateCanvasView(): string {
 		          ? autoItems.map(i => ({ id: i.page.id, x: i.x, y: i.y }))
 		          : pages.map(p => ({ id: p.id, ...manualDisplayPositions[p.id] }))
 		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + wrapperHeight)
-		        const flowId = edgeDrag.reassignFlowId || activeFlowId || (flows.length > 0 ? flows[0].id : null)
+		        // New edges go to: the reassigned edge's flow, else the legend-selected
+		        // flow, else the flow that already contains the source page as a step.
+		        const sourceFlow = flows.find(f => f.steps.some(s => s.page === edgeDrag.fromPage))
+		        const flowId = edgeDrag.reassignFlowId || activeFlowId || sourceFlow?.id || (flows.length > 0 ? flows[0].id : null)
 		        if (target && flowId) {
 		          if (edgeDrag.reassignOldTo && edgeDrag.reassignFlowId) {
 		            log("[edge-reassign] " + edgeDrag.fromPage + ": " + edgeDrag.reassignOldTo + " → " + target.id + " flow=" + edgeDrag.reassignFlowId)
 		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: edgeDrag.reassignFlowId, fromPage: edgeDrag.fromPage, toPage: edgeDrag.reassignOldTo } }, "*")
 		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
 		          } else {
-		            if (!activeFlowId) setActiveFlowId(flowId)
 		            log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + flowId)
 		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
 		          }
