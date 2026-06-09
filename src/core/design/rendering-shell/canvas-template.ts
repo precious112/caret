@@ -612,11 +612,11 @@ function generateCanvasView(): string {
 		            <svg className="caret-canvas-flow-overlay" style={{ width: 10000, height: 10000 }}>
 		              <defs>
 		                {flows.map((flow, i) => (
-		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="14" markerHeight="10" refX="14" refY="5" orient="auto">
+		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="14" markerHeight="10" refX="24" refY="5" orient="auto">
 		                    <polygon points="0 0, 14 5, 0 10" fill={FLOW_COLORS[i % 5]} />
 		                  </marker>
 		                ))}
-		                <marker id="caret-arrow-error" markerWidth="14" markerHeight="10" refX="14" refY="5" orient="auto">
+		                <marker id="caret-arrow-error" markerWidth="14" markerHeight="10" refX="24" refY="5" orient="auto">
 		                  <polygon points="0 0, 14 5, 0 10" fill="#ef4444" />
 		                </marker>
 		              </defs>
@@ -1557,26 +1557,25 @@ function generateCanvasCSS(): string {
 		}
 		.caret-canvas-flow-overlay g { pointer-events: auto; }
 
-		/* Edge connector dots */
+		/* Edge connector dots — hollow ring, distinct from solid destination dots */
 		.caret-edge-connector {
 		  position: absolute;
-		  right: -9px;
+		  right: -7px;
 		  top: 50%;
 		  transform: translateY(-50%);
-		  width: 18px;
-		  height: 18px;
+		  width: 14px;
+		  height: 14px;
 		  border-radius: 50%;
-		  background: #3b82f6;
-		  border: 2px solid #1e3a5f;
+		  background: transparent;
+		  border: 3px solid #3b82f6;
 		  cursor: crosshair;
 		  z-index: 10;
 		  opacity: 1;
-		  transition: transform 0.15s, box-shadow 0.15s;
-		  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+		  transition: transform 0.15s, background 0.15s;
 		}
 		.caret-edge-connector:hover {
 		  transform: translateY(-50%) scale(1.2);
-		  box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.4);
+		  background: #3b82f6;
 		}
 
 		/* (old canvas viewport selector removed — integrated into toolbar) */
