@@ -75,6 +75,15 @@ export interface FlowEdgeDeletePayload {
 	flowId: string
 	fromPage: string
 	toPage: string
+	isError?: boolean
+}
+
+export interface FlowEdgeUpdatePayload {
+	flowId: string
+	fromPage: string
+	oldToPage: string
+	newToPage: string
+	isError?: boolean
 }
 
 export type DesignMessage =
@@ -87,5 +96,6 @@ export type DesignMessage =
 	| { source: "caret-vite"; type: "page-focused"; payload: PageFocusedPayload }
 	| { source: "caret-vite"; type: "flow-edge-create"; payload: FlowEdgeCreatePayload }
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
+	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-extension"; type: "edit-result"; payload: EditResultPayload }
 	| { source: "caret-extension"; type: "precompute-result"; payload: PrecomputeResultPayload }

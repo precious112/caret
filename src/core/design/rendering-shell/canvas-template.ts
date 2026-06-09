@@ -315,8 +315,8 @@ function generateCanvasView(): string {
 		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
 		  const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({})
 		  const [dragState, setDragState] = useState<{ pageId: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
-		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; originX: number; originY: number; reassignFlowId?: string; reassignOldTo?: string } | null>(null)
-		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string } | null>(null)
+		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; originX: number; originY: number; reassignFlowId?: string; reassignOldTo?: string; reassignIsError?: boolean } | null>(null)
+		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string; isError?: boolean } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 
@@ -507,8 +507,7 @@ function generateCanvasView(): string {
 		        if (target && flowId) {
 		          if (edgeDrag.reassignOldTo && edgeDrag.reassignFlowId) {
 		            log("[edge-reassign] " + edgeDrag.fromPage + ": " + edgeDrag.reassignOldTo + " → " + target.id + " flow=" + edgeDrag.reassignFlowId)
-		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: edgeDrag.reassignFlowId, fromPage: edgeDrag.fromPage, toPage: edgeDrag.reassignOldTo } }, "*")
-		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-update", payload: { flowId: edgeDrag.reassignFlowId, fromPage: edgeDrag.fromPage, oldToPage: edgeDrag.reassignOldTo, newToPage: target.id, isError: edgeDrag.reassignIsError || false } }, "*")
 		          } else {
 		            log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + flowId)
 		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
@@ -561,7 +560,7 @@ function generateCanvasView(): string {
 		      if (e.key === "Delete" || e.key === "Backspace") {
 		        e.preventDefault()
 		        log("[edge-delete] " + selectedEdge.from + " → " + selectedEdge.to + " flow=" + selectedEdge.flowId)
-		        window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: selectedEdge.flowId, fromPage: selectedEdge.from, toPage: selectedEdge.to } }, "*")
+		        window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: selectedEdge.flowId, fromPage: selectedEdge.from, toPage: selectedEdge.to, isError: selectedEdge.isError || false } }, "*")
 		        setSelectedEdge(null)
 		      } else if (e.key === "Escape") {
 		        setSelectedEdge(null)
@@ -757,9 +756,9 @@ function generateCanvasView(): string {
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === nextPage
 		                    return <g key={flow.id + "-" + step.page + "-" + nextPage}>
-		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
+		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage, isError: false }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : color} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} style={{ pointerEvents: "none" }} />
-		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : color} stroke={isSelected ? color : "#0a0a0a"} strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + nextPage + " flow=" + flow.id); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: nextPage }) }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : color} stroke={isSelected ? color : "#0a0a0a"} strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + nextPage + " flow=" + flow.id); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: nextPage, reassignIsError: false }) }} />
 		                    </g>
 		                  })
 		                  const errorEdges = (step.onError || []).map(errorPage => {
@@ -768,9 +767,9 @@ function generateCanvasView(): string {
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === errorPage
 		                    return <g key={flow.id + "-error-" + step.page + "-" + errorPage}>
-		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage }) }} />
+		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage, isError: true }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : "#ef4444"} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} strokeDasharray="6 3" markerEnd="url(#caret-arrow-error)" style={{ pointerEvents: "none" }} />
-		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : "#ef4444"} stroke="#0a0a0a" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + errorPage + " flow=" + flow.id + " (error)"); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: errorPage }) }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : "#ef4444"} stroke="#0a0a0a" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + errorPage + " flow=" + flow.id + " (error)"); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, originX: anchors.fx, originY: anchors.fy, reassignFlowId: flow.id, reassignOldTo: errorPage, reassignIsError: true }) }} />
 		                    </g>
 		                  })
 		                  return [...nextEdges, ...errorEdges]

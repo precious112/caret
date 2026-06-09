@@ -4,7 +4,7 @@ import * as path from "path"
 import * as vscode from "vscode"
 
 import { Logger } from "@/shared/services/Logger"
-import { readFlowDefinition, writeFlowDefinition } from "../flow-meta"
+import { mutateFlowDefinition } from "../flow-meta"
 import { handleAiEditRequest } from "../visual-editing/ai-edit-handler"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { precomputeAndApply } from "../visual-editing/post-generation-hook"
@@ -12,6 +12,7 @@ import type {
 	DesignMessage,
 	FlowEdgeCreatePayload,
 	FlowEdgeDeletePayload,
+	FlowEdgeUpdatePayload,
 	InlineEditPayload,
 	OverlayEditPayload,
 } from "./messages"
@@ -175,25 +176,31 @@ async function handleViteMessage(message: DesignMessage): Promise<void> {
 				handleFlowEdgeDelete(message.payload, currentWorkspacePath)
 			}
 			break
+
+		case "flow-edge-update":
+			if (currentWorkspacePath) {
+				handleFlowEdgeUpdate(message.payload, currentWorkspacePath)
+			}
+			break
 	}
 }
 
 async function handleFlowEdgeCreate(payload: FlowEdgeCreatePayload, workspacePath: string): Promise<void> {
 	try {
-		const flow = await readFlowDefinition(workspacePath, payload.flowId)
-		if (!flow) {
+		const found = await mutateFlowDefinition(workspacePath, payload.flowId, (flow) => {
+			let step = flow.steps.find((s) => s.page === payload.fromPage)
+			if (!step) {
+				step = { page: payload.fromPage, next: [] }
+				flow.steps.push(step)
+			}
+			if (!step.next.includes(payload.toPage)) {
+				step.next.push(payload.toPage)
+			}
+		})
+		if (!found) {
 			console.error(`[design] Flow not found: ${payload.flowId}`)
 			return
 		}
-		let step = flow.steps.find((s) => s.page === payload.fromPage)
-		if (!step) {
-			step = { page: payload.fromPage, next: [] }
-			flow.steps.push(step)
-		}
-		if (!step.next.includes(payload.toPage)) {
-			step.next.push(payload.toPage)
-		}
-		await writeFlowDefinition(workspacePath, payload.flowId, flow)
 		console.log(`[design] Flow edge created: ${payload.flowId} ${payload.fromPage} → ${payload.toPage}`)
 	} catch (err) {
 		console.error("[design] Failed to create flow edge:", err)
@@ -202,22 +209,55 @@ async function handleFlowEdgeCreate(payload: FlowEdgeCreatePayload, workspacePat
 
 async function handleFlowEdgeDelete(payload: FlowEdgeDeletePayload, workspacePath: string): Promise<void> {
 	try {
-		const flow = await readFlowDefinition(workspacePath, payload.flowId)
-		if (!flow) {
-			console.error(`[design] Flow not found: ${payload.flowId}`)
-			return
-		}
-		const step = flow.steps.find((s) => s.page === payload.fromPage)
-		if (step) {
-			step.next = step.next.filter((p) => p !== payload.toPage)
+		const found = await mutateFlowDefinition(workspacePath, payload.flowId, (flow) => {
+			const step = flow.steps.find((s) => s.page === payload.fromPage)
+			if (!step) return
+			if (payload.isError) {
+				step.onError = (step.onError || []).filter((p) => p !== payload.toPage)
+				if (step.onError.length === 0) delete step.onError
+			} else {
+				step.next = step.next.filter((p) => p !== payload.toPage)
+			}
 			if (step.next.length === 0 && !step.onError?.length && !step.label) {
 				flow.steps = flow.steps.filter((s) => s !== step)
 			}
+		})
+		if (!found) {
+			console.error(`[design] Flow not found: ${payload.flowId}`)
+			return
 		}
-		await writeFlowDefinition(workspacePath, payload.flowId, flow)
 		console.log(`[design] Flow edge deleted: ${payload.flowId} ${payload.fromPage} → ${payload.toPage}`)
 	} catch (err) {
 		console.error("[design] Failed to delete flow edge:", err)
+	}
+}
+
+async function handleFlowEdgeUpdate(payload: FlowEdgeUpdatePayload, workspacePath: string): Promise<void> {
+	try {
+		const found = await mutateFlowDefinition(workspacePath, payload.flowId, (flow) => {
+			let step = flow.steps.find((s) => s.page === payload.fromPage)
+			if (!step) {
+				step = { page: payload.fromPage, next: [] }
+				flow.steps.push(step)
+			}
+			if (payload.isError) {
+				const onError = (step.onError || []).filter((p) => p !== payload.oldToPage)
+				if (!onError.includes(payload.newToPage)) onError.push(payload.newToPage)
+				step.onError = onError
+			} else {
+				step.next = step.next.filter((p) => p !== payload.oldToPage)
+				if (!step.next.includes(payload.newToPage)) step.next.push(payload.newToPage)
+			}
+		})
+		if (!found) {
+			console.error(`[design] Flow not found: ${payload.flowId}`)
+			return
+		}
+		console.log(
+			`[design] Flow edge updated: ${payload.flowId} ${payload.fromPage} → ${payload.oldToPage} ⇒ ${payload.newToPage}`,
+		)
+	} catch (err) {
+		console.error("[design] Failed to update flow edge:", err)
 	}
 }
 

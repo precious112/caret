@@ -16,7 +16,44 @@ export async function readFlowDefinition(workspacePath: string, flowId: string):
 export async function writeFlowDefinition(workspacePath: string, flowId: string, flow: FlowDefinition): Promise<void> {
 	const flowsDir = path.join(workspacePath, ".caret", "flows")
 	await fs.mkdir(flowsDir, { recursive: true })
-	await fs.writeFile(path.join(flowsDir, `${flowId}.flow.json`), JSON.stringify(flow, null, 2))
+	// Write to a temp file and rename so readers (the Vite flows middleware and
+	// its file watcher) can never observe a half-written or torn file.
+	const target = path.join(flowsDir, `${flowId}.flow.json`)
+	const tmp = `${target}.tmp`
+	await fs.writeFile(tmp, JSON.stringify(flow, null, 2))
+	await fs.rename(tmp, target)
+}
+
+const flowMutationQueues = new Map<string, Promise<unknown>>()
+
+/**
+ * Serialized read-modify-write of a flow file. Concurrent mutations of the same
+ * flow (e.g. rapid canvas edits) queue behind each other instead of racing —
+ * unserialized concurrent writes have corrupted flow files.
+ * Returns false if the flow doesn't exist.
+ */
+export async function mutateFlowDefinition(
+	workspacePath: string,
+	flowId: string,
+	mutate: (flow: FlowDefinition) => void,
+): Promise<boolean> {
+	const key = path.join(workspacePath, flowId)
+	const run = async (): Promise<boolean> => {
+		const flow = await readFlowDefinition(workspacePath, flowId)
+		if (!flow) {
+			return false
+		}
+		mutate(flow)
+		await writeFlowDefinition(workspacePath, flowId, flow)
+		return true
+	}
+	const prev = flowMutationQueues.get(key) ?? Promise.resolve()
+	const next = prev.then(run, run)
+	flowMutationQueues.set(
+		key,
+		next.catch(() => {}),
+	)
+	return next
 }
 
 export async function listFlows(workspacePath: string): Promise<FlowDefinition[]> {
