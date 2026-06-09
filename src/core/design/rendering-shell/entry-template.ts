@@ -30,15 +30,16 @@ const isolatedPageId = params.get("page")
 const mode = params.get("mode")
 
 if (isolatedPageId && mode === "focused") {
-  console.log("[caret] focused mode: loading for page", isolatedPageId)
+  const flog = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: "[focused] " + msg } }, "*")
+  flog("loading for page: " + isolatedPageId)
   document.body.style.background = "#ffffff"
   document.body.style.overflow = "auto"
 
   import("react-grab").then(() => {
-    console.log("[caret] focused: react-grab loaded")
+    flog("react-grab loaded")
     return import("./lib/caret-grab-plugin")
   }).then(() => {
-    console.log("[caret] focused: caret-grab-plugin loaded, loading remaining modules...")
+    flog("caret-grab-plugin loaded, loading remaining modules...")
     return Promise.all([
       import("virtual:caret-router"),
       import("./lib/canvas/OverlayPainter"),
@@ -47,22 +48,22 @@ if (isolatedPageId && mode === "focused") {
       import("./lib/canvas/canvas.css"),
     ])
   }).then(([routerMod, overlayMod, stateMod, bridgeMod]) => {
-    console.log("[caret] focused: all modules loaded")
+    flog("all modules loaded")
     const { routes } = routerMod as any
     const { OverlayPainter } = overlayMod as any
     const { CaretStateProvider } = stateMod as any
     const { bridge } = bridgeMod as any
-    console.log("[caret] focused: routes available:", routes.map((r: any) => r.name))
+    flog("routes available: " + JSON.stringify(routes.map((r: any) => r.name)))
     const route = routes.find((r: any) => r.name === isolatedPageId)
     if (!route) {
-      console.error("[caret] focused: route not found for page:", isolatedPageId)
+      flog("ERROR: route not found for page: " + isolatedPageId)
       document.getElementById("root")!.innerHTML =
         '<div style="padding:20px;color:#f87171;font-family:monospace;font-size:13px">' +
         '<h3 style="color:#fca5a5">Route not found</h3>' +
         '<p>Page "' + isolatedPageId + '" not found in routes.</p></div>'
       return
     }
-    console.log("[caret] focused: route found, rendering FocusedApp")
+    flog("route found, rendering FocusedApp")
 
     const PageComponent = route.component
 
@@ -83,7 +84,7 @@ if (isolatedPageId && mode === "focused") {
         }
 
         const rg = (window as any).__REACT_GRAB__
-        console.log("[caret] focused: React Grab available:", !!rg)
+        bridge.send({ type: "log", payload: { message: "[focused] React Grab available: " + !!rg } })
         if (rg) rg.activate()
 
         const msgHandler = (e: MessageEvent) => {
@@ -124,7 +125,7 @@ if (isolatedPageId && mode === "focused") {
 
     createRoot(document.getElementById("root")!).render(<FocusedApp />)
   }).catch((err) => {
-    console.error("[caret] Failed to initialize focused mode:", err)
+    flog("FAILED: " + String(err))
     document.getElementById("root")!.innerHTML =
       '<div style="padding:20px;color:#f87171;font-family:monospace;font-size:13px">' +
       '<h3 style="color:#fca5a5">Focused mode failed to load</h3>' +

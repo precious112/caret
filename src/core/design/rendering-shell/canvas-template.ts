@@ -93,12 +93,14 @@ function generateCanvasApp(): string {
 		  const [viewport, setViewport] = useState<ViewportPreset>("desktop-1440")
 		  const [flows, setFlows] = useState<FlowDefinition[]>([])
 
+		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
+
 		  useEffect(() => {
-		    console.log("[caret] CanvasApp mounted, fetching flows-meta...")
+		    log("CanvasApp mounted, fetching flows-meta...")
 		    fetch("/__caret/flows-meta")
-		      .then(r => { console.log("[caret] flows-meta response:", r.status); return r.ok ? r.json() : [] })
-		      .then(f => { console.log("[caret] flows loaded:", f.length, f.map((x: any) => x.id)); setFlows(f) })
-		      .catch(e => console.warn("[caret] flows-meta fetch failed:", e))
+		      .then(r => { log("flows-meta response: " + r.status); return r.ok ? r.json() : [] })
+		      .then(f => { log("flows loaded: " + f.length + " " + JSON.stringify(f.map((x: any) => x.id))); setFlows(f) })
+		      .catch(e => { log("flows-meta fetch FAILED: " + String(e)) })
 
 		    if (import.meta.hot) {
 		      import.meta.hot.on("caret:pages-changed", () => {
@@ -614,25 +616,26 @@ function generateFocusedPageView(): string {
 		  const preset = VIEWPORT_PRESETS[viewport]
 
 		  useEffect(() => {
-		    console.log("[caret] FocusedPageView mounted, pageId:", pageId, "viewport:", viewport)
+		    const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
+		    log("FocusedPageView mounted, pageId=" + pageId + " viewport=" + viewport)
 		    const handler = (e: MessageEvent) => {
 		      const iframe = iframeRef.current
 		      if (!iframe?.contentWindow) return
 
 		      if (e.data?.source === "caret-vite" && e.source === iframe.contentWindow) {
-		        console.log("[caret] relay: iframe->parent (caret-vite)", e.data.type)
+		        log("relay: iframe->parent type=" + e.data.type)
 		        window.parent.postMessage(e.data, "*")
 		        return
 		      }
 
 		      if (e.data?.source === "caret-extension") {
-		        console.log("[caret] relay: parent->iframe (caret-extension)", e.data.type)
+		        log("relay: parent->iframe type=" + e.data.type)
 		        iframe.contentWindow.postMessage(e.data, "*")
 		        return
 		      }
 
 		      if (e.data?.source === "caret-page-iframe" && e.source === iframe.contentWindow) {
-		        console.log("[caret] relay: iframe control message:", e.data.type)
+		        log("relay: iframe control: " + e.data.type)
 		        if (e.data.type === "back") onBack()
 		        if (e.data.type === "simulate") onSimulate()
 		        return
