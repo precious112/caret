@@ -137,8 +137,6 @@ function caretFlowsPlugin() {
       if (existsSync(flowsDir)) server.watcher.add(flowsDir)
       const handleFlowChange = (p) => {
         if (p.endsWith(".flow.json")) {
-          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-flows")
-          if (mod) server.moduleGraph.invalidateModule(mod)
           server.ws.send({ type: "custom", event: "caret:flows-changed" })
         }
       }
