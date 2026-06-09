@@ -294,6 +294,7 @@ function generateCanvasView(): string {
 		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number } | null>(null)
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
+		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 
 		  useEffect(() => {
 		    fetch("/__caret/canvas-layout")
@@ -371,7 +372,10 @@ function generateCanvasView(): string {
 		          : pages.map((p, idx) => ({ id: p.id, ...(manualPositions[p.id] || { x: (idx % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(idx / COLS) * (THUMB_HEIGHT + GAP + 24) }) }))
 		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + THUMB_HEIGHT)
 		        if (target && activeFlowId) {
+		          log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + activeFlowId)
 		          window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId: activeFlowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		        } else {
+		          log("[edge-drag-cancel] from=" + edgeDrag.fromPage + " (no target hit)")
 		        }
 		      }
 		      setEdgeDrag(null)
@@ -415,6 +419,7 @@ function generateCanvasView(): string {
 		    const handleKey = (e: KeyboardEvent) => {
 		      if (e.key === "Delete" || e.key === "Backspace") {
 		        e.preventDefault()
+		        log("[edge-delete] " + selectedEdge.from + " → " + selectedEdge.to + " flow=" + selectedEdge.flowId)
 		        window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: selectedEdge.flowId, fromPage: selectedEdge.from, toPage: selectedEdge.to } }, "*")
 		        setSelectedEdge(null)
 		      } else if (e.key === "Escape") {
@@ -449,7 +454,6 @@ function generateCanvasView(): string {
 		    )
 		  }
 
-		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
 		  React.useEffect(() => {
 		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth)
@@ -527,7 +531,7 @@ function generateCanvasView(): string {
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
 		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
 		                  {showFlows && activeFlowId && (
-		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + THUMB_HEIGHT / 2 }) }} />
+		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + THUMB_HEIGHT / 2 }) }} />
 		                  )}
 		                </div>
 		              </React.Fragment>
@@ -547,7 +551,7 @@ function generateCanvasView(): string {
 		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
 		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
 		                {showFlows && activeFlowId && (
-		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + THUMB_HEIGHT / 2 }) }} />
+		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + THUMB_HEIGHT / 2 }) }} />
 		                )}
 		              </div>
 		            )
@@ -589,7 +593,7 @@ function generateCanvasView(): string {
 		                    const d = \`M \${from.cx} \${from.cy} C \${from.cx + cpOffset} \${from.cy}, \${to.cx - cpOffset} \${to.cy}, \${to.cx} \${to.cy}\`
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === nextPage
 		                    return <g key={flow.id + "-" + step.page + "-" + nextPage}>
-		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
+		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : color} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} style={{ pointerEvents: "none" }} />
 		                    </g>
 		                  })
@@ -627,6 +631,10 @@ function generatePageThumbnail(): string {
 		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick }: Props) {
 		  const scale = thumbWidth / frameWidth
 		  const thumbHeight = frameHeight * (thumbWidth / 1440)
+
+		  React.useEffect(() => {
+		    window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: "[thumb] " + pageId + " frameWidth=" + frameWidth + " scale=" + scale.toFixed(4) + " thumbHeight=" + thumbHeight.toFixed(1) } }, "*")
+		  }, [pageId, frameWidth])
 
 		  return (
 		    <div className="caret-canvas-frame" onClick={onClick} style={{ cursor: onClick ? "pointer" : "default" }}>
