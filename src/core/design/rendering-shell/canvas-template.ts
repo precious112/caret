@@ -293,7 +293,7 @@ function generateCanvasView(): string {
 		  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto")
 		  const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({})
 		  const [dragState, setDragState] = useState<{ pageId: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
-		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number } | null>(null)
+		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; reassignFlowId?: string; reassignOldTo?: string } | null>(null)
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
@@ -373,17 +373,24 @@ function generateCanvasView(): string {
 		      if (rect) {
 		        const canvasX = (e.clientX - rect.left - transform.x) / transform.scale
 		        const canvasY = (e.clientY - rect.top - transform.y) / transform.scale
+		        const wrapperHeight = activeThumbHeight + 26
 		        const allPositions = autoItems
 		          ? autoItems.map(i => ({ id: i.page.id, x: i.x, y: i.y }))
 		          : pages.map((p, idx) => ({ id: p.id, ...(manualPositions[p.id] || { x: (idx % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(idx / COLS) * (activeThumbHeight + GAP + 24) }) }))
-		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + activeThumbHeight)
-		        const flowId = activeFlowId || (flows.length > 0 ? flows[0].id : null)
+		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + wrapperHeight)
+		        const flowId = edgeDrag.reassignFlowId || activeFlowId || (flows.length > 0 ? flows[0].id : null)
 		        if (target && flowId) {
-		          if (!activeFlowId) setActiveFlowId(flowId)
-		          log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + flowId)
-		          window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		          if (edgeDrag.reassignOldTo && edgeDrag.reassignFlowId) {
+		            log("[edge-reassign] " + edgeDrag.fromPage + ": " + edgeDrag.reassignOldTo + " → " + target.id + " flow=" + edgeDrag.reassignFlowId)
+		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-delete", payload: { flowId: edgeDrag.reassignFlowId, fromPage: edgeDrag.fromPage, toPage: edgeDrag.reassignOldTo } }, "*")
+		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		          } else {
+		            if (!activeFlowId) setActiveFlowId(flowId)
+		            log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + flowId)
+		            window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		          }
 		        } else {
-		          log("[edge-drag-cancel] from=" + edgeDrag.fromPage + " (no target hit)")
+		          log("[edge-drag-cancel] from=" + edgeDrag.fromPage + " canvasX=" + canvasX.toFixed(0) + " canvasY=" + canvasY.toFixed(0) + " positions=" + JSON.stringify(allPositions.map(p => p.id + ":" + p.x + "," + p.y).join("|")) + " wH=" + wrapperHeight.toFixed(0))
 		        }
 		      }
 		      setEdgeDrag(null)
@@ -418,9 +425,9 @@ function generateCanvasView(): string {
 		    const x = (rect.width - maxX * scale) / 2
 		    const y = (rect.height - maxY * scale) / 2
 		    setTransform({ x, y, scale })
-		  }, [pages, layoutMode, manualPositions])
+		  }, [pages, layoutMode, manualPositions, activeThumbHeight])
 
-		  useEffect(() => { fitAll() }, [pages.length])
+		  useEffect(() => { fitAll() }, [fitAll])
 
 		  useEffect(() => {
 		    if (!selectedEdge) return
@@ -605,12 +612,12 @@ function generateCanvasView(): string {
 		            <svg className="caret-canvas-flow-overlay" style={{ width: 10000, height: 10000 }}>
 		              <defs>
 		                {flows.map((flow, i) => (
-		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-		                    <polygon points="0 0, 10 3.5, 0 7" fill={FLOW_COLORS[i % 5]} />
+		                  <marker key={flow.id} id={"caret-arrow-" + flow.id} markerWidth="14" markerHeight="10" refX="14" refY="5" orient="auto">
+		                    <polygon points="0 0, 14 5, 0 10" fill={FLOW_COLORS[i % 5]} />
 		                  </marker>
 		                ))}
-		                <marker id="caret-arrow-error" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-		                  <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
+		                <marker id="caret-arrow-error" markerWidth="14" markerHeight="10" refX="14" refY="5" orient="auto">
+		                  <polygon points="0 0, 14 5, 0 10" fill="#ef4444" />
 		                </marker>
 		              </defs>
 		              {visibleFlows.map((flow, fi) => {
@@ -622,8 +629,9 @@ function generateCanvasView(): string {
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === nextPage
 		                    return <g key={flow.id + "-" + step.page + "-" + nextPage}>
-		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
+		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : color} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} style={{ pointerEvents: "none" }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : color} stroke={isSelected ? color : "#0a0a0a"} strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + nextPage + " flow=" + flow.id); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, reassignFlowId: flow.id, reassignOldTo: nextPage }) }} />
 		                    </g>
 		                  })
 		                  const errorEdges = (step.onError || []).map(errorPage => {
@@ -632,8 +640,9 @@ function generateCanvasView(): string {
 		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === errorPage
 		                    return <g key={flow.id + "-error-" + step.page + "-" + errorPage}>
-		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage }) }} />
+		                      <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : "#ef4444"} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} strokeDasharray="6 3" markerEnd="url(#caret-arrow-error)" style={{ pointerEvents: "none" }} />
+		                      <circle cx={anchors.tx} cy={anchors.ty} r={7} fill={isSelected ? "#fff" : "#ef4444"} stroke="#0a0a0a" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "all" }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-reassign-start] " + step.page + " → " + errorPage + " flow=" + flow.id + " (error)"); setEdgeDrag({ fromPage: step.page, mouseX: anchors.tx, mouseY: anchors.ty, reassignFlowId: flow.id, reassignOldTo: errorPage }) }} />
 		                    </g>
 		                  })
 		                  return [...nextEdges, ...errorEdges]
@@ -1551,22 +1560,23 @@ function generateCanvasCSS(): string {
 		/* Edge connector dots */
 		.caret-edge-connector {
 		  position: absolute;
-		  right: -6px;
+		  right: -9px;
 		  top: 50%;
 		  transform: translateY(-50%);
-		  width: 12px;
-		  height: 12px;
+		  width: 18px;
+		  height: 18px;
 		  border-radius: 50%;
 		  background: #3b82f6;
 		  border: 2px solid #1e3a5f;
 		  cursor: crosshair;
 		  z-index: 10;
-		  opacity: 0.7;
-		  transition: opacity 0.15s, transform 0.15s;
+		  opacity: 1;
+		  transition: transform 0.15s, box-shadow 0.15s;
+		  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
 		}
 		.caret-edge-connector:hover {
-		  opacity: 1;
-		  transform: translateY(-50%) scale(1.3);
+		  transform: translateY(-50%) scale(1.2);
+		  box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.4);
 		}
 
 		/* (old canvas viewport selector removed — integrated into toolbar) */
