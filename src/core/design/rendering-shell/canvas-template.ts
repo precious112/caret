@@ -361,6 +361,8 @@ function generateCanvasView(): string {
 		    setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
 		  }, [isPanning, panStart, dragState, transform.scale, edgeDrag, transform.x, transform.y])
 
+		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages) : null
+
 		  const handlePointerUp = useCallback((e: React.PointerEvent) => {
 		    if (edgeDrag) {
 		      const rect = containerRef.current?.getBoundingClientRect()
@@ -458,7 +460,6 @@ function generateCanvasView(): string {
 		  React.useEffect(() => {
 		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth)
 		  }, [viewport, activeFrameWidth])
-		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages) : null
 
 		  return (
 		    <div
