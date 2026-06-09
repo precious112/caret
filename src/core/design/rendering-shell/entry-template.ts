@@ -71,6 +71,91 @@ if (isolatedPageId && mode === "focused") {
       const [paintMode, setPaintMode] = React.useState(false)
       const [currentState, setCurrentState] = React.useState("default")
 
+      // Sample the rendered background behind the floating buttons and switch
+      // them to a dark style when the page underneath is light.
+      React.useEffect(() => {
+        // Returns perceived lightness 0..1 + alpha. Handles rgb()/rgba() and the
+        // oklch()/oklab() values Tailwind v4 emits (their first component is
+        // perceptual lightness, which is exactly what we need).
+        const parseLuminance = (value: string | null): { lum: number; a: number } | null => {
+          if (!value) return null
+          const open = value.indexOf("(")
+          const close = value.lastIndexOf(")")
+          if (open === -1 || close === -1) return null
+          const body = value.slice(open + 1, close)
+          if (value.indexOf("rgb") === 0) {
+            const parts = body.split(",").map(s => parseFloat(s))
+            if (parts.length < 3 || parts.slice(0, 3).some(n => isNaN(n))) return null
+            return { lum: (0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]) / 255, a: parts.length > 3 ? parts[3] : 1 }
+          }
+          if (value.indexOf("oklch") === 0 || value.indexOf("oklab") === 0) {
+            const slash = body.indexOf("/")
+            const main = (slash === -1 ? body : body.slice(0, slash)).split(" ").filter(s => s.length > 0)
+            if (main.length === 0) return null
+            let l = parseFloat(main[0])
+            if (main[0].indexOf("%") !== -1) l = l / 100
+            if (isNaN(l)) return null
+            const a = slash === -1 ? 1 : parseFloat(body.slice(slash + 1))
+            return { lum: l, a: isNaN(a) ? 1 : a }
+          }
+          return null
+        }
+        // Walk the first-child chain from <body> (the elements painted at the
+        // top-left, where the buttons sit) and take the deepest opaque
+        // background. Hit-testing (elementsFromPoint) is useless here: active
+        // react-grab puts the page content behind pointer-events: none.
+        const isOwnUi = (el: Element) =>
+          el.classList?.contains("caret-focused-fab") ||
+          el.hasAttribute?.("data-react-grab") ||
+          (typeof el.className === "string" && el.className.indexOf("caret-overlay") !== -1)
+        const detect = () => {
+          try {
+            let found: number | null = null
+            let el: HTMLElement | null = document.body
+            let depth = 0
+            while (el && depth < 40) {
+              const c = parseLuminance(window.getComputedStyle(el).backgroundColor)
+              if (c && c.a > 0.5) {
+                // Only count real backdrops, not small widgets (logos, badges)
+                // the first-child chain may descend into.
+                const rect = el.getBoundingClientRect()
+                if (el === document.body || (rect.width >= 200 && rect.height >= 200)) found = c.lum
+              }
+              let next: HTMLElement | null = null
+              for (const child of Array.from(el.children)) {
+                if (!isOwnUi(child)) { next = child as HTMLElement; break }
+              }
+              el = next
+              depth++
+            }
+            if (found !== null) {
+              // Toggle a class on the shell root instead of going through React
+              // state: the root's className prop never changes, so React leaves
+              // externally-added classes alone across re-renders.
+              const shell = document.querySelector(".caret-focused")
+              if (shell) shell.classList.toggle("fabs-on-light", found > 0.6)
+            }
+          } catch {}
+        }
+        detect()
+        const t1 = setTimeout(detect, 400)
+        const t2 = setTimeout(detect, 1500)
+        let raf = 0
+        const onScroll = () => {
+          if (raf) return
+          raf = requestAnimationFrame(() => { raf = 0; detect() })
+        }
+        document.addEventListener("scroll", onScroll, { passive: true, capture: true })
+        if (import.meta.hot) import.meta.hot.on("vite:afterUpdate", detect)
+        return () => {
+          clearTimeout(t1)
+          clearTimeout(t2)
+          if (raf) cancelAnimationFrame(raf)
+          document.removeEventListener("scroll", onScroll, { capture: true })
+          if (import.meta.hot) import.meta.hot.off("vite:afterUpdate", detect)
+        }
+      }, [currentState])
+
       React.useEffect(() => {
         const filePath = "pages/" + isolatedPageId + "/index.tsx"
         ;(window as any).__CARET_FOCUSED_PAGE__ = { pageId: isolatedPageId, filePath }
@@ -142,17 +227,12 @@ if (isolatedPageId && mode === "focused") {
     }
   })
 } else {
-  import("react-grab").then(() => {
-    return import("./lib/caret-grab-plugin")
-  }).then(() => {
-    import("./lib/canvas/CanvasApp").then(({ CanvasApp }) => {
-      createRoot(document.getElementById("root")!).render(<CanvasApp />)
-    })
-  }).catch((err) => {
-    console.error("[caret] Failed to initialize react-grab:", err)
-    import("./lib/canvas/CanvasApp").then(({ CanvasApp }) => {
-      createRoot(document.getElementById("root")!).render(<CanvasApp />)
-    })
+  // Canvas mode deliberately does NOT load react-grab: the editable page lives
+  // in the mode=focused iframe with its own instance. A second instance here
+  // overlays the canvas document, can only ever "select" the iframe, and its
+  // toolbar hijacks AI-edit prompts (which carry no screenshot).
+  import("./lib/canvas/CanvasApp").then(({ CanvasApp }) => {
+    createRoot(document.getElementById("root")!).render(<CanvasApp />)
   })
 }
 `

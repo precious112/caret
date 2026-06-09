@@ -1503,6 +1503,16 @@ function generateCanvasCSS(): string {
 		  background: rgba(255, 255, 255, 0.25);
 		  border-color: rgba(255, 255, 255, 0.35);
 		}
+		/* Dark variant applied when the page behind the buttons is light.
+		   The fabs-on-light class is toggled on the shell root by FocusedApp. */
+		.caret-focused.fabs-on-light .caret-focused-fab:not(.active) {
+		  background: rgba(17, 24, 39, 0.65);
+		  border-color: rgba(17, 24, 39, 0.45);
+		}
+		.caret-focused.fabs-on-light .caret-focused-fab:not(.active):hover {
+		  background: rgba(17, 24, 39, 0.85);
+		  border-color: rgba(17, 24, 39, 0.65);
+		}
 
 		.caret-focused-content {
 		  min-height: 100%;
