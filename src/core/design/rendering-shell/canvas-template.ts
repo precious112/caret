@@ -110,10 +110,11 @@ function generateCanvasApp(): string {
 		          .catch(() => {})
 		      })
 		      import.meta.hot.on("caret:flows-changed", () => {
+		        log("[HMR] caret:flows-changed received, refetching...")
 		        fetch("/__caret/flows-meta")
 		          .then(r => r.ok ? r.json() : [])
-		          .then(f => setFlows(f))
-		          .catch(() => {})
+		          .then(f => { log("[HMR] flows refetched: " + f.length); setFlows(f) })
+		          .catch(e => { log("[HMR] flows refetch failed: " + e) })
 		      })
 		    }
 		  }, [])
@@ -247,10 +248,11 @@ function generateCanvasView(): string {
 		    .map(([tag, pages]) => ({ tag, pages }))
 		}
 
-		function computeAutoPositions(pages: PageInfo[]): Array<{ page: PageInfo; x: number; y: number; groupTag?: string }> {
+		function computeAutoPositions(pages: PageInfo[], thumbHeight: number): Array<{ page: PageInfo; x: number; y: number; groupTag?: string }> {
 		  const groups = groupPagesByTag(pages)
 		  const items: Array<{ page: PageInfo; x: number; y: number; groupTag?: string }> = []
 		  let yOffset = 0
+		  const rowHeight = thumbHeight + GAP + 24
 
 		  for (const group of groups) {
 		    yOffset += GROUP_HEADER_HEIGHT
@@ -260,12 +262,12 @@ function generateCanvasView(): string {
 		      items.push({
 		        page,
 		        x: col * (THUMB_WIDTH + GAP),
-		        y: yOffset + row * (THUMB_HEIGHT + GAP + 24),
+		        y: yOffset + row * rowHeight,
 		        groupTag: i === 0 ? group.tag : undefined,
 		      })
 		    })
 		    const rows = Math.ceil(group.pages.length / COLS)
-		    yOffset += rows * (THUMB_HEIGHT + GAP + 24) + GROUP_GAP
+		    yOffset += rows * rowHeight + GROUP_GAP
 		  }
 		  return items
 		}
@@ -361,7 +363,9 @@ function generateCanvasView(): string {
 		    setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
 		  }, [isPanning, panStart, dragState, transform.scale, edgeDrag, transform.x, transform.y])
 
-		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages) : null
+		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
+		  const activeThumbHeight = FRAME_HEIGHT * (THUMB_WIDTH / activeFrameWidth)
+		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages, activeThumbHeight) : null
 
 		  const handlePointerUp = useCallback((e: React.PointerEvent) => {
 		    if (edgeDrag) {
@@ -371,11 +375,13 @@ function generateCanvasView(): string {
 		        const canvasY = (e.clientY - rect.top - transform.y) / transform.scale
 		        const allPositions = autoItems
 		          ? autoItems.map(i => ({ id: i.page.id, x: i.x, y: i.y }))
-		          : pages.map((p, idx) => ({ id: p.id, ...(manualPositions[p.id] || { x: (idx % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(idx / COLS) * (THUMB_HEIGHT + GAP + 24) }) }))
-		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + THUMB_HEIGHT)
-		        if (target && activeFlowId) {
-		          log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + activeFlowId)
-		          window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId: activeFlowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
+		          : pages.map((p, idx) => ({ id: p.id, ...(manualPositions[p.id] || { x: (idx % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(idx / COLS) * (activeThumbHeight + GAP + 24) }) }))
+		        const target = allPositions.find(p => p.id !== edgeDrag.fromPage && canvasX >= p.x && canvasX <= p.x + THUMB_WIDTH && canvasY >= p.y && canvasY <= p.y + activeThumbHeight)
+		        const flowId = activeFlowId || (flows.length > 0 ? flows[0].id : null)
+		        if (target && flowId) {
+		          if (!activeFlowId) setActiveFlowId(flowId)
+		          log("[edge-create] " + edgeDrag.fromPage + " → " + target.id + " flow=" + flowId)
+		          window.parent.postMessage({ source: "caret-vite", type: "flow-edge-create", payload: { flowId, fromPage: edgeDrag.fromPage, toPage: target.id } }, "*")
 		        } else {
 		          log("[edge-drag-cancel] from=" + edgeDrag.fromPage + " (no target hit)")
 		        }
@@ -388,7 +394,7 @@ function generateCanvasView(): string {
 		    }
 		    setDragState(null)
 		    setIsPanning(false)
-		  }, [dragState, layoutMode, manualPositions, edgeDrag, transform, autoItems, pages, manualPositions, activeFlowId])
+		  }, [dragState, layoutMode, manualPositions, edgeDrag, transform, autoItems, pages, activeFlowId, flows, activeThumbHeight])
 
 		  const handleThumbPointerDown = useCallback((pageId: string, x: number, y: number, e: React.PointerEvent) => {
 		    if (layoutMode !== "manual" || e.button !== 0) return
@@ -401,10 +407,10 @@ function generateCanvasView(): string {
 		    if (!containerRef.current || pages.length === 0) return
 		    const rect = containerRef.current.getBoundingClientRect()
 		    const positioned = layoutMode === "manual"
-		      ? pages.map((p, i) => manualPositions[p.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (THUMB_HEIGHT + GAP + 24) })
-		      : computeAutoPositions(pages).map(item => ({ x: item.x, y: item.y }))
+		      ? pages.map((p, i) => manualPositions[p.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (activeThumbHeight + GAP + 24) })
+		      : computeAutoPositions(pages, activeThumbHeight).map(item => ({ x: item.x, y: item.y }))
 		    const maxX = Math.max(...positioned.map(p => p.x)) + THUMB_WIDTH
-		    const maxY = Math.max(...positioned.map(p => p.y)) + THUMB_HEIGHT + 24
+		    const maxY = Math.max(...positioned.map(p => p.y)) + activeThumbHeight + 24
 		    const padding = 60
 		    const scaleX = (rect.width - padding * 2) / maxX
 		    const scaleY = (rect.height - padding * 2) / maxY
@@ -435,7 +441,7 @@ function generateCanvasView(): string {
 		  const toggleLayout = useCallback(() => {
 		    const newMode = layoutMode === "auto" ? "manual" : "auto"
 		    if (newMode === "manual" && Object.keys(manualPositions).length === 0) {
-		      const auto = computeAutoPositions(pages)
+		      const auto = computeAutoPositions(pages, activeThumbHeight)
 		      const positions: Record<string, { x: number; y: number }> = {}
 		      auto.forEach(item => { positions[item.page.id] = { x: item.x, y: item.y } })
 		      setManualPositions(positions)
@@ -456,9 +462,8 @@ function generateCanvasView(): string {
 		    )
 		  }
 
-		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
 		  React.useEffect(() => {
-		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth)
+		    log("[canvas] viewport=" + viewport + " activeFrameWidth=" + activeFrameWidth + " activeThumbHeight=" + activeThumbHeight.toFixed(0))
 		  }, [viewport, activeFrameWidth])
 
 		  return (
@@ -531,8 +536,8 @@ function generateCanvasView(): string {
 		                )}
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
 		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
-		                  {showFlows && activeFlowId && (
-		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + THUMB_HEIGHT / 2 }) }} />
+		                  {showFlows && (
+		                    <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: x + THUMB_WIDTH, mouseY: y + activeThumbHeight / 2 }) }} />
 		                  )}
 		                </div>
 		              </React.Fragment>
@@ -540,7 +545,7 @@ function generateCanvasView(): string {
 		          })
 		        ) : (
 		          pages.map((page, i) => {
-		            const pos = manualPositions[page.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (THUMB_HEIGHT + GAP + 24) }
+		            const pos = manualPositions[page.id] || { x: (i % COLS) * (THUMB_WIDTH + GAP), y: Math.floor(i / COLS) * (activeThumbHeight + GAP + 24) }
 		            const hasRoute = routes.some(r => r.name === page.id)
 		            return (
 		              <div
@@ -551,8 +556,8 @@ function generateCanvasView(): string {
 		              >
 		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
 		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
-		                {showFlows && activeFlowId && (
-		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + THUMB_HEIGHT / 2 }) }} />
+		                {showFlows && (
+		                  <div className="caret-edge-connector" onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: pos.x + THUMB_WIDTH, mouseY: pos.y + activeThumbHeight / 2 }) }} />
 		                )}
 		              </div>
 		            )
@@ -560,15 +565,40 @@ function generateCanvasView(): string {
 		        )}
 		        {showFlows && flows.length > 0 && (() => {
 		          const FLOW_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"]
-		          const getPos = (pageId: string) => {
+		          const getRect = (pageId: string) => {
 		            if (autoItems) {
 		              const item = autoItems.find(i => i.page.id === pageId)
-		              if (item) return { cx: item.x + THUMB_WIDTH / 2, cy: item.y + THUMB_HEIGHT / 2 }
+		              if (item) return { x: item.x, y: item.y, w: THUMB_WIDTH, h: activeThumbHeight }
 		            } else {
 		              const pos = manualPositions[pageId]
-		              if (pos) return { cx: pos.x + THUMB_WIDTH / 2, cy: pos.y + THUMB_HEIGHT / 2 }
+		              if (pos) return { x: pos.x, y: pos.y, w: THUMB_WIDTH, h: activeThumbHeight }
 		            }
 		            return null
+		          }
+		          const getEdgeAnchors = (fromId: string, toId: string) => {
+		            const fr = getRect(fromId), tr = getRect(toId)
+		            if (!fr || !tr) return null
+		            const fcx = fr.x + fr.w / 2, fcy = fr.y + fr.h / 2
+		            const tcx = tr.x + tr.w / 2, tcy = tr.y + tr.h / 2
+		            const dx = tcx - fcx, dy = tcy - fcy
+		            if (Math.abs(dx) > Math.abs(dy)) {
+		              return dx > 0
+		                ? { fx: fr.x + fr.w, fy: fcy, tx: tr.x, ty: tcy, dir: "h" as const }
+		                : { fx: fr.x, fy: fcy, tx: tr.x + tr.w, ty: tcy, dir: "h" as const }
+		            } else {
+		              return dy > 0
+		                ? { fx: fcx, fy: fr.y + fr.h, tx: tcx, ty: tr.y, dir: "v" as const }
+		                : { fx: fcx, fy: fr.y, tx: tcx, ty: tr.y + tr.h, dir: "v" as const }
+		            }
+		          }
+		          const makePath = (a: { fx: number; fy: number; tx: number; ty: number; dir: "h" | "v" }) => {
+		            const dist = Math.sqrt((a.tx - a.fx) ** 2 + (a.ty - a.fy) ** 2)
+		            const cp = Math.min(dist * 0.4, 150)
+		            if (a.dir === "h") {
+		              return \`M \${a.fx} \${a.fy} C \${a.fx + cp} \${a.fy}, \${a.tx - cp} \${a.ty}, \${a.tx} \${a.ty}\`
+		            } else {
+		              return \`M \${a.fx} \${a.fy} C \${a.fx} \${a.fy + cp}, \${a.tx} \${a.ty - cp}, \${a.tx} \${a.ty}\`
+		            }
 		          }
 		          const visibleFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
 		          return (
@@ -579,31 +609,41 @@ function generateCanvasView(): string {
 		                    <polygon points="0 0, 10 3.5, 0 7" fill={FLOW_COLORS[i % 5]} />
 		                  </marker>
 		                ))}
+		                <marker id="caret-arrow-error" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+		                  <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
+		                </marker>
 		              </defs>
 		              {visibleFlows.map((flow, fi) => {
 		                const color = FLOW_COLORS[flows.indexOf(flow) % 5]
 		                return flow.steps.flatMap(step => {
-		                  const from = getPos(step.page)
-		                  return step.next.map(nextPage => {
-		                    const to = getPos(nextPage)
-		                    if (!from || !to) return null
-		                    const dx = to.cx - from.cx
-		                    const dy = to.cy - from.cy
-		                    const dist = Math.sqrt(dx * dx + dy * dy)
-		                    const cpOffset = Math.min(dist * 0.4, 150)
-		                    const d = \`M \${from.cx} \${from.cy} C \${from.cx + cpOffset} \${from.cy}, \${to.cx - cpOffset} \${to.cy}, \${to.cx} \${to.cy}\`
+		                  const nextEdges = step.next.map(nextPage => {
+		                    const anchors = getEdgeAnchors(step.page, nextPage)
+		                    if (!anchors) return null
+		                    const d = makePath(anchors)
 		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === nextPage
 		                    return <g key={flow.id + "-" + step.page + "-" + nextPage}>
 		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); log("[edge-select] " + step.page + " → " + nextPage + " flow=" + flow.id); setSelectedEdge({ flowId: flow.id, from: step.page, to: nextPage }) }} />
 		                      <path d={d} stroke={isSelected ? "#fff" : color} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} markerEnd={"url(#caret-arrow-" + flow.id + ")"} style={{ pointerEvents: "none" }} />
 		                    </g>
 		                  })
+		                  const errorEdges = (step.onError || []).map(errorPage => {
+		                    const anchors = getEdgeAnchors(step.page, errorPage)
+		                    if (!anchors) return null
+		                    const d = makePath(anchors)
+		                    const isSelected = selectedEdge?.flowId === flow.id && selectedEdge?.from === step.page && selectedEdge?.to === errorPage
+		                    return <g key={flow.id + "-error-" + step.page + "-" + errorPage}>
+		                      <path d={d} stroke="transparent" strokeWidth={12} fill="none" style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={(e) => { e.stopPropagation(); setSelectedEdge({ flowId: flow.id, from: step.page, to: errorPage }) }} />
+		                      <path d={d} stroke={isSelected ? "#fff" : "#ef4444"} strokeWidth={isSelected ? 3 : 2} fill="none" opacity={isSelected ? 1 : 0.7} strokeDasharray="6 3" markerEnd="url(#caret-arrow-error)" style={{ pointerEvents: "none" }} />
+		                    </g>
+		                  })
+		                  return [...nextEdges, ...errorEdges]
 		                })
 		              })}
 		              {edgeDrag && (() => {
-		                const from = getPos(edgeDrag.fromPage)
-		                if (!from) return null
-		                return <line x1={from.cx} y1={from.cy} x2={edgeDrag.mouseX} y2={edgeDrag.mouseY} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} style={{ pointerEvents: "none" }} />
+		                const fr = getRect(edgeDrag.fromPage)
+		                if (!fr) return null
+		                const fx = fr.x + fr.w, fy = fr.y + fr.h / 2
+		                return <line x1={fx} y1={fy} x2={edgeDrag.mouseX} y2={edgeDrag.mouseY} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} style={{ pointerEvents: "none" }} />
 		              })()}
 		            </svg>
 		          )
@@ -631,7 +671,7 @@ function generatePageThumbnail(): string {
 
 		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick }: Props) {
 		  const scale = thumbWidth / frameWidth
-		  const thumbHeight = frameHeight * (thumbWidth / 1440)
+		  const thumbHeight = frameHeight * scale
 
 		  React.useEffect(() => {
 		    window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: "[thumb] " + pageId + " frameWidth=" + frameWidth + " scale=" + scale.toFixed(4) + " thumbHeight=" + thumbHeight.toFixed(1) } }, "*")
