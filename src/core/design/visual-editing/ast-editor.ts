@@ -2,6 +2,8 @@ import * as fs from "fs/promises"
 
 import * as recast from "recast"
 
+import { writeFileAtomic } from "../file-mutation-queue"
+
 const babelParser = require("recast/parsers/babel-ts")
 
 type ASTNode = recast.types.namedTypes.Node
@@ -89,11 +91,7 @@ export function findJSXElementAtLine(
 	return match
 }
 
-export function findJSXElementAtPosition(
-	ast: ASTNode,
-	line: number,
-	column: number,
-): recast.types.namedTypes.JSXElement | null {
+export function findJSXElementAtPosition(ast: ASTNode, line: number, column: number): recast.types.namedTypes.JSXElement | null {
 	let match: recast.types.namedTypes.JSXElement | null = null
 
 	recast.types.visit(ast, {
@@ -142,19 +140,31 @@ export async function editJSXText(
 			return oldText ? fallbackTextReplace(filePath, source, oldText, newText) : false
 		}
 
+		// Stale-target guard: the client captured oldText from the DOM, but the
+		// file may have shifted since (HMR, external edits). Only mutate content
+		// that still matches what the user saw; otherwise fall through to the
+		// unique-occurrence text replace, and from there to the AI-edit fallback.
+		const normalize = (s: string) => s.replace(/\s+/g, " ").trim()
+		const matchesOld = (current: string) => !oldText || normalize(current) === normalize(oldText)
+
 		for (const child of element.children || []) {
 			if (child.type === "JSXText" && typeof child.value === "string" && child.value.trim()) {
+				if (!matchesOld(child.value)) {
+					console.warn(`[design] AST: text at ${filePath}:${lineNumber} no longer matches oldText — stale target`)
+					continue
+				}
 				const leading = child.value.match(/^(\s*)/)?.[1] || ""
 				const trailing = child.value.match(/(\s*)$/)?.[1] || ""
 				child.value = leading + newText + trailing
 				const output = recast.print(ast).code
-				await fs.writeFile(filePath, output)
+				await writeFileAtomic(filePath, output)
 				return true
 			}
 			if (child.type === "JSXExpressionContainer" && child.expression && child.expression.type === "StringLiteral") {
+				if (!matchesOld(child.expression.value)) continue
 				child.expression.value = newText
 				const output = recast.print(ast).code
-				await fs.writeFile(filePath, output)
+				await writeFileAtomic(filePath, output)
 				return true
 			}
 		}
@@ -164,10 +174,10 @@ export async function editJSXText(
 			if (attr.type !== "JSXAttribute") continue
 			const name = attr.name.type === "JSXIdentifier" ? attr.name.name : ""
 			if (["label", "title", "placeholder", "alt", "children"].includes(name)) {
-				if (attr.value?.type === "StringLiteral") {
+				if (attr.value?.type === "StringLiteral" && matchesOld(attr.value.value)) {
 					attr.value.value = newText
 					const output = recast.print(ast).code
-					await fs.writeFile(filePath, output)
+					await writeFileAtomic(filePath, output)
 					return true
 				}
 			}
@@ -193,7 +203,7 @@ async function fallbackTextReplace(filePath: string, source: string, oldText: st
 		return false
 	}
 	const updated = source.slice(0, idx) + newText + source.slice(idx + oldText.length)
-	await fs.writeFile(filePath, updated)
+	await writeFileAtomic(filePath, updated)
 	console.log(`[design] fallback: replaced text at offset ${idx}`)
 	return true
 }
@@ -213,9 +223,33 @@ const TAILWIND_COLOR_PREFIXES = [
 ]
 
 const TAILWIND_COLOR_NAMES = new Set([
-	"slate", "gray", "zinc", "neutral", "stone", "red", "orange", "amber", "yellow", "lime",
-	"green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia",
-	"pink", "rose", "white", "black", "transparent", "inherit", "current",
+	"slate",
+	"gray",
+	"zinc",
+	"neutral",
+	"stone",
+	"red",
+	"orange",
+	"amber",
+	"yellow",
+	"lime",
+	"green",
+	"emerald",
+	"teal",
+	"cyan",
+	"sky",
+	"blue",
+	"indigo",
+	"violet",
+	"purple",
+	"fuchsia",
+	"pink",
+	"rose",
+	"white",
+	"black",
+	"transparent",
+	"inherit",
+	"current",
 ])
 
 function isTailwindColorClass(cls: string): boolean {
@@ -273,7 +307,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 					const replaced = replaceTailwindColorClass(attr.value.value, newColor)
 					if (replaced) {
 						attr.value.value = replaced
-						await fs.writeFile(filePath, recast.print(ast).code)
+						await writeFileAtomic(filePath, recast.print(ast).code)
 						return true
 					}
 				}
@@ -285,7 +319,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 							if (replaced) {
 								quasi.value.raw = replaced
 								quasi.value.cooked = replaced
-								await fs.writeFile(filePath, recast.print(ast).code)
+								await writeFileAtomic(filePath, recast.print(ast).code)
 								return true
 							}
 						}
@@ -297,7 +331,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 				const expr = attr.value.expression
 				if (expr.type === "ObjectExpression") {
 					if (replaceColorInObjectExpression(expr, newColor)) {
-						await fs.writeFile(filePath, recast.print(ast).code)
+						await writeFileAtomic(filePath, recast.print(ast).code)
 						return true
 					}
 				}
@@ -305,7 +339,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 		}
 
 		if (replaceColorInStyleObject(ast, lineNumber, newColor)) {
-			await fs.writeFile(filePath, recast.print(ast).code)
+			await writeFileAtomic(filePath, recast.print(ast).code)
 			return true
 		}
 
@@ -371,7 +405,7 @@ export async function editJSXImageSrc(filePath: string, lineNumber: number, newS
 			if (attr.name.type === "JSXIdentifier" && attr.name.name === "src") {
 				if (attr.value?.type === "StringLiteral") {
 					attr.value.value = newSrc
-					await fs.writeFile(filePath, recast.print(ast).code)
+					await writeFileAtomic(filePath, recast.print(ast).code)
 					return true
 				}
 			}

@@ -331,4 +331,58 @@ describe("AST editor hardening", () => {
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.equal(source)
 	})
+
+	it("editJSXText should not edit an element whose text no longer matches oldText (stale target)", async () => {
+		// Client captured "Sign up" at line 2, but the file shifted: line 2 is
+		// now a different h1. Unique-occurrence fallback should still find the
+		// real text elsewhere and fix it there.
+		const source = `<div>
+  <h1>Welcome back</h1>
+  <h2>Sign up</h2>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		const result = await editJSXText(tmpFile, 2, "h1", "Create account", "Sign up")
+		result.should.be.true()
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("<h1>Welcome back</h1>")
+		output.should.containEql("Create account")
+		output.should.not.containEql("Sign up")
+	})
+
+	it("editJSXText should return false when oldText matches nothing (fully stale)", async () => {
+		const source = `<div>
+  <h1>Welcome back</h1>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		const result = await editJSXText(tmpFile, 2, "h1", "New", "Text that was deleted")
+		result.should.be.false()
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.equal(source)
+	})
+
+	it("editJSXText should tolerate whitespace differences between DOM and source text", async () => {
+		const source = `<div>
+  <h1>
+    Hello
+    World
+  </h1>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		// DOM textContent collapses the newlines to single spaces
+		const result = await editJSXText(tmpFile, 2, "h1", "Greetings", "Hello World")
+		result.should.be.true()
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("Greetings")
+	})
+
+	it("editJSXText without oldText keeps editing the first text child (back-compat)", async () => {
+		const source = `<div>
+  <h1>Anything</h1>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		const result = await editJSXText(tmpFile, 2, "h1", "Replaced")
+		result.should.be.true()
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("Replaced")
+	})
 })

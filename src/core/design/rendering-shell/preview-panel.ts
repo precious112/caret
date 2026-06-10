@@ -4,6 +4,7 @@ import * as path from "path"
 import * as vscode from "vscode"
 
 import { Logger } from "@/shared/services/Logger"
+import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
 import { handleAiEditRequest } from "../visual-editing/ai-edit-handler"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
@@ -277,22 +278,27 @@ async function openFileInEditor(filePath: string, lineNumber?: number): Promise<
 
 async function handleInlineEdit(payload: InlineEditPayload): Promise<void> {
 	try {
-		let success = false
-
-		if (payload.editType === "text") {
-			success = await editJSXText(
-				payload.filePath,
-				payload.lineNumber,
-				payload.tagName || "",
-				payload.newValue,
-				payload.oldValue,
-				payload.caretId,
-			)
-		} else if (payload.editType === "color") {
-			success = await editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId)
-		} else if (payload.editType === "image") {
-			success = await handleImageEdit(payload)
-		}
+		// Serialized per file: rapid successive edits (or an edit racing the
+		// precompute hook) must never interleave read-modify-writes.
+		const success = await runExclusive(payload.filePath, async () => {
+			if (payload.editType === "text") {
+				return editJSXText(
+					payload.filePath,
+					payload.lineNumber,
+					payload.tagName || "",
+					payload.newValue,
+					payload.oldValue,
+					payload.caretId,
+				)
+			}
+			if (payload.editType === "color") {
+				return editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId)
+			}
+			if (payload.editType === "image") {
+				return handleImageEdit(payload)
+			}
+			return false
+		})
 
 		if (success) {
 			sendMessageToPreview({ source: "caret-extension", type: "edit-result", payload: { success: true } })
