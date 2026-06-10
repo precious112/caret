@@ -431,6 +431,7 @@
 		"test": "npx npm-run-all test:unit test:integration",
 		"test:integration": "vscode-test",
 		"test:unit": "cross-env TS_NODE_PROJECT=./tsconfig.unit-test.json mocha",
+		"verify:design-shell": "npx tsx scripts/verify-design-shell.ts",
 		"test:coverage": "vscode-test --coverage",
 		"test:sca-server": "npx tsx watch scripts/test-standalone-core-api-server.ts",
 		"test:tp-orchestrator": "npx tsx scripts/testing-platform-orchestrator.ts",

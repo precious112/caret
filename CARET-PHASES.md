@@ -89,6 +89,21 @@ Goal: Make the visual editing algorithm more reliable and deterministic. The AI 
 
 **Deliverable:** Flow visualization, user-flow simulation, responsive preview, state inspection.
 
+### Reliability certification (post-Phase 4 hardening)
+
+Design mode is hardened so failures are attributable to bad AI-generated content and surfaced visibly — never caret's own logic silently breaking or hiding data:
+
+- [x] All flow/page/meta file writes are atomic (temp+rename) and serialized per file (`src/core/design/file-mutation-queue.ts`); inline edits, the precompute hook, and flow CRUD can no longer race each other into corrupt files
+- [x] Flow CRUD resolves flows by id even when the filename doesn't match (AI-written flows were silently un-editable)
+- [x] Corrupt/invalid `.flow.json` files render as flagged "invalid" legend entries with the parse error, plus a persistent canvas warnings chip — never silently dropped
+- [x] A page dir without a working `index.tsx` shows a broken-page card instead of taking down the entire canvas; page iframes show readable error cards for missing/crashed pages
+- [x] Edges referencing deleted pages are counted in the warnings chip (never auto-deleted)
+- [x] `canvas-layout` writes are validated and atomic; corrupt layout files fall back to auto layout with a logged warning
+- [x] Iframe message payloads are validated before reaching handlers; stale inline-edit targets (line drift after HMR) fall back safely instead of editing the wrong element
+- [x] Design-mode activation is serialized (no double vite spawn) and an unexpected vite exit shows a Restart prompt instead of a dead iframe
+
+**Re-certify after any rendering-shell change:** `npm run verify:design-shell` — boots the generated shell on a fixture project and runs a 14-scenario browser suite (happy paths + adversarial corruption); all scenarios must PASS.
+
 ---
 
 ## [ ] Phase 5: Sync + Collaboration + Deployment
