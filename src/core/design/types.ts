@@ -80,6 +80,9 @@ export interface FlowDefinition {
 	name: string
 	description?: string
 	steps: FlowStep[]
+	/** Set by the rendering shell when the flow file is corrupt/invalid. */
+	invalid?: boolean
+	error?: string
 }
 
 export interface SyncState {

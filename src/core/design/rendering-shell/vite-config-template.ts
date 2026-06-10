@@ -121,20 +121,37 @@ function caretTokensPlugin() {
   }
 }
 
+// Reads flow files, replacing corrupt/invalid ones with visible placeholder
+// entries instead of silently dropping them — a flow vanishing without signal
+// reads as data loss, while an "invalid" chip points at the broken file.
+function readFlowsForServing(flowsDir) {
+  if (!existsSync(flowsDir)) return []
+  let files = []
+  try { files = readdirSync(flowsDir).filter(f => f.endsWith(".flow.json")) } catch { return [] }
+  const isValidFlowShape = (flow) =>
+    !!flow && typeof flow === "object" &&
+    typeof flow.id === "string" && typeof flow.name === "string" && Array.isArray(flow.steps) &&
+    flow.steps.every(s => s && typeof s === "object" && typeof s.page === "string" && Array.isArray(s.next) && (s.onError === undefined || Array.isArray(s.onError)))
+  return files.map(f => {
+    try {
+      const flow = JSON.parse(readFileSync(join(flowsDir, f), "utf-8"))
+      if (!isValidFlowShape(flow)) {
+        return { id: "invalid:" + f, name: f, steps: [], invalid: true, error: "Invalid flow shape — needs id, name and steps[] with page/next" }
+      }
+      return flow
+    } catch (e) {
+      return { id: "invalid:" + f, name: f, steps: [], invalid: true, error: String(e) }
+    }
+  })
+}
+
 // Virtual module for flow definitions
 function caretFlowsPlugin() {
   const flowsDir = resolve(__dirname, "flows")
 
   function buildModule() {
-    if (!existsSync(flowsDir)) return "export default []"
     try {
-      const files = readdirSync(flowsDir).filter(f => f.endsWith(".flow.json"))
-      const flows = files.map(f => {
-        try {
-          return JSON.parse(readFileSync(join(flowsDir, f), "utf-8"))
-        } catch { return null }
-      }).filter(Boolean)
-      return "export default " + JSON.stringify(flows)
+      return "export default " + JSON.stringify(readFlowsForServing(flowsDir))
     } catch {
       return "export default []"
     }
@@ -256,18 +273,8 @@ function caretApiPlugin() {
         if (req.method === "GET" && req.url === "/__caret/flows-meta") {
           const flowsDir = resolve(__dirname, "flows")
           try {
-            if (!existsSync(flowsDir)) {
-              res.setHeader("Content-Type", "application/json")
-              res.end("[]")
-              return
-            }
-            const files = readdirSync(flowsDir).filter(f => f.endsWith(".flow.json"))
-            const flows = files.map(f => {
-              try { return JSON.parse(readFileSync(join(flowsDir, f), "utf-8")) }
-              catch { return null }
-            }).filter(Boolean)
             res.setHeader("Content-Type", "application/json")
-            res.end(JSON.stringify(flows))
+            res.end(JSON.stringify(readFlowsForServing(flowsDir)))
           } catch {
             res.statusCode = 500
             res.end("[]")

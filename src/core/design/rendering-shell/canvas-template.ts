@@ -73,6 +73,9 @@ function generateTypes(): string {
 		  name: string
 		  description?: string
 		  steps: FlowStep[]
+		  /** Set when the flow file is corrupt/invalid; steps will be empty. */
+		  invalid?: boolean
+		  error?: string
 		}
 	`
 }
@@ -613,6 +616,24 @@ function generateCanvasView(): string {
 		    return pages.length > 0 ? pages[0].id : null
 		  }
 
+		  // Visible reliability signals: corrupt flow files and edges referencing
+		  // pages that no longer exist. Shown even when the flows overlay is hidden,
+		  // so bad AI output never just silently disappears.
+		  const invalidFlows = flows.filter(f => f.invalid)
+		  const missingEdgeCount = (() => {
+		    const pageIds = new Set(pages.map(p => p.id))
+		    let count = 0
+		    for (const flow of flows) {
+		      if (flow.invalid) continue
+		      for (const step of flow.steps) {
+		        for (const t of [...step.next, ...(step.onError || [])]) {
+		          if (!pageIds.has(step.page) || !pageIds.has(t)) count++
+		        }
+		      }
+		    }
+		    return count
+		  })()
+
 		  if (pages.length === 0) {
 		    return (
 		      <div className="caret-canvas-empty">
@@ -636,10 +657,17 @@ function generateCanvasView(): string {
 		      {showFlows && flows.length > 0 && (
 		        <div className="caret-flow-legend">
 		          {flows.map((flow, i) => (
-		            <span key={flow.id} className={"caret-flow-legend-item" + (activeFlowId === flow.id ? " active" : "")} onClick={() => setActiveFlowId(activeFlowId === flow.id ? null : flow.id)}>
-		              <span className="caret-flow-legend-dot" style={{ background: ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"][i % 5] }} />
-		              {flow.name}
-		            </span>
+		            flow.invalid ? (
+		              <span key={flow.id} className="caret-flow-legend-item invalid" title={flow.error || "Invalid flow file"}>
+		                <span className="caret-flow-legend-warn">⚠</span>
+		                {flow.name}
+		              </span>
+		            ) : (
+		              <span key={flow.id} className={"caret-flow-legend-item" + (activeFlowId === flow.id ? " active" : "")} onClick={() => setActiveFlowId(activeFlowId === flow.id ? null : flow.id)}>
+		                <span className="caret-flow-legend-dot" style={{ background: ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"][i % 5] }} />
+		                {flow.name}
+		              </span>
+		            )
 		          ))}
 		        </div>
 		      )}
@@ -674,6 +702,14 @@ function generateCanvasView(): string {
 		        </button>
 		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
 		      </div>
+		      {(invalidFlows.length > 0 || missingEdgeCount > 0) && (
+		        <div className="caret-canvas-warnings" title={invalidFlows.map(f => f.name + ": " + (f.error || "invalid")).join("; ")}>
+		          ⚠ {[
+		            invalidFlows.length > 0 ? invalidFlows.length + " invalid flow file" + (invalidFlows.length > 1 ? "s" : "") + " in .caret/flows/" : null,
+		            missingEdgeCount > 0 ? missingEdgeCount + " flow edge" + (missingEdgeCount > 1 ? "s" : "") + " reference missing pages" : null,
+		          ].filter(Boolean).join(" · ")}
+		        </div>
+		      )}
 		      <div
 		        className="caret-canvas-content"
 		        style={{
@@ -1413,12 +1449,31 @@ function generateCanvasCSS(): string {
 		}
 		.caret-flow-legend-item:hover { color: #ddd; }
 		.caret-flow-legend-item.active { color: #fff; }
+		.caret-flow-legend-item.invalid { color: #f87171; cursor: default; }
+		.caret-flow-legend-item.invalid:hover { color: #f87171; }
+		.caret-flow-legend-warn { flex-shrink: 0; }
 
 		.caret-flow-legend-dot {
 		  width: 8px;
 		  height: 8px;
 		  border-radius: 50%;
 		  flex-shrink: 0;
+		}
+
+		.caret-canvas-warnings {
+		  position: absolute;
+		  top: 12px;
+		  left: 50%;
+		  transform: translateX(-50%);
+		  z-index: 60;
+		  background: rgba(69, 10, 10, 0.92);
+		  color: #fecaca;
+		  border: 1px solid rgba(239, 68, 68, 0.45);
+		  border-radius: 8px;
+		  padding: 6px 14px;
+		  font-size: 12px;
+		  pointer-events: none;
+		  white-space: nowrap;
 		}
 
 		.caret-canvas-empty {
