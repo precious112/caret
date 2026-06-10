@@ -17,6 +17,7 @@ import type {
 	InlineEditPayload,
 	OverlayEditPayload,
 } from "./messages"
+import { isValidDesignMessagePayload } from "./messages"
 
 let panel: vscode.WebviewPanel | null = null
 let currentWorkspacePath: string | null = null
@@ -97,6 +98,10 @@ async function resolveCaretPath(filePath: string): Promise<string> {
 
 async function handleViteMessage(message: DesignMessage): Promise<void> {
 	console.log(`[design] handleViteMessage: type=${message.type}`)
+	if (!isValidDesignMessagePayload(message.type, message.payload)) {
+		console.error(`[design] Ignoring malformed ${message.type} payload:`, JSON.stringify(message.payload))
+		return
+	}
 	switch (message.type) {
 		case "log": {
 			const { level, message: msg } = (message as any).payload

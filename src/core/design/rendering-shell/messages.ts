@@ -86,6 +86,39 @@ export interface FlowEdgeUpdatePayload {
 	isError?: boolean
 }
 
+const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
+
+/**
+ * Required-field checks for payloads arriving from the preview iframe. The
+ * iframe runs generated + user code, so payloads are untrusted input: a
+ * malformed message must be ignored, never crash a handler or produce a
+ * mangled file path.
+ */
+const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean> = {
+	"element-selected": (p) => isStr(p.filePath),
+	"open-file": (p) => isStr(p.filePath),
+	"inline-edit": (p) =>
+		(p.editType === "text" || p.editType === "color" || p.editType === "image") &&
+		isStr(p.filePath) &&
+		isNum(p.lineNumber) &&
+		typeof p.newValue === "string",
+	"ai-edit-request": (p) => isStr(p.instruction) && isStr(p.filePath),
+	"overlay-edit": (p) => isStr(p.instruction),
+	"page-focused": (p) => isStr(p.filePath),
+	"flow-edge-create": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
+	"flow-edge-delete": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
+	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
+	log: () => true,
+}
+
+export function isValidDesignMessagePayload(type: string, payload: unknown): boolean {
+	const validator = PAYLOAD_VALIDATORS[type]
+	if (!validator) return true // unknown types are handled (ignored) downstream
+	if (!payload || typeof payload !== "object") return false
+	return validator(payload as Record<string, unknown>)
+}
+
 export type DesignMessage =
 	| { source: "caret-vite"; type: "element-selected"; payload: ElementSelectedPayload }
 	| { source: "caret-vite"; type: "open-file"; payload: OpenFilePayload }
