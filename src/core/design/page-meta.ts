@@ -1,14 +1,22 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { Logger } from "@/shared/services/Logger"
+import { writeFileAtomic } from "./file-mutation-queue"
 import type { PageMeta } from "./types"
 
 export async function readPageMeta(workspacePath: string, pageId: string): Promise<PageMeta | null> {
 	const metaPath = path.join(workspacePath, ".caret", "pages", pageId, "meta.json")
+	let content: string
 	try {
-		const content = await fs.readFile(metaPath, "utf-8")
-		return JSON.parse(content) as PageMeta
+		content = await fs.readFile(metaPath, "utf-8")
 	} catch {
+		return null
+	}
+	try {
+		return JSON.parse(content) as PageMeta
+	} catch (err) {
+		Logger.warn(`[design] Page meta ${metaPath} is not valid JSON and will be ignored: ${err}`)
 		return null
 	}
 }
@@ -16,7 +24,7 @@ export async function readPageMeta(workspacePath: string, pageId: string): Promi
 export async function writePageMeta(workspacePath: string, pageId: string, meta: PageMeta): Promise<void> {
 	const pageDir = path.join(workspacePath, ".caret", "pages", pageId)
 	await fs.mkdir(pageDir, { recursive: true })
-	await fs.writeFile(path.join(pageDir, "meta.json"), JSON.stringify(meta, null, 2))
+	await writeFileAtomic(path.join(pageDir, "meta.json"), JSON.stringify(meta, null, 2))
 }
 
 export async function listPages(workspacePath: string): Promise<PageMeta[]> {

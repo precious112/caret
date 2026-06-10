@@ -1,71 +1,117 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { Logger } from "@/shared/services/Logger"
+import { runExclusive, writeFileAtomic } from "./file-mutation-queue"
 import type { FlowDefinition } from "./types"
 
-export async function readFlowDefinition(workspacePath: string, flowId: string): Promise<FlowDefinition | null> {
-	const flowPath = path.join(workspacePath, ".caret", "flows", `${flowId}.flow.json`)
+function flowsDirPath(workspacePath: string): string {
+	return path.join(workspacePath, ".caret", "flows")
+}
+
+function isFileMissingError(err: unknown): boolean {
+	return !!err && typeof err === "object" && (err as NodeJS.ErrnoException).code === "ENOENT"
+}
+
+async function readFlowFile(filePath: string): Promise<FlowDefinition | null> {
+	let content: string
 	try {
-		const content = await fs.readFile(flowPath, "utf-8")
+		content = await fs.readFile(filePath, "utf-8")
+	} catch (err) {
+		if (!isFileMissingError(err)) {
+			Logger.warn(`[design] Failed to read flow file ${filePath}: ${err}`)
+		}
+		return null
+	}
+	try {
 		return JSON.parse(content) as FlowDefinition
-	} catch {
+	} catch (err) {
+		// A corrupt flow file is bad AI output or a torn write — never hide it.
+		Logger.warn(`[design] Flow file ${filePath} is not valid JSON and will be ignored: ${err}`)
 		return null
 	}
 }
 
-export async function writeFlowDefinition(workspacePath: string, flowId: string, flow: FlowDefinition): Promise<void> {
-	const flowsDir = path.join(workspacePath, ".caret", "flows")
-	await fs.mkdir(flowsDir, { recursive: true })
-	// Write to a temp file and rename so readers (the Vite flows middleware and
-	// its file watcher) can never observe a half-written or torn file.
-	const target = path.join(flowsDir, `${flowId}.flow.json`)
-	const tmp = `${target}.tmp`
-	await fs.writeFile(tmp, JSON.stringify(flow, null, 2))
-	await fs.rename(tmp, target)
+async function writeFlowFile(filePath: string, flow: FlowDefinition): Promise<void> {
+	await fs.mkdir(path.dirname(filePath), { recursive: true })
+	await writeFileAtomic(filePath, JSON.stringify(flow, null, 2))
 }
 
-const flowMutationQueues = new Map<string, Promise<unknown>>()
+/**
+ * Resolves the file that holds the flow with the given id. AI-written flows
+ * sometimes have a filename that doesn't match their "id" field; the canvas
+ * always sends the id, so fall back to scanning the flows dir for a file whose
+ * parsed id matches instead of silently failing CRUD on those flows.
+ */
+export async function resolveFlowFile(workspacePath: string, flowId: string): Promise<string | null> {
+	const flowsDir = flowsDirPath(workspacePath)
+	const direct = path.join(flowsDir, `${flowId}.flow.json`)
+	try {
+		await fs.access(direct)
+		return direct
+	} catch {}
+	let entries: string[]
+	try {
+		entries = (await fs.readdir(flowsDir)).filter((n) => n.endsWith(".flow.json"))
+	} catch {
+		return null
+	}
+	for (const name of entries) {
+		const filePath = path.join(flowsDir, name)
+		const flow = await readFlowFile(filePath)
+		if (flow && flow.id === flowId) {
+			Logger.warn(`[design] Flow id "${flowId}" lives in mismatched file ${name} — resolved by id scan`)
+			return filePath
+		}
+	}
+	return null
+}
+
+export async function readFlowDefinition(workspacePath: string, flowId: string): Promise<FlowDefinition | null> {
+	const filePath = await resolveFlowFile(workspacePath, flowId)
+	if (!filePath) return null
+	return readFlowFile(filePath)
+}
+
+export async function writeFlowDefinition(workspacePath: string, flowId: string, flow: FlowDefinition): Promise<void> {
+	const filePath =
+		(await resolveFlowFile(workspacePath, flowId)) ?? path.join(flowsDirPath(workspacePath), `${flowId}.flow.json`)
+	await writeFlowFile(filePath, flow)
+}
 
 /**
  * Serialized read-modify-write of a flow file. Concurrent mutations of the same
  * flow (e.g. rapid canvas edits) queue behind each other instead of racing —
  * unserialized concurrent writes have corrupted flow files.
- * Returns false if the flow doesn't exist.
+ * Returns false if the flow doesn't exist (or its file is unreadable/corrupt).
  */
 export async function mutateFlowDefinition(
 	workspacePath: string,
 	flowId: string,
 	mutate: (flow: FlowDefinition) => void,
 ): Promise<boolean> {
-	const key = path.join(workspacePath, flowId)
-	const run = async (): Promise<boolean> => {
-		const flow = await readFlowDefinition(workspacePath, flowId)
+	const filePath = await resolveFlowFile(workspacePath, flowId)
+	if (!filePath) return false
+	return runExclusive(filePath, async () => {
+		const flow = await readFlowFile(filePath)
 		if (!flow) {
 			return false
 		}
 		mutate(flow)
-		await writeFlowDefinition(workspacePath, flowId, flow)
+		await writeFlowFile(filePath, flow)
 		return true
-	}
-	const prev = flowMutationQueues.get(key) ?? Promise.resolve()
-	const next = prev.then(run, run)
-	flowMutationQueues.set(
-		key,
-		next.catch(() => {}),
-	)
-	return next
+	})
 }
 
 export async function listFlows(workspacePath: string): Promise<FlowDefinition[]> {
-	const flowsDir = path.join(workspacePath, ".caret", "flows")
+	const flowsDir = flowsDirPath(workspacePath)
 	try {
 		const entries = await fs.readdir(flowsDir, { withFileTypes: true })
 		const flows: FlowDefinition[] = []
 
 		for (const entry of entries) {
 			if (!entry.isFile() || !entry.name.endsWith(".flow.json")) continue
-			const flowId = entry.name.replace(".flow.json", "")
-			const flow = await readFlowDefinition(workspacePath, flowId)
+			const flow = await readFlowFile(path.join(flowsDir, entry.name))
 			if (flow) {
 				flows.push(flow)
 			}
