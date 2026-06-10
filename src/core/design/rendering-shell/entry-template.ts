@@ -219,12 +219,33 @@ if (isolatedPageId && mode === "focused") {
 } else if (isolatedPageId) {
   document.body.style.background = "#ffffff"
   document.body.style.overflow = "auto"
+
+  // Failures must be readable inside a canvas thumbnail (scaled to ~0.26),
+  // hence the very large type. A blank white box is indistinguishable from a
+  // blank page and hides bad AI output.
+  const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  const showPageError = (title: string, detail: string) => {
+    document.getElementById("root")!.innerHTML =
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:48px;background:#fff5f5;color:#b91c1c;font-family:system-ui,sans-serif;text-align:center">' +
+      '<div style="font-size:96px;line-height:1">⚠</div>' +
+      '<div style="font-size:48px;font-weight:700;margin:24px 0 16px">' + escapeHtml(title) + '</div>' +
+      '<div style="font-size:26px;color:#7f1d1d;max-width:900px;word-break:break-word">' + escapeHtml(detail) + '</div>' +
+      '</div>'
+  }
+  window.addEventListener("error", (e) => {
+    showPageError("Page crashed", String(e.message || e.error || "Unknown runtime error"))
+  })
+
   import("virtual:caret-router").then(({ routes }: any) => {
     const route = routes.find((r: any) => r.name === isolatedPageId)
-    if (route) {
-      const PageComponent = route.component
-      createRoot(document.getElementById("root")!).render(<PageComponent />)
+    if (!route) {
+      showPageError("Page not found", "pages/" + isolatedPageId + "/index.tsx is missing or failed to compile")
+      return
     }
+    const PageComponent = route.component
+    createRoot(document.getElementById("root")!).render(<PageComponent />)
+  }).catch((err) => {
+    showPageError("Page failed to load", String(err))
   })
 } else {
   // Canvas mode deliberately does NOT load react-grab: the editable page lives

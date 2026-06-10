@@ -436,7 +436,7 @@ function generateCanvasView(): string {
 		        if (data?.mode) setLayoutMode(data.mode)
 		        if (data?.positions) setManualPositions(data.positions)
 		      })
-		      .catch(() => {})
+		      .catch((e) => log("[canvas] canvas-layout.json is unreadable — falling back to auto layout (" + e + ")"))
 		  }, [])
 
 		  const handleWheel = useCallback((e: React.WheelEvent) => {

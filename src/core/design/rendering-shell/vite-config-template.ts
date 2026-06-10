@@ -6,7 +6,7 @@ export async function generateViteConfig(caretDir: string): Promise<void> {
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
 import { resolve, join } from "path"
-import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "fs"
+import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "fs"
 
 // Directory-based routing plugin with page watching
 function caretRouterPlugin() {
@@ -230,11 +230,25 @@ function caretApiPlugin() {
             req.on("data", chunk => { body += chunk })
             req.on("end", () => {
               try {
-                writeFileSync(layoutPath, body)
+                // Validate before persisting: a garbage write here would
+                // silently reset the layout on the next canvas load.
+                const layout = JSON.parse(body)
+                const validMode = layout && (layout.mode === "auto" || layout.mode === "manual")
+                const positions = layout && layout.positions
+                const validPositions = positions && typeof positions === "object" &&
+                  Object.values(positions).every(p => p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y))
+                if (!validMode || !validPositions) {
+                  res.statusCode = 400
+                  res.end("invalid canvas layout payload")
+                  return
+                }
+                const tmpPath = layoutPath + ".tmp"
+                writeFileSync(tmpPath, JSON.stringify(layout, null, 2))
+                renameSync(tmpPath, layoutPath)
                 res.statusCode = 200
                 res.end("ok")
               } catch (e) {
-                res.statusCode = 500
+                res.statusCode = 400
                 res.end(String(e))
               }
             })
