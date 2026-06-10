@@ -9,12 +9,19 @@ import { generateViteConfig } from "./vite-config-template"
 
 let viteProcess: child_process.ChildProcess | null = null
 let currentPort: number | null = null
+let stoppingIntentionally = false
+let onUnexpectedExit: (() => void) | null = null
+
+/** Called when the vite process dies while design mode is still on. */
+export function setOnUnexpectedShellExit(handler: (() => void) | null): void {
+	onUnexpectedExit = handler
+}
 
 const REQUIRED_DEPS: Record<string, string> = {
 	"react-grab": "^0.1.37",
 	tailwindcss: "^4.1.0",
 	"@tailwindcss/vite": "^4.1.0",
-	"html2canvas": "^1.4.1",
+	html2canvas: "^1.4.1",
 }
 
 export async function startRenderingShell(workspacePath: string): Promise<{ port: number; dispose: () => void }> {
@@ -60,6 +67,7 @@ export async function startRenderingShell(workspacePath: string): Promise<{ port
 
 export function stopRenderingShell(): void {
 	if (viteProcess) {
+		stoppingIntentionally = true
 		viteProcess.kill()
 		viteProcess = null
 		currentPort = null
@@ -101,6 +109,7 @@ async function spawnVite(cwd: string): Promise<number> {
 		const viteBin = path.join(cwd, "node_modules", ".bin", "vite")
 		const logStream: WriteStream = createWriteStream(path.join(cwd, "vite.log"), { flags: "w" })
 
+		stoppingIntentionally = false
 		viteProcess = child_process.spawn(viteBin, ["--host", "localhost"], {
 			cwd,
 			stdio: "pipe",
@@ -137,6 +146,7 @@ async function spawnVite(cwd: string): Promise<number> {
 
 		viteProcess.on("close", (code) => {
 			logStream.end()
+			const wasRunning = resolved
 			if (!resolved) {
 				resolved = true
 				clearTimeout(timeout)
@@ -144,6 +154,12 @@ async function spawnVite(cwd: string): Promise<number> {
 			}
 			viteProcess = null
 			currentPort = null
+			if (wasRunning && !stoppingIntentionally) {
+				// Crashed mid-session: the preview iframe is now dead with no
+				// signal of its own — surface it and let the user restart.
+				Logger.error(`[design] Vite dev server exited unexpectedly (code ${code})`)
+				onUnexpectedExit?.()
+			}
 		})
 
 		viteProcess.on("error", (err) => {
