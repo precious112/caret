@@ -20,10 +20,15 @@ export async function generateEntryFiles(caretDir: string): Promise<void> {
 `
 
 	// main.tsx — mounts the canvas app, or a single page if ?page= is set (for iframe embedding)
+	// NOTE: react-grab/styles.css must NOT be imported here. react-grab injects
+	// its own styles into its shadow root at runtime; the document-level sheet
+	// styles nothing but ships ~200 unlayered Tailwind-named utility classes
+	// (.hidden, .block, .flex, ...) that beat the page's layered Tailwind
+	// utilities in the cascade — permanently hiding any "hidden md:block"
+	// responsive pattern.
 	const mainTsx = `import React from "react"
 import { createRoot } from "react-dom/client"
 import "./global.css"
-import "react-grab/styles.css"
 
 const params = new URLSearchParams(window.location.search)
 const isolatedPageId = params.get("page")

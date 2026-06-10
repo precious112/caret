@@ -73,6 +73,30 @@ const FIXTURE_PAGES = [
 	{ id: "contact", title: "Contact" },
 	{ id: "dashboard", title: "Dashboard" },
 ]
+// FIXTURE_PAGES plus the responsive "listing" page seeded separately
+const TOTAL_PAGES = FIXTURE_PAGES.length + 1
+
+// Canonical responsive dual-view pattern: mobile cards (md:hidden) + desktop
+// table (hidden md:block). Historically broken by react-grab's unlayered
+// utility CSS beating the page's layered md:block — scenario (n) locks it.
+const RESPONSIVE_PAGE = `export default function Listing() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <h1 className="text-2xl font-bold text-zinc-900">Listing</h1>
+      <div data-testid="mobile-cards" className="md:hidden space-y-2">
+        <div className="p-3 rounded-lg border border-zinc-200">Card A</div>
+        <div className="p-3 rounded-lg border border-zinc-200">Card B</div>
+      </div>
+      <div data-testid="desktop-table" className="hidden md:block">
+        <table className="w-full text-left">
+          <thead><tr><th className="px-4 py-2">Name</th></tr></thead>
+          <tbody><tr><td className="px-4 py-2">Row A</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+`
 
 // One global flow root (home) so the simulate scenario is deterministic.
 const FIXTURE_FLOWS: Record<string, object> = {
@@ -109,6 +133,13 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 			JSON.stringify({ id: page.id, title: page.title, type: "page", states: [], tags: ["fixture"] }, null, 2),
 		)
 	}
+	const listingDir = path.join(caretDir, "pages", "listing")
+	await fs.mkdir(listingDir, { recursive: true })
+	await fs.writeFile(path.join(listingDir, "index.tsx"), RESPONSIVE_PAGE)
+	await fs.writeFile(
+		path.join(listingDir, "meta.json"),
+		JSON.stringify({ id: "listing", title: "Listing", type: "page", states: [], tags: ["fixture"] }, null, 2),
+	)
 	for (const [file, flow] of Object.entries(FIXTURE_FLOWS)) {
 		await fs.writeFile(path.join(caretDir, "flows", file), JSON.stringify(flow, null, 2))
 	}
@@ -303,7 +334,7 @@ async function main() {
 		const { page } = await openCanvas(ctx)
 		const frames = await page.locator(".caret-canvas-frame").count()
 		await page.close()
-		if (frames !== FIXTURE_PAGES.length) throw new Error(`expected ${FIXTURE_PAGES.length} frames, got ${frames}`)
+		if (frames !== TOTAL_PAGES) throw new Error(`expected ${TOTAL_PAGES} frames, got ${frames}`)
 		return `${frames} page frames rendered`
 	})
 
@@ -415,7 +446,7 @@ async function main() {
 			await fs.rm(indexPath)
 			await waitFor(async () => (await page.locator(".caret-canvas-frame-broken").count()) > 0, 15000, "broken-page card")
 			const frames = await page.locator(".caret-canvas-frame").count()
-			if (frames !== FIXTURE_PAGES.length) throw new Error(`expected ${FIXTURE_PAGES.length} frames, got ${frames}`)
+			if (frames !== TOTAL_PAGES) throw new Error(`expected ${TOTAL_PAGES} frames, got ${frames}`)
 			return "broken-page card rendered; all other pages still on canvas"
 		} finally {
 			await fs.writeFile(indexPath, original)
@@ -430,7 +461,7 @@ async function main() {
 			const { page } = await openCanvas(ctx)
 			const frames = await page.locator(".caret-canvas-frame").count()
 			await page.close()
-			if (frames !== FIXTURE_PAGES.length) throw new Error(`canvas broke: ${frames} frames`)
+			if (frames !== TOTAL_PAGES) throw new Error(`canvas broke: ${frames} frames`)
 			return "canvas renders in auto layout despite corrupt layout file"
 		} finally {
 			await fs.rm(layoutPath, { force: true })
@@ -554,6 +585,46 @@ async function main() {
 		)
 		await page.close()
 		return "route-not-found error card rendered in isolated page mode"
+	})
+
+	await scenario("n. responsive variants work (hidden md:block toggles across viewports)", async () => {
+		const readState = async (p: import("playwright").Page) =>
+			p.evaluate(() => ({
+				table: getComputedStyle(document.querySelector('[data-testid="desktop-table"]')!).display,
+				cards: getComputedStyle(document.querySelector('[data-testid="mobile-cards"]')!).display,
+			}))
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		await page.goto(`http://localhost:${port}/?page=listing`)
+		await page.waitForSelector('[data-testid="desktop-table"]', { state: "attached", timeout: 15000 })
+		const desktop = await readState(page)
+		await page.setViewportSize({ width: 390, height: 844 })
+		await page.waitForTimeout(500)
+		const mobile = await readState(page)
+		await page.close()
+		if (desktop.table === "none" || desktop.cards !== "none")
+			throw new Error(`desktop wrong: table=${desktop.table} cards=${desktop.cards} (md:block must beat hidden)`)
+		if (mobile.table !== "none" || mobile.cards === "none")
+			throw new Error(`mobile wrong: table=${mobile.table} cards=${mobile.cards}`)
+		// Same page in focused mode with react-grab active: responsive variants
+		// must still win, and the editor's shadow-root styles must be intact.
+		const fpage = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		await fpage.goto(`http://localhost:${port}/?page=listing&mode=focused`)
+		await fpage.waitForSelector('[data-testid="desktop-table"]', { state: "attached", timeout: 15000 })
+		await fpage.waitForTimeout(2500)
+		const focused = await fpage.evaluate(() => {
+			const sr = document.querySelector("[data-react-grab]")?.shadowRoot
+			return {
+				table: getComputedStyle(document.querySelector('[data-testid="desktop-table"]')!).display,
+				editorStyleBytes: sr
+					? [...sr.querySelectorAll("style")].reduce((n, s) => n + (s.textContent || "").length, 0)
+					: 0,
+			}
+		})
+		await fpage.close()
+		if (focused.table === "none") throw new Error("focused mode: md:block still loses to hidden")
+		if (focused.editorStyleBytes < 1000)
+			throw new Error(`react-grab shadow styles missing (${focused.editorStyleBytes} bytes)`)
+		return `desktop: table ${desktop.table}/cards ${desktop.cards}; mobile inverse; focused-mode table ${focused.table}, editor styles ${Math.round(focused.editorStyleBytes / 1024)}KB intact`
 	})
 
 	await browser.close()
