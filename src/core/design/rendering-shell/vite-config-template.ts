@@ -16,20 +16,26 @@ function caretRouterPlugin() {
     if (!existsSync(pagesDir)) {
       return "export const routes = []\\nexport const pageMetas = []"
     }
-    const pages = readdirSync(pagesDir, { withFileTypes: true })
+    const allDirs = readdirSync(pagesDir, { withFileTypes: true })
       .filter(d => d.isDirectory())
       .map(d => d.name)
+    // A page dir without index.tsx is broken AI output. Importing it would
+    // break this whole module (and with it every page on the canvas), so only
+    // import intact pages and mark the rest so the canvas can flag them.
+    const pages = allDirs.filter(p => existsSync(join(pagesDir, p, "index.tsx")))
+    const broken = allDirs.filter(p => !existsSync(join(pagesDir, p, "index.tsx")))
 
     const imports = pages.map((p, i) => \`import Page\${i} from "./pages/\${p}/index.tsx"\`).join("\\n")
     const routeEntries = pages.map((p, i) => \`  { path: "/\${p}", component: Page\${i}, name: "\${p}" }\`).join(",\\n")
 
-    const metas = pages.map(p => {
+    const metas = allDirs.map(p => {
+      const isBroken = broken.includes(p)
       try {
         const metaPath = join(pagesDir, p, "meta.json")
         const meta = JSON.parse(readFileSync(metaPath, "utf-8"))
-        return JSON.stringify({ ...meta, id: meta.id || p })
+        return JSON.stringify({ ...meta, id: meta.id || p, ...(isBroken ? { broken: true } : {}) })
       } catch {
-        return JSON.stringify({ id: p, title: p, type: "page", states: [], tags: [] })
+        return JSON.stringify({ id: p, title: p, type: "page", states: [], tags: [], ...(isBroken ? { broken: true } : {}) })
       }
     })
     const metaEntries = metas.map(m => \`  \${m}\`).join(",\\n")
@@ -67,6 +73,17 @@ function caretRouterPlugin() {
           server.ws.send({ type: "custom", event: "caret:pages-changed" })
         }
       })
+      // index.tsx appearing/disappearing changes which pages are importable —
+      // without this, a deleted page file never invalidates the router module.
+      const handleIndexFile = (p) => {
+        if (p.startsWith(pagesDir) && p.endsWith("index.tsx")) {
+          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-router")
+          if (mod) server.moduleGraph.invalidateModule(mod)
+          server.ws.send({ type: "custom", event: "caret:pages-changed" })
+        }
+      }
+      server.watcher.on("add", handleIndexFile)
+      server.watcher.on("unlink", handleIndexFile)
     },
   }
 }
@@ -215,11 +232,16 @@ function caretApiPlugin() {
               ? readdirSync(pagesDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)
               : []
             const metas = pages.map(p => {
+              const isBroken = !existsSync(join(pagesDir, p, "index.tsx"))
+              let meta
               try {
-                return JSON.parse(readFileSync(join(pagesDir, p, "meta.json"), "utf-8"))
+                meta = JSON.parse(readFileSync(join(pagesDir, p, "meta.json"), "utf-8"))
+                meta.id = meta.id || p
               } catch {
-                return { id: p, title: p, type: "page", states: [], tags: [] }
+                meta = { id: p, title: p, type: "page", states: [], tags: [] }
               }
+              if (isBroken) meta.broken = true
+              return meta
             })
             res.setHeader("Content-Type", "application/json")
             res.end(JSON.stringify(metas))

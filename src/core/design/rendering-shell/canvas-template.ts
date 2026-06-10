@@ -34,6 +34,8 @@ function generateTypes(): string {
 		  type: string
 		  states: string[]
 		  tags: string[]
+		  /** Set when the page dir has no importable index.tsx (bad AI output). */
+		  broken?: boolean
 		}
 
 		export interface CanvasTransform {
@@ -227,7 +229,7 @@ function generateCanvasApp(): string {
 function generateCanvasView(): string {
 	return dedent`
 		import React, { useState, useRef, useCallback, useEffect } from "react"
-		import { PageThumbnail } from "./PageThumbnail"
+		import { BrokenPageCard, PageThumbnail } from "./PageThumbnail"
 		import type { PageInfo, CanvasTransform, CanvasLayout, LayoutMode, ViewportPreset, FlowDefinition } from "./types"
 		import { VIEWPORT_PRESETS } from "./types"
 
@@ -591,7 +593,7 @@ function generateCanvasView(): string {
 		  // The simulation entry point is the page no flow edge points to (the flow root).
 		  // Cyclic flows have no root, so fall back to the first step, then the first page.
 		  const getSimStartPage = (): string | null => {
-		    const pageExists = (id: string) => pages.some(p => p.id === id)
+		    const pageExists = (id: string) => pages.some(p => p.id === id && !p.broken)
 		    const candidateFlows = activeFlowId ? flows.filter(f => f.id === activeFlowId) : flows
 		    const targets = new Set<string>()
 		    for (const flow of candidateFlows) {
@@ -691,7 +693,9 @@ function generateCanvasView(): string {
 		                  </div>
 		                )}
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
-		                  <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />
+		                  {page.broken
+		                    ? <BrokenPageCard pageId={page.id} title={page.title || page.id} thumbWidth={THUMB_WIDTH} thumbHeight={activeThumbHeight} />
+		                    : <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />}
 		                  {showFlows && (
 		                    <div className="caret-edge-connector" style={{ top: conn.y - y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
 		                  )}
@@ -711,8 +715,10 @@ function generateCanvasView(): string {
 		                style={{ position: "absolute", left: pos.x, top: pos.y }}
 		                onPointerDown={(e) => handleThumbPointerDown(page.id, pos.x, pos.y, e)}
 		              >
-		                <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
-		                  onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />
+		                {page.broken
+		                  ? <BrokenPageCard pageId={page.id} title={page.title || page.id} thumbWidth={THUMB_WIDTH} thumbHeight={activeThumbHeight} />
+		                  : <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
+		                      onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />}
 		                {showFlows && (
 		                  <div className="caret-edge-connector" style={{ top: conn.y - pos.y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
 		                )}
@@ -800,6 +806,26 @@ function generatePageThumbnail(): string {
 		  frameHeight: number
 		  thumbWidth: number
 		  onClick?: () => void
+		}
+
+		export function BrokenPageCard({ pageId, title, thumbWidth, thumbHeight }: { pageId: string; title: string; thumbWidth: number; thumbHeight: number }) {
+		  return (
+		    <div className="caret-canvas-frame">
+		      <div className="caret-canvas-frame-label">
+		        <span className="caret-canvas-frame-title">{title}</span>
+		        <div className="caret-canvas-frame-tags">
+		          <span className="caret-canvas-frame-tag broken">broken</span>
+		        </div>
+		      </div>
+		      <div className="caret-canvas-frame-viewport caret-canvas-frame-broken" style={{ width: thumbWidth, height: thumbHeight }}>
+		        <div className="caret-canvas-frame-broken-inner">
+		          <div className="caret-canvas-frame-broken-icon">⚠</div>
+		          <div>pages/{pageId}/index.tsx is missing or invalid</div>
+		          <div className="caret-canvas-frame-broken-hint">Fix or regenerate this page</div>
+		        </div>
+		      </div>
+		    </div>
+		  )
 		}
 
 		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick }: Props) {
@@ -1455,6 +1481,35 @@ function generateCanvasCSS(): string {
 		  border-radius: 4px;
 		  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
 		  background: #fff;
+		}
+
+		/* Broken page (missing/invalid index.tsx) */
+		.caret-canvas-frame-broken {
+		  background: #1a0e0e;
+		  border: 1px solid rgba(239, 68, 68, 0.45);
+		  display: flex;
+		  align-items: center;
+		  justify-content: center;
+		}
+		.caret-canvas-frame-broken-inner {
+		  text-align: center;
+		  color: #fca5a5;
+		  font-size: 13px;
+		  padding: 16px;
+		  font-family: ui-monospace, monospace;
+		}
+		.caret-canvas-frame-broken-icon {
+		  font-size: 28px;
+		  margin-bottom: 8px;
+		}
+		.caret-canvas-frame-broken-hint {
+		  color: #9ca3af;
+		  font-size: 11px;
+		  margin-top: 6px;
+		}
+		.caret-canvas-frame-tag.broken {
+		  background: rgba(239, 68, 68, 0.2);
+		  color: #f87171;
 		}
 
 		.caret-canvas-frame:hover .caret-canvas-frame-viewport {
