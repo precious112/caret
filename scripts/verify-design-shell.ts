@@ -30,7 +30,7 @@ const EXTRA_DEPS: Record<string, string> = {
 	"react-grab": "^0.1.37",
 	tailwindcss: "^4.1.0",
 	"@tailwindcss/vite": "^4.1.0",
-	html2canvas: "^1.4.1",
+	"modern-screenshot": "^4.6.0",
 }
 
 const args = process.argv.slice(2)
@@ -73,8 +73,25 @@ const FIXTURE_PAGES = [
 	{ id: "contact", title: "Contact" },
 	{ id: "dashboard", title: "Dashboard" },
 ]
-// FIXTURE_PAGES plus the responsive "listing" page seeded separately
-const TOTAL_PAGES = FIXTURE_PAGES.length + 1
+// FIXTURE_PAGES plus the "listing" and "fragmented" pages seeded separately
+const TOTAL_PAGES = FIXTURE_PAGES.length + 2
+
+// JSX fragments used to break the source-capture plugin (its old regex only
+// matched jsxDEV-only imports). Scenario (o) asserts exact line resolution
+// for an element inside a fragment. The h1 below sits on line 5 — keep in
+// sync with FRAGMENT_H1_LINE.
+const FRAGMENT_PAGE = `export default function Fragmented() {
+  return (
+    <>
+      <div className="min-h-screen bg-white p-8">
+        <h1 data-testid="frag-title" className="text-3xl font-bold text-zinc-900">Fragment Title</h1>
+        <p className="text-zinc-600">Inside a fragment.</p>
+      </div>
+    </>
+  )
+}
+`
+const FRAGMENT_H1_LINE = 5
 
 // Canonical responsive dual-view pattern: mobile cards (md:hidden) + desktop
 // table (hidden md:block). Historically broken by react-grab's unlayered
@@ -139,6 +156,13 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 	await fs.writeFile(
 		path.join(listingDir, "meta.json"),
 		JSON.stringify({ id: "listing", title: "Listing", type: "page", states: [], tags: ["fixture"] }, null, 2),
+	)
+	const fragmentedDir = path.join(caretDir, "pages", "fragmented")
+	await fs.mkdir(fragmentedDir, { recursive: true })
+	await fs.writeFile(path.join(fragmentedDir, "index.tsx"), FRAGMENT_PAGE)
+	await fs.writeFile(
+		path.join(fragmentedDir, "meta.json"),
+		JSON.stringify({ id: "fragmented", title: "Fragmented", type: "page", states: [], tags: ["fixture"] }, null, 2),
 	)
 	for (const [file, flow] of Object.entries(FIXTURE_FLOWS)) {
 		await fs.writeFile(path.join(caretDir, "flows", file), JSON.stringify(flow, null, 2))
@@ -525,7 +549,7 @@ async function main() {
 		return "0 instances in canvas doc, 1 in focused iframe"
 	})
 
-	await scenario("j. overlay painter captures a screenshot", async () => {
+	await scenario("j. overlay painter screenshot matches the cropped region", async () => {
 		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 		await page.goto(`http://localhost:${port}/?page=home&mode=focused`)
 		await page.waitForSelector(".caret-focused-paint-btn", { timeout: 15000 })
@@ -534,28 +558,59 @@ async function main() {
 			;(window as any).__POSTED__ = []
 			window.addEventListener("message", (e) => {
 				if (e.data?.type === "overlay-edit")
-					(window as any).__POSTED__.push({ shotLen: (e.data.payload?.screenshotDataUrl || "").length })
+					(window as any).__POSTED__.push({ shot: e.data.payload?.screenshotDataUrl || "" })
 			})
 			;(window as any).__REACT_GRAB__?.deactivate?.()
 		})
+		// crop exactly the blue "Go" button so we can pixel-verify the content
+		const target = await page.evaluate(() => {
+			const btn = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Go")!
+			const r = btn.getBoundingClientRect()
+			return { x: r.x, y: r.y, w: r.width, h: r.height }
+		})
 		await page.click(".caret-focused-paint-btn", { force: true })
 		await page.waitForTimeout(400)
-		await page.mouse.move(400, 300)
+		await page.mouse.move(target.x, target.y)
 		await page.mouse.down()
-		await page.mouse.move(800, 600, { steps: 5 })
+		await page.mouse.move(target.x + target.w, target.y + target.h, { steps: 5 })
 		await page.mouse.up()
 		await page.waitForSelector(".caret-overlay-prompt textarea, .caret-overlay-prompt input", { timeout: 5000 })
 		await page.fill(".caret-overlay-prompt textarea, .caret-overlay-prompt input", "make this blue")
 		await page.keyboard.press("Enter")
 		await waitFor(
 			async () => ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).length > 0,
-			15000,
+			20000,
 			"overlay-edit message",
 		)
-		const posted = (await page.evaluate(() => (window as any).__POSTED__)) as Array<{ shotLen: number }>
+		const check = await page.evaluate(async () => {
+			const shot = (window as any).__POSTED__[0].shot as string
+			if (!shot) return { error: "no screenshot" }
+			const img = new Image()
+			await new Promise((res, rej) => {
+				img.onload = res
+				img.onerror = rej
+				img.src = shot
+			})
+			const c = document.createElement("canvas")
+			c.width = img.width
+			c.height = img.height
+			const ctx = c.getContext("2d")!
+			ctx.drawImage(img, 0, 0)
+			// The crop is the blue button: most pixels must be blue-dominant
+			// (the white "Go" glyph and rounded corners account for the rest).
+			const d = ctx.getImageData(0, 0, img.width, img.height).data
+			let blue = 0
+			const total = img.width * img.height
+			for (let i = 0; i < d.length; i += 4) {
+				if (d[i + 2] > 150 && d[i + 2] > d[i] + 60 && d[i + 2] > d[i + 1] + 40) blue++
+			}
+			return { size: `${img.width}x${img.height}`, blueFraction: blue / total }
+		})
 		await page.close()
-		if (!posted[0] || posted[0].shotLen < 1000) throw new Error(`screenshot missing/too small: ${JSON.stringify(posted)}`)
-		return `overlay-edit posted with ${Math.round(posted[0].shotLen / 1024)}KB screenshot`
+		if ("error" in check) throw new Error(String(check.error))
+		if (check.blueFraction! < 0.3)
+			throw new Error(`only ${Math.round(check.blueFraction! * 100)}% of crop pixels are blue — offset crop?`)
+		return `crop ${check.size}: ${Math.round(check.blueFraction! * 100)}% blue pixels — content matches the cropped button`
 	})
 
 	await scenario("k. focused FABs adapt to a light page background", async () => {
@@ -625,6 +680,36 @@ async function main() {
 		if (focused.editorStyleBytes < 1000)
 			throw new Error(`react-grab shadow styles missing (${focused.editorStyleBytes} bytes)`)
 		return `desktop: table ${desktop.table}/cards ${desktop.cards}; mobile inverse; focused-mode table ${focused.table}, editor styles ${Math.round(focused.editorStyleBytes / 1024)}KB intact`
+	})
+
+	await scenario("o. element click resolves the exact source line (fragment page)", async () => {
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		await page.goto(`http://localhost:${port}/?page=fragmented&mode=focused`)
+		await page.waitForSelector('[data-testid="frag-title"]', { state: "attached", timeout: 15000 })
+		await page.waitForTimeout(2500)
+		await page.evaluate(() => {
+			;(window as any).__SELECTED__ = []
+			window.addEventListener("message", (e) => {
+				if (e.data?.type === "element-selected") (window as any).__SELECTED__.push(e.data.payload)
+			})
+		})
+		const h1 = await page.evaluate(() => {
+			const el = document.querySelector('[data-testid="frag-title"]')!
+			const r = el.getBoundingClientRect()
+			return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+		})
+		await page.mouse.click(h1.x, h1.y)
+		await waitFor(
+			async () => ((await page.evaluate(() => (window as any).__SELECTED__)) as any[]).length > 0,
+			10000,
+			"element-selected message",
+		)
+		const sel = ((await page.evaluate(() => (window as any).__SELECTED__)) as any[])[0]
+		await page.close()
+		if (!String(sel.filePath).includes("pages/fragmented")) throw new Error(`wrong file: ${JSON.stringify(sel)}`)
+		if (sel.lineNumber !== FRAGMENT_H1_LINE)
+			throw new Error(`resolved line ${sel.lineNumber}, expected ${FRAGMENT_H1_LINE} (source capture broken?)`)
+		return `clicked h1 in a fragment file resolves to ${sel.filePath}:${sel.lineNumber} exactly`
 	})
 
 	await browser.close()

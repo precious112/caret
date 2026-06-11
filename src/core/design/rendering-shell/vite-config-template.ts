@@ -357,24 +357,31 @@ function caretApiPlugin() {
 // Captures SWC's __source arg from jsxDEV calls into a global WeakMap.
 // SWC passes {fileName, lineNumber, columnNumber} as the 5th arg to jsxDEV.
 // React 19 ignores it, but we intercept it for exact source locations.
+// Implemented by shimming the react/jsx-dev-runtime MODULE rather than
+// regex-rewriting transformed source: text matching silently broke for any
+// file whose import also pulled in Fragment (i.e. files using <>...</>),
+// which made element->source resolution fall back to drifted stack lines.
 function caretSourceCapturePlugin() {
+  const SHIM_ID = "\\0caret-jsx-dev-shim"
   return {
     name: "caret-source-capture",
-    enforce: "post" as const,
-    transform(code: string, id: string) {
-      if (!id.endsWith(".tsx") && !id.endsWith(".jsx")) return null
-      // SWC emits: import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime"
-      const importRe = /import\\s*\\{\\s*jsxDEV\\s+as\\s+(\\w+)\\s*\\}\\s*from\\s*["']react\\/jsx-dev-runtime["']/
-      const match = code.match(importRe)
-      if (!match) return null
-      const localName = match[1]
-      // Replace the import with a wrapped version
-      const wrapped = code.replace(
-        importRe,
-        \`import { jsxDEV as __origJsxDEV__ } from "react/jsx-dev-runtime";\\n\` +
-        \`const \${localName} = (t,p,k,s,src,self) => { if(src&&p&&typeof p==="object") (window.__caretSourceMap||(window.__caretSourceMap=new WeakMap())).set(p,src); return __origJsxDEV__(t,p,k,s,src,self) };\`
-      )
-      return { code: wrapped, map: null }
+    enforce: "pre" as const,
+    resolveId(source: string, importer: string | undefined) {
+      if (source !== "react/jsx-dev-runtime") return null
+      if (!importer || importer === SHIM_ID) return null
+      if (!importer.endsWith(".tsx") && !importer.endsWith(".jsx")) return null
+      return SHIM_ID
+    },
+    load(id: string) {
+      if (id !== SHIM_ID) return null
+      return [
+        'import * as __runtime from "react/jsx-dev-runtime"',
+        "export const Fragment = __runtime.Fragment",
+        "export const jsxDEV = (t, p, k, s, src, self) => {",
+        '  if (src && p && typeof p === "object") (window.__caretSourceMap || (window.__caretSourceMap = new WeakMap())).set(p, src)',
+        "  return __runtime.jsxDEV(t, p, k, s, src, self)",
+        "}",
+      ].join("\\n")
     },
   }
 }

@@ -1154,7 +1154,7 @@ function generateSimulationView(): string {
 function generateOverlayPainter(): string {
 	return dedent`
 		import React, { useState, useRef, useCallback } from "react"
-		import html2canvas from "html2canvas"
+		import { domToCanvas } from "modern-screenshot"
 		import { bridge } from "../bridge"
 
 		interface Props {
@@ -1198,98 +1198,20 @@ function generateOverlayPainter(): string {
 		      let screenshotDataUrl = ""
 
 		      try {
-		        const colorFnRe = /(oklch|oklab|lab|lch|hwb|color-mix|color)\\([^)]*(?:\\([^)]*\\)[^)]*)*\\)/g
-		        const cache = new Map<string, string>()
-		        const cvs = document.createElement("canvas")
-		        cvs.width = 1
-		        cvs.height = 1
-		        const cvCtx = cvs.getContext("2d")!
-		        function toRgb(value: string): string {
-		          if (cache.has(value)) return cache.get(value)!
-		          try {
-		            cvCtx.clearRect(0, 0, 1, 1)
-		            cvCtx.fillStyle = "rgba(0,0,0,0)"
-		            cvCtx.fillStyle = value
-		            cvCtx.fillRect(0, 0, 1, 1)
-		            const [r, g, b, a] = cvCtx.getImageData(0, 0, 1, 1).data
-		            const rgb = a === 0 ? "transparent" : a === 255 ? "rgb(" + r + ", " + g + ", " + b + ")" : "rgba(" + r + ", " + g + ", " + b + ", " + (a / 255).toFixed(3) + ")"
-		            cache.set(value, rgb)
-		            return rgb
-		          } catch {
-		            return value
-		          }
-		        }
-		        const originals = new Map<HTMLStyleElement, string>()
-		        let replacedCount = 0
-
-		        document.querySelectorAll("style").forEach((s) => {
-		          if (s.textContent && colorFnRe.test(s.textContent)) {
-		            originals.set(s as HTMLStyleElement, s.textContent)
-		            colorFnRe.lastIndex = 0
-		            s.textContent = s.textContent.replace(colorFnRe, (m) => { replacedCount++; return toRgb(m) })
-		          }
+		        // modern-screenshot rasterizes via SVG foreignObject — the browser's
+		        // own engine does the layout/painting, so modern CSS (cascade layers,
+		        // nesting, oklch) renders exactly like the live page. Its predecessor
+		        // html2canvas re-parsed CSS itself and mangled Tailwind v4 output,
+		        // shifting content relative to the user's crop.
+		        const viewportCanvas = await domToCanvas(document.documentElement, {
+		          width: window.innerWidth,
+		          height: window.innerHeight,
+		          scale: 1,
+		          filter: (node: Node) => {
+		            const el = node as Element
+		            return !(el.classList && (el.classList.contains("caret-overlay") || el.classList.contains("caret-focused-fab")))
+		          },
 		        })
-
-		        let linkedSheetColors = 0
-		        for (const sheet of Array.from(document.styleSheets)) {
-		          if (sheet.ownerNode?.nodeName === "STYLE") continue
-		          try {
-		            const cssText = Array.from(sheet.cssRules).map(r => r.cssText).join(" ")
-		            const matches = cssText.match(colorFnRe)
-		            if (matches) linkedSheetColors += matches.length
-		          } catch {}
-		        }
-
-		        const origGCS = window.getComputedStyle
-		        const convertColorStr = (val: string): string => {
-		          colorFnRe.lastIndex = 0
-		          if (colorFnRe.test(val)) {
-		            colorFnRe.lastIndex = 0
-		            return val.replace(colorFnRe, (m) => toRgb(m))
-		          }
-		          return val
-		        }
-		        window.getComputedStyle = function(el: Element, pseudo?: string | null) {
-		          const style = origGCS.call(window, el, pseudo)
-		          return new Proxy(style, {
-		            get(target, prop) {
-		              if (prop === "getPropertyValue") {
-		                return function(name: string) {
-		                  const val = target.getPropertyValue(name)
-		                  return typeof val === "string" && val.length > 3 ? convertColorStr(val) : val
-		                }
-		              }
-		              const val = Reflect.get(target, prop)
-		              if (typeof val === "string" && val.length > 3) return convertColorStr(val)
-		              if (typeof val === "function") return val.bind(target)
-		              return val
-		            }
-		          }) as CSSStyleDeclaration
-		        }
-
-		        bridge.send({ type: "log", payload: { level: "info", message: "[caret] Color replacement: " + replacedCount + " in stylesheets, getComputedStyle patched" } })
-
-		        let viewportCanvas: HTMLCanvasElement
-		        try {
-		          viewportCanvas = await html2canvas(document.documentElement, {
-		            width: window.innerWidth,
-		            height: window.innerHeight,
-		            windowWidth: window.innerWidth,
-		            windowHeight: window.innerHeight,
-		            x: window.scrollX,
-		            y: window.scrollY,
-		            proxy: "/__caret/image-proxy",
-		            useCORS: true,
-		            scale: 1,
-		            logging: false,
-		            ignoreElements: (el: Element) => {
-		              return el.classList?.contains("caret-overlay") || el.classList?.contains("caret-focused-fab")
-		            },
-		          })
-		        } finally {
-		          window.getComputedStyle = origGCS
-		          originals.forEach((content, el) => { el.textContent = content })
-		        }
 
 		        const cropCanvas = document.createElement("canvas")
 		        cropCanvas.width = rect.w
