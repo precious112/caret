@@ -16,6 +16,15 @@ service DesignService {
   rpc searchGoogleFonts(StringRequest) returns (GoogleFontsResponse);
   rpc listDesignPages(EmptyRequest) returns (DesignPagesResponse);
   rpc getRenderingShellUrl(EmptyRequest) returns (String);
+  rpc syncDesignToApp(EmptyRequest) returns (SyncDesignResponse);
+}
+
+message SyncDesignResponse {
+  string status = 1;
+  string message = 2;
+  int32 shown = 3;
+  int32 total = 4;
+  int32 summarized = 5;
 }
 
 message FoundationTokensResponse {

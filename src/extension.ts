@@ -159,6 +159,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	)
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand("caret.syncNow", async () => {
+			const { runSync } = await import("./core/design/sync/sync-orchestrator")
+			const result = await runSync(webview.controller)
+			vscode.window.showInformationMessage(result.message)
+		}),
+	)
+
 	/*
 	We use the text document content provider API to show the left side for diff view by creating a
 	virtual document for the original content. This makes it readonly so users know to edit the right
@@ -209,6 +217,16 @@ export async function activate(context: vscode.ExtensionContext) {
 		})
 		.catch((error) => {
 			Logger.error("Failed to initialize design mode: " + error)
+		})
+
+	// Watch git HEAD to auto-prompt design→app sync when new .caret/ commits land.
+	// Self-guards on .caret/ presence, so it's safe to register unconditionally.
+	import("./core/design/sync/SyncWatcher")
+		.then((module) => {
+			context.subscriptions.push(module.createSyncWatcher(webview.controller))
+		})
+		.catch((error) => {
+			Logger.error("Failed to start sync watcher: " + error)
 		})
 
 	// Register size testing commands in development mode

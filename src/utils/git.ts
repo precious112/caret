@@ -278,6 +278,100 @@ export async function getLatestGitCommitHash(cwd: string): Promise<string | null
 	}
 }
 
+// Well-known hash of git's empty tree. Diffing against it makes the entire
+// current .caret/ show up as additions — the uniform code path for a first sync.
+const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+const CARET_PATHSPEC = "-- .caret/"
+
+export interface DesignFileDiff {
+	/** Repo-relative path, e.g. `.caret/pages/checkout/index.tsx`. */
+	path: string
+	/** The per-file `diff --git …` hunk text. */
+	hunk: string
+	/** Count of added/removed lines (diff body, excluding the +++/--- headers). */
+	changedLines: number
+}
+
+export interface DesignLayerDiff {
+	/** True when there is no prior sync bookmark — the whole design layer is "new". */
+	isFirstSync: boolean
+	/** `git diff --stat` for the full changed set — always complete, never truncated. */
+	stat: string
+	/** Per-file diffs, so callers can budget/pack them without losing scope. */
+	files: DesignFileDiff[]
+}
+
+/**
+ * Returns the design-layer (`.caret/`) changes since `sinceCommit` as structured
+ * per-file diffs plus a complete `--stat`. Output is intentionally NOT truncated
+ * here — the sync budget packer decides what to inline vs. summarize.
+ *
+ * @param sinceCommit last-synced commit hash, or null for a first-ever sync.
+ */
+export async function getDesignLayerDiffSince(cwd: string, sinceCommit: string | null): Promise<DesignLayerDiff> {
+	const base = sinceCommit ?? EMPTY_TREE_HASH
+	const isFirstSync = sinceCommit === null
+	const empty: DesignLayerDiff = { isFirstSync, stat: "", files: [] }
+
+	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd)) || !(await checkGitRepoHasCommits(cwd))) {
+		return empty
+	}
+
+	try {
+		const { stdout: stat } = await execAsync(`git --no-pager diff --stat ${base} HEAD ${CARET_PATHSPEC}`, {
+			cwd,
+			maxBuffer: 1024 * 1024 * 50,
+		})
+		const { stdout: raw } = await execAsync(`git --no-pager diff ${base} HEAD ${CARET_PATHSPEC}`, {
+			cwd,
+			maxBuffer: 1024 * 1024 * 50,
+		})
+		return { isFirstSync, stat: stat.trim(), files: parseDiffByFile(raw) }
+	} catch (error) {
+		Logger.error("Error computing design-layer diff:", error)
+		return empty
+	}
+}
+
+/**
+ * Cheap check for the watcher: are there unsynced `.caret/` changes since
+ * `sinceCommit`? `git diff --quiet` exits non-zero when differences exist.
+ */
+export async function hasDesignChangesSince(cwd: string, sinceCommit: string | null): Promise<boolean> {
+	const base = sinceCommit ?? EMPTY_TREE_HASH
+	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd)) || !(await checkGitRepoHasCommits(cwd))) {
+		return false
+	}
+	try {
+		await execAsync(`git --no-pager diff --quiet ${base} HEAD ${CARET_PATHSPEC}`, { cwd })
+		return false // exit 0 → no differences
+	} catch {
+		return true // non-zero exit → differences exist
+	}
+}
+
+/** Splits a combined `git diff` into per-file entries on `diff --git` boundaries. */
+function parseDiffByFile(raw: string): DesignFileDiff[] {
+	const trimmed = raw.trim()
+	if (!trimmed) {
+		return []
+	}
+	const files: DesignFileDiff[] = []
+	// Split on the start of each file header, keeping the marker.
+	const chunks = trimmed.split(/(?=^diff --git )/m).filter((c) => c.startsWith("diff --git "))
+	for (const hunk of chunks) {
+		const header = hunk.split("\n", 1)[0]
+		// `diff --git a/<path> b/<path>` — prefer the b/ (new) path.
+		const match = header.match(/^diff --git a\/(.+?) b\/(.+)$/)
+		const path = match ? match[2] : header.replace(/^diff --git /, "")
+		const changedLines = hunk
+			.split("\n")
+			.filter((l) => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---")).length
+		files.push({ path, hunk: hunk.trimEnd(), changedLines })
+	}
+	return files
+}
+
 function truncateOutput(content: string): string {
 	if (!GIT_OUTPUT_LINE_LIMIT) {
 		return content

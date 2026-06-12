@@ -235,6 +235,11 @@
 				"category": "Caret"
 			},
 			{
+				"command": "caret.syncNow",
+				"title": "Sync Design to App",
+				"category": "Caret"
+			},
+			{
 				"command": "caret.openWalkthrough",
 				"title": "Open Walkthrough",
 				"category": "Caret"

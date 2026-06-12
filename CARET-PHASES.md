@@ -106,11 +106,23 @@ Design mode is hardened so failures are attributable to bad AI-generated content
 
 ---
 
-## [ ] Phase 5: Sync + Collaboration + Deployment
+## [x] Phase 5: Design → App Sync (V1)
 
-- [ ] Design→app sync mechanic (`.caret/sync-state.json` tracks last-synced commit hash)
-- [ ] Sync plan generation (AI reads git diff for intent + full state of both layers → produces plan covering UI + business logic)
-- [ ] Sync triggers (manual "sync now" command + auto-prompt when new `.caret/` commits detected)
+Scoped to the sync mechanic for the V1 launch — it closes the core design→code loop and is sufficient to ship. Collaboration + deployment + voice are deferred to Phase 6.
+
+- [x] Design→app sync mechanic (`.caret/sync-state.json` tracks last-synced commit hash — `src/core/design/sync/sync-state.ts`)
+- [x] Sync plan generation (specialized plan-mode `initTask`; AI reads design-layer git diff for intent + design inventory → plan covering UI + business logic — `sync-prompt.ts`, `sync-orchestrator.ts`)
+- [x] Sync triggers (manual `caret.syncNow` command + `syncDesignToApp` RPC + auto-prompt `SyncWatcher` on new `.caret/` commits)
+- [x] Token-budget guardrails (complete `--stat` always shown, hunks packed under a context-window-scaled budget, oversized files summarized with read-on-demand, never silently truncated — `sync-budget.ts`)
+
+**Deliverable:** One-way design→app sync — a dev hits "Sync now" (or accepts the auto-prompt), reviews an AI plan covering UI + logic changes, accepts, and the sync bookmark advances.
+
+---
+
+## [ ] Phase 6: Collaboration + Deployment + Voice
+
+Deferred from the original Phase 5 — not required for V1.
+
 - [ ] Self-hosted web platform deployment (Docker image, GitHub API connection, GitHub OAuth)
 - [ ] Git branching abstraction for non-devs (web platform auto-creates branches, PM sees "design draft for X")
 - [ ] Web platform defaults to main (shipped state), toggle into in-flight design branches
@@ -118,4 +130,4 @@ Design mode is hardened so failures are attributable to bad AI-generated content
 - [ ] Stale design-branch notifications ("design branches awaiting sync")
 - [ ] Voice input (BYOK speech-to-text API key in settings, transcribe → text pipeline)
 
-**Deliverable:** Full V1 — design→code pipeline with team collaboration.
+**Deliverable:** Full V1+ — design→code pipeline with team collaboration.
