@@ -6,6 +6,7 @@ import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../../controller"
 import { caretDirectoryExists } from "../scaffold"
 import { buildBudgetedDiff } from "./sync-budget"
+import { registerPendingSync } from "./sync-completion"
 import { buildSyncPrompt } from "./sync-prompt"
 import { readSyncState } from "./sync-state"
 
@@ -61,11 +62,15 @@ export async function runSync(controller: Controller): Promise<SyncResult> {
 	const diffBudget = Math.floor(maxAllowedSize * DIFF_BUDGET_FRACTION)
 
 	const budgetedDiff = buildBudgetedDiff(diff, diffBudget)
-	const prompt = await buildSyncPrompt(cwd, budgetedDiff, targetCommit)
+	const prompt = await buildSyncPrompt(cwd, budgetedDiff)
 
 	// Force plan mode — sync always produces a reviewable plan before any app edits.
 	controller.stateManager.setGlobalState("mode", "plan")
-	await controller.initTask(prompt)
+	const taskId = await controller.initTask(prompt)
+
+	// Register the sync so the bookmark advances deterministically (in our code)
+	// when THIS task completes — never via instructing the model to write the file.
+	registerPendingSync(taskId, cwd, targetCommit)
 
 	Logger.info(
 		`[sync] Started: ${budgetedDiff.shown}/${budgetedDiff.total} diffs inlined, ${budgetedDiff.summarized} summarized, target ${targetCommit.slice(0, 8)}`,

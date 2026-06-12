@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk"
 import type { ToolUse } from "@core/assistant-message"
+import { onSyncTaskCompleted } from "@core/design/sync/sync-completion"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
@@ -218,6 +219,11 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		// Run TaskComplete hook BEFORE presenting the "Start New Task" button
 		// At this point we know: task is complete, checkpoint saved, result shown to user
 		await this.runTaskCompleteHook(config, block)
+
+		// Deterministically advance the design→app sync bookmark if this task was a
+		// sync. No-op for every other task. Driven by our code (not a model file
+		// write) so the sync source-of-truth can't silently drift.
+		await onSyncTaskCompleted(config.taskId)
 		await NotificationHook.emitTaskCompleteNotification(
 			{
 				messageStateHandler: config.messageState,

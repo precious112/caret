@@ -48,7 +48,7 @@ async function buildInventory(workspacePath: string): Promise<string> {
  * Assembles the full sync task prompt: instruction header + budgeted design diff
  * + design inventory. Fed into a plan-mode `initTask`.
  */
-export async function buildSyncPrompt(workspacePath: string, budgetedDiff: BudgetedDiff, targetCommit: string): Promise<string> {
+export async function buildSyncPrompt(workspacePath: string, budgetedDiff: BudgetedDiff): Promise<string> {
 	const inventory = await buildInventory(workspacePath)
 
 	const header = `<explicit_instructions type="sync">
@@ -65,8 +65,7 @@ Some large diffs are SUMMARIZED below instead of inlined — you MUST read those
 before planning their pages. Page sources are never inlined here; read .caret/pages/<id>/index.tsx
 as needed.
 
-As the FINAL step, after all application changes are applied, set "lastSyncedCommit" in
-.caret/sync-state.json to "${targetCommit}".
+Do NOT edit .caret/sync-state.json — Caret records the sync automatically when this task completes.
 </explicit_instructions>`
 
 	return [header, "", "─".repeat(60), budgetedDiff.text, "", "─".repeat(60), inventory].join("\n")
