@@ -697,6 +697,10 @@ function generateCanvasView(): string {
 		            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h4M10 8h4M8 4v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M6 8l2-2 2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
 		          </button>
 		        )}
+		        <div className="caret-tb-sep" />
+		        <button onClick={() => window.parent.postMessage({ source: "caret-vite", type: "design-sync-now", payload: {} }, "*")} className="caret-tb-btn" title="Sync design to app">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M13.5 2.5v3h-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+		        </button>
 		        <button onClick={() => { const start = getSimStartPage(); if (start) onSimulate(start) }} className="caret-tb-btn" title="Simulate">
 		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" fill="currentColor"/></svg>
 		        </button>

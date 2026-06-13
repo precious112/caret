@@ -309,13 +309,23 @@ export interface DesignLayerDiff {
  * @param sinceCommit last-synced commit hash, or null for a first-ever sync.
  */
 export async function getDesignLayerDiffSince(cwd: string, sinceCommit: string | null): Promise<DesignLayerDiff> {
-	const base = sinceCommit ?? EMPTY_TREE_HASH
-	const isFirstSync = sinceCommit === null
-	const empty: DesignLayerDiff = { isFirstSync, stat: "", files: [] }
-
 	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd)) || !(await checkGitRepoHasCommits(cwd))) {
-		return empty
+		return { isFirstSync: sinceCommit === null, stat: "", files: [] }
 	}
+
+	// Stale-bookmark guard: if the bookmark commit no longer resolves (history
+	// rebased/squashed/gc'd), degrade to a full resync (empty-tree base → whole
+	// design treated as new) instead of letting `git diff` error into a silent
+	// empty diff. Safe-failure direction: re-sync everything, never skip.
+	let base = sinceCommit ?? EMPTY_TREE_HASH
+	let isFirstSync = sinceCommit === null
+	if (sinceCommit !== null && !(await commitExists(cwd, sinceCommit))) {
+		Logger.warn(`[sync] bookmark commit ${sinceCommit.slice(0, 8)} no longer resolves — falling back to a full resync`)
+		base = EMPTY_TREE_HASH
+		isFirstSync = true
+	}
+
+	const empty: DesignLayerDiff = { isFirstSync, stat: "", files: [] }
 
 	try {
 		const { stdout: stat } = await execAsync(`git --no-pager diff --stat ${base} HEAD ${CARET_PATHSPEC}`, {
@@ -347,6 +357,80 @@ export async function hasDesignChangesSince(cwd: string, sinceCommit: string | n
 		return false // exit 0 → no differences
 	} catch {
 		return true // non-zero exit → differences exist
+	}
+}
+
+/**
+ * Compact commit-message narrative for the design-layer changes in a range —
+ * the "why" the net diff can't show. Returns subject lines (capped), or "" for
+ * a first sync / unresolvable base (no meaningful range).
+ */
+export async function getDesignLayerLog(cwd: string, sinceCommit: string | null): Promise<string> {
+	if (sinceCommit === null) {
+		return ""
+	}
+	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd)) || !(await commitExists(cwd, sinceCommit))) {
+		return ""
+	}
+	try {
+		const { stdout } = await execAsync(`git --no-pager log --oneline -n 20 ${sinceCommit}..HEAD ${CARET_PATHSPEC}`, {
+			cwd,
+		})
+		return stdout.trim()
+	} catch (error) {
+		Logger.error("Error reading design-layer log:", error)
+		return ""
+	}
+}
+
+/**
+ * Sync-readiness of the workspace's git state, in the order that determines the
+ * fix: not-installed (hard stop) → no-repo / no-commits (offer init+commit) →
+ * dirty-design (offer commit) → ready.
+ */
+export async function assessSyncGitState(
+	cwd: string,
+): Promise<"not-installed" | "no-repo" | "no-commits" | "dirty-design" | "ready"> {
+	if (!(await checkGitInstalled())) {
+		return "not-installed"
+	}
+	if (!(await checkGitRepo(cwd))) {
+		return "no-repo"
+	}
+	if (!(await checkGitRepoHasCommits(cwd))) {
+		return "no-commits"
+	}
+	if (await hasUncommittedDesignChanges(cwd)) {
+		return "dirty-design"
+	}
+	return "ready"
+}
+
+/**
+ * True when `.caret/` has uncommitted changes — modified OR untracked (new
+ * pages). `git status --porcelain` lists both; `git diff --quiet` alone would
+ * miss untracked files.
+ */
+export async function hasUncommittedDesignChanges(cwd: string): Promise<boolean> {
+	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd))) {
+		return false
+	}
+	try {
+		const { stdout } = await execAsync(`git status --porcelain ${CARET_PATHSPEC}`, { cwd })
+		return stdout.trim().length > 0
+	} catch (error) {
+		Logger.error("Error checking uncommitted design changes:", error)
+		return false
+	}
+}
+
+/** Whether `ref` resolves to a commit object in this repo. */
+async function commitExists(cwd: string, ref: string): Promise<boolean> {
+	try {
+		await execAsync(`git rev-parse --verify --quiet ${ref}^{commit}`, { cwd })
+		return true
+	} catch {
+		return false
 	}
 }
 

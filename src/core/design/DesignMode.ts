@@ -4,7 +4,7 @@ import { Logger } from "@/shared/services/Logger"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import { getRenderingShellPort, setOnUnexpectedShellExit, startRenderingShell, stopRenderingShell } from "./rendering-shell"
 import { closeDesignPreviewPanel, openDesignPreviewPanel } from "./rendering-shell/preview-panel"
-import { caretDirectoryExists } from "./scaffold"
+import { caretDirectoryExists, setDesignModeActive, setHasCaretDir } from "./scaffold"
 import { type InitTaskFn, registerInitTask } from "./visual-editing/ai-edit-handler"
 
 let designMode = false
@@ -14,6 +14,7 @@ let lifecycleChain: Promise<void> = Promise.resolve()
 
 export function setDesignMode(value: boolean, initTask?: InitTaskFn): void {
 	designMode = value
+	setDesignModeActive(value)
 	vscode.commands.executeCommand("setContext", "caret.isDesignMode", value)
 
 	if (value) {
@@ -70,6 +71,19 @@ export function isInDesignMode(): boolean {
 	return designMode
 }
 
+/**
+ * Re-posts extension state to the webview so `hasDesignLayer` (which gates the
+ * chat "Sync now" button) updates reactively when `.caret/` appears/disappears.
+ */
+async function postDesignLayerStateToWebview(): Promise<void> {
+	try {
+		const { WebviewProvider } = await import("@/core/webview")
+		await WebviewProvider.getInstance()?.controller?.postStateToWebview()
+	} catch (error) {
+		Logger.error("Failed to post design-layer state to webview:", error)
+	}
+}
+
 async function checkForCaretDirectory(): Promise<boolean> {
 	const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
 	for (const folder of workspacePaths.paths) {
@@ -88,6 +102,7 @@ export async function initializeDesignMode(): Promise<vscode.Disposable[]> {
 	const disposables: vscode.Disposable[] = []
 
 	const hasCaretDir = await checkForCaretDirectory()
+	setHasCaretDir(hasCaretDir)
 	if (hasCaretDir) {
 		Logger.log("Design layer detected: setting caret.hasCaretDir context")
 		vscode.commands.executeCommand("setContext", "caret.hasCaretDir", true)
@@ -97,12 +112,16 @@ export async function initializeDesignMode(): Promise<vscode.Disposable[]> {
 
 	caretDirWatcher.onDidCreate(async () => {
 		Logger.log(".caret/ directory created")
+		setHasCaretDir(true)
 		vscode.commands.executeCommand("setContext", "caret.hasCaretDir", true)
+		void postDesignLayerStateToWebview()
 	})
 
 	caretDirWatcher.onDidDelete(async () => {
 		Logger.log(".caret/ directory deleted")
+		setHasCaretDir(false)
 		vscode.commands.executeCommand("setContext", "caret.hasCaretDir", false)
+		void postDesignLayerStateToWebview()
 		if (designMode) {
 			setDesignMode(false)
 		}

@@ -48,7 +48,7 @@ async function buildInventory(workspacePath: string): Promise<string> {
  * Assembles the full sync task prompt: instruction header + budgeted design diff
  * + design inventory. Fed into a plan-mode `initTask`.
  */
-export async function buildSyncPrompt(workspacePath: string, budgetedDiff: BudgetedDiff): Promise<string> {
+export async function buildSyncPrompt(workspacePath: string, budgetedDiff: BudgetedDiff, intentLog = ""): Promise<string> {
 	const inventory = await buildInventory(workspacePath)
 
 	const header = `<explicit_instructions type="sync">
@@ -68,5 +68,12 @@ as needed.
 Do NOT edit .caret/sync-state.json — Caret records the sync automatically when this task completes.
 </explicit_instructions>`
 
-	return [header, "", "─".repeat(60), budgetedDiff.text, "", "─".repeat(60), inventory].join("\n")
+	const intentBlock = intentLog ? ["DESIGN COMMITS SINCE LAST SYNC (intent — newest first):", intentLog].join("\n") : ""
+
+	const sections = [header, "", "─".repeat(60), budgetedDiff.text]
+	if (intentBlock) {
+		sections.push("", "─".repeat(60), intentBlock)
+	}
+	sections.push("", "─".repeat(60), inventory)
+	return sections.join("\n")
 }

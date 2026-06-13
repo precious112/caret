@@ -104,6 +104,36 @@ export async function caretDirectoryExists(workspacePath: string): Promise<boole
 	return fileExists(path.join(workspacePath, ".caret"))
 }
 
+// Cached `.caret/` presence, kept fresh by DesignMode's watcher. Lives here (a
+// vscode-free module) so the controller can read it synchronously on the hot
+// state-post path without statically importing the vscode-coupled DesignMode.
+let hasCaretDirCache = false
+
+/** Cached `.caret/` presence — gates the chat "Sync now" button in webview state. */
+export function getHasCaretDir(): boolean {
+	return hasCaretDirCache
+}
+
+/** Updated by DesignMode on startup + `.caret/` create/delete. */
+export function setHasCaretDir(value: boolean): void {
+	hasCaretDirCache = value
+}
+
+// Mirror of DesignMode's active flag in a vscode-free module, so code in the
+// task layer (which also runs in standalone) can gate on design mode without
+// statically importing the vscode-coupled DesignMode.
+let designModeActiveCache = false
+
+/** Whether design mode is currently active (vscode-free read). */
+export function isDesignModeActive(): boolean {
+	return designModeActiveCache
+}
+
+/** Updated by DesignMode.setDesignMode. */
+export function setDesignModeActive(value: boolean): void {
+	designModeActiveCache = value
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
 	try {
 		await fs.access(filePath)

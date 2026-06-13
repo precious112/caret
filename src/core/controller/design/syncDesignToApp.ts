@@ -1,13 +1,13 @@
-import { EmptyRequest } from "@shared/proto/cline/common"
-import { SyncDesignResponse } from "@shared/proto/cline/design"
+import { SyncDesignRequest, SyncDesignResponse } from "@shared/proto/cline/design"
 import { runSync } from "@/core/design/sync/sync-orchestrator"
 import { Controller } from "../index"
 
-export async function syncDesignToApp(controller: Controller, _: EmptyRequest): Promise<SyncDesignResponse> {
-	const result = await runSync(controller)
+export async function syncDesignToApp(controller: Controller, request: SyncDesignRequest): Promise<SyncDesignResponse> {
+	const result = await runSync(controller, { autoFix: request.autoFix })
 	return SyncDesignResponse.create({
 		status: result.status,
 		message: result.message,
+		fixLabel: result.fixLabel ?? "",
 		shown: result.diffStats?.shown ?? 0,
 		total: result.diffStats?.total ?? 0,
 		summarized: result.diffStats?.summarized ?? 0,

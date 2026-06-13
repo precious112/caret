@@ -161,9 +161,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("caret.syncNow", async () => {
-			const { runSync } = await import("./core/design/sync/sync-orchestrator")
-			const result = await runSync(webview.controller)
-			vscode.window.showInformationMessage(result.message)
+			const { runSyncInteractive } = await import("./core/design/sync/SyncWatcher")
+			await runSyncInteractive(webview.controller)
 		}),
 	)
 

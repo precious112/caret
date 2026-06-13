@@ -1,4 +1,9 @@
+import { HostProvider } from "@/hosts/host-provider"
+import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { hasUncommittedDesignChanges } from "@/utils/git"
+import { isDesignModeActive } from "../scaffold"
+import { commitDesignLayer, discardDesignLayerChanges } from "./sync-git"
 import { advanceSyncState } from "./sync-state"
 
 /**
@@ -50,4 +55,63 @@ export async function onSyncTaskCompleted(taskId: string): Promise<void> {
 	} catch (err) {
 		Logger.error(`[sync] failed to advance bookmark after task ${taskId} completed:`, err)
 	}
+}
+
+/**
+ * Fired when a task completes successfully. If design mode is active and the
+ * design layer is dirty, commits `.caret/` (scoped) so it stays committed — the
+ * sole, deterministic, app-isolated commit path. Setting-gated and silent (with
+ * a transparency toast). No-op outside design mode / when clean / when disabled.
+ */
+export async function onDesignTaskCompleted(cwd: string, autoCommitEnabled: boolean): Promise<void> {
+	if (!autoCommitEnabled || !isDesignModeActive()) {
+		return
+	}
+	if (!(await hasUncommittedDesignChanges(cwd))) {
+		return
+	}
+	const hash = await commitDesignLayer(cwd, "design: auto-checkpoint")
+	if (hash) {
+		Logger.info(`[sync] auto-committed .caret/ → ${hash.slice(0, 8)} on design task completion`)
+		HostProvider.window.showMessage({
+			type: ShowMessageType.INFORMATION,
+			message: "Committed design changes to .caret/",
+		})
+	}
+}
+
+/**
+ * Fired when a (resumable) task is cancelled. If design mode is active and the
+ * design layer has uncommitted orphans, offers Keep/Discard alongside Cline's
+ * own Resume button. Discard is `.caret/`-scoped and race-guarded: if the user
+ * resumed (a task is active again) it leaves the changes alone.
+ */
+export async function onDesignTaskCancelled(cwd: string, isTaskActive: () => boolean): Promise<void> {
+	if (!isDesignModeActive()) {
+		return
+	}
+	if (!(await hasUncommittedDesignChanges(cwd))) {
+		return
+	}
+	const choice = await HostProvider.window.showMessage({
+		type: ShowMessageType.WARNING,
+		message: "Design task cancelled with uncommitted changes in .caret/. Discard reverts ALL uncommitted .caret/ changes.",
+		options: { items: ["Discard", "Keep"] },
+	})
+	if (choice.selectedOption !== "Discard") {
+		return
+	}
+	// Resume-then-Discard guard: don't revert work that's now back in progress.
+	if (isTaskActive()) {
+		HostProvider.window.showMessage({
+			type: ShowMessageType.INFORMATION,
+			message: "Task resumed — design changes kept.",
+		})
+		return
+	}
+	await discardDesignLayerChanges(cwd)
+	HostProvider.window.showMessage({
+		type: ShowMessageType.INFORMATION,
+		message: "Discarded uncommitted .caret/ changes.",
+	})
 }

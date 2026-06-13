@@ -1,12 +1,19 @@
 import { buildApiHandler } from "@core/api"
 import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
 import { Logger } from "@/shared/services/Logger"
-import { getDesignLayerDiffSince, getLatestGitCommitHash } from "@/utils/git"
+import {
+	assessSyncGitState,
+	getDesignLayerDiffSince,
+	getDesignLayerLog,
+	getLatestGitCommitHash,
+	hasDesignChangesSince,
+} from "@/utils/git"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../../controller"
 import { caretDirectoryExists } from "../scaffold"
 import { buildBudgetedDiff } from "./sync-budget"
 import { registerPendingSync } from "./sync-completion"
+import { commitDesignLayer, ensureGitRepo } from "./sync-git"
 import { buildSyncPrompt } from "./sync-prompt"
 import { readSyncState } from "./sync-state"
 
@@ -16,15 +23,28 @@ import { readSyncState } from "./sync-state"
 // sync and a 200-page sync roughly the same opening size.
 const DIFF_BUDGET_FRACTION = 0.35
 
-export type SyncStatus = "started" | "up-to-date" | "no-caret-dir" | "no-git"
+export type SyncStatus =
+	| "started"
+	| "up-to-date"
+	| "no-caret-dir"
+	| "git-not-installed"
+	| "needs-git-setup"
+	| "needs-design-commit"
 
 export interface SyncResult {
 	status: SyncStatus
 	message: string
+	/** Label for the one-click fix, present on fixable statuses (re-run with { autoFix: true }). */
+	fixLabel?: string
 	/** Present when status === "started". */
 	diffStats?: { shown: number; total: number; summarized: number }
 	/** Present when status === "started" and some files were summarized (Layer 2 cue). */
 	largeSync?: boolean
+}
+
+export interface SyncOptions {
+	/** When true, perform the git fix (init/commit) the preflight would otherwise prompt for. */
+	autoFix?: boolean
 }
 
 /**
@@ -33,27 +53,68 @@ export interface SyncResult {
  * plan mode, and hand it to the AI. The bookmark in sync-state.json is advanced by
  * the AI as the final step of the sync (instructed in the prompt).
  */
-export async function runSync(controller: Controller): Promise<SyncResult> {
+export async function runSync(controller: Controller, opts: SyncOptions = {}): Promise<SyncResult> {
 	const cwd = controller.getWorkspaceManager()?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
 
 	if (!(await caretDirectoryExists(cwd))) {
 		return { status: "no-caret-dir", message: "No .caret/ design layer in this workspace — nothing to sync." }
 	}
 
-	const targetCommit = await getLatestGitCommitHash(cwd)
-	if (!targetCommit) {
-		return {
-			status: "no-git",
-			message: "Sync needs a git repository with at least one commit (the design layer must be version-controlled).",
-		}
+	// Preflight: get the design layer into a committed state (the bookmark is a
+	// commit hash). Each gap is either auto-fixed (after a confirmed re-run with
+	// autoFix) or surfaced as a fixable status. All Caret commits are .caret/-scoped.
+	const gitState = await assessSyncGitState(cwd)
+	switch (gitState) {
+		case "not-installed":
+			return {
+				status: "git-not-installed",
+				message: "Git isn't installed. Sync needs git to track the design layer — install git and try again.",
+			}
+		case "no-repo":
+		case "no-commits":
+			if (opts.autoFix) {
+				await ensureGitRepo(cwd)
+				await commitDesignLayer(cwd, "chore(caret): initialize design layer")
+			} else {
+				return {
+					status: "needs-git-setup",
+					message:
+						"This project needs a git repo with the design layer committed before syncing. Initialize git and commit .caret/ now?",
+					fixLabel: "Initialize & commit .caret/",
+				}
+			}
+			break
+		case "dirty-design":
+			if (opts.autoFix) {
+				await commitDesignLayer(cwd, "design: sync checkpoint")
+			} else {
+				return {
+					status: "needs-design-commit",
+					message: "You have uncommitted design changes. Commit them (only the .caret/ folder) before syncing?",
+					fixLabel: "Commit .caret/ changes",
+				}
+			}
+			break
+		case "ready":
+			break
 	}
 
 	const { lastSyncedCommit } = await readSyncState(cwd)
-	if (lastSyncedCommit === targetCommit) {
+
+	// Up-to-date is gated on actual design changes, NOT commit-hash equality:
+	// an unrelated app commit moves HEAD but doesn't change the design.
+	if (!(await hasDesignChangesSince(cwd, lastSyncedCommit))) {
+		return { status: "up-to-date", message: "Design layer is already in sync with the app." }
+	}
+
+	const targetCommit = await getLatestGitCommitHash(cwd)
+	if (!targetCommit) {
+		// Defensive: assessSyncGitState already guaranteed commits exist.
 		return { status: "up-to-date", message: "Design layer is already in sync with the app." }
 	}
 
 	const diff = await getDesignLayerDiffSince(cwd, lastSyncedCommit)
+	const intentLog = await getDesignLayerLog(cwd, lastSyncedCommit)
 
 	// Layer 0 — size the diff section from the model's real context window so it
 	// auto-scales (tight on 200k, generous on 1M) with no hardcoding.
@@ -62,7 +123,7 @@ export async function runSync(controller: Controller): Promise<SyncResult> {
 	const diffBudget = Math.floor(maxAllowedSize * DIFF_BUDGET_FRACTION)
 
 	const budgetedDiff = buildBudgetedDiff(diff, diffBudget)
-	const prompt = await buildSyncPrompt(cwd, budgetedDiff)
+	const prompt = await buildSyncPrompt(cwd, budgetedDiff, intentLog)
 
 	// Force plan mode — sync always produces a reviewable plan before any app edits.
 	controller.stateManager.setGlobalState("mode", "plan")

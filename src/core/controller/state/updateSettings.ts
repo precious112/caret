@@ -352,6 +352,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
 		}
 
+		if (request.autoCommitDesignLayer !== undefined) {
+			controller.stateManager.setGlobalState("autoCommitDesignLayer", request.autoCommitDesignLayer)
+		}
+
 		if (request.designContext !== undefined) {
 			const value = request.designContext === "design" ? "design" : "implementation"
 			controller.stateManager.setGlobalState("designContext", value as any)

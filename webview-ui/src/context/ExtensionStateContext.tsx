@@ -253,6 +253,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		preferredLanguage: "English",
 		mode: "act",
 		designContext: "implementation",
+		autoCommitDesignLayer: true,
+		hasDesignLayer: false,
 		platform: DEFAULT_PLATFORM,
 		environment: Environment.production,
 		telemetrySetting: "unset",

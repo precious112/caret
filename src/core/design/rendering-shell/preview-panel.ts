@@ -188,6 +188,10 @@ async function handleViteMessage(message: DesignMessage): Promise<void> {
 				handleFlowEdgeUpdate(message.payload, currentWorkspacePath)
 			}
 			break
+		case "design-sync-now":
+			// Reuse the native sync flow (confirm dialogs + runSync) wired to the command.
+			vscode.commands.executeCommand("caret.syncNow")
+			break
 	}
 }
 

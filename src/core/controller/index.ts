@@ -1,5 +1,6 @@
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { buildApiHandler } from "@core/api"
+import { getHasCaretDir } from "@core/design/scaffold"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { tryAcquireTaskLockWithRetry } from "@core/task/TaskLockUtils"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
@@ -854,6 +855,8 @@ export class Controller {
 		const preferredLanguage = this.stateManager.getGlobalSettingsKey("preferredLanguage")
 		const mode = this.stateManager.getGlobalSettingsKey("mode")
 		const designContext = this.stateManager.getGlobalSettingsKey("designContext")
+		const autoCommitDesignLayer = this.stateManager.getGlobalSettingsKey("autoCommitDesignLayer")
+		const hasDesignLayer = getHasCaretDir()
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
@@ -934,6 +937,8 @@ export class Controller {
 			preferredLanguage,
 			mode,
 			designContext,
+			autoCommitDesignLayer,
+			hasDesignLayer,
 			strictPlanModeEnabled,
 			yoloModeToggled,
 			useAutoCondense,

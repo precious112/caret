@@ -43,6 +43,7 @@ import {
 } from "@/utils/slash-commands"
 import ClineRulesToggleModal from "../cline-rules/ClineRulesToggleModal"
 import ServersToggleModal from "./ServersToggleModal"
+import { SyncDesignButton } from "./SyncDesignButton"
 
 const { MAX_IMAGES_AND_FILES_PER_MESSAGE } = CHAT_CONSTANTS
 
@@ -1037,9 +1038,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		const onDesignContextToggle = useCallback(() => {
 			const newContext = designContext === "design" ? "implementation" : "design"
-			StateServiceClient.updateSettings(
-				UpdateSettingsRequest.create({ designContext: newContext }),
-			).catch(console.error)
+			StateServiceClient.updateSettings(UpdateSettingsRequest.create({ designContext: newContext })).catch(console.error)
 			if (newContext === "design") {
 				navigateToTokenWizard()
 			}
@@ -1599,6 +1598,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 							<ClineRulesToggleModal />
 
+							<SyncDesignButton />
+
 							<ModelContainer>
 								<ModelButtonWrapper>
 									<ModelDisplayButton
@@ -1625,7 +1626,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								<DesignSlider isDesign={designContext === "design"} />
 								{["Design", "Code"].map((m) => (
 									<div
-										key={m}
 										aria-checked={designContext === (m === "Design" ? "design" : "implementation")}
 										className={cn(
 											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
@@ -1633,6 +1633,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 												? "text-white"
 												: "text-input-foreground",
 										)}
+										key={m}
 										role="switch">
 										{m}
 									</div>

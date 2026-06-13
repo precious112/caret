@@ -10,6 +10,26 @@ import { readSyncState } from "./sync-state"
 const DEBOUNCE_MS = 1500
 
 /**
+ * Runs a sync with native confirm dialogs for the git-state fixes. Shared by the
+ * `caret.syncNow` command (and thus the canvas toolbar button) and the watcher.
+ */
+export async function runSyncInteractive(controller: Controller): Promise<void> {
+	let result = await runSync(controller)
+	if ((result.status === "needs-git-setup" || result.status === "needs-design-commit") && result.fixLabel) {
+		const choice = await vscode.window.showWarningMessage(result.message, result.fixLabel)
+		if (choice !== result.fixLabel) {
+			return // user declined the fix
+		}
+		result = await runSync(controller, { autoFix: true })
+	}
+	if (result.status === "git-not-installed") {
+		vscode.window.showErrorMessage(result.message)
+	} else {
+		vscode.window.showInformationMessage(result.message)
+	}
+}
+
+/**
  * Watches git HEAD and, when new unsynced `.caret/` commits land, offers a
  * non-blocking "Sync now" prompt. Soft signal only — never blocks the user.
  *
@@ -52,8 +72,7 @@ export function createSyncWatcher(controller: Controller): vscode.Disposable {
 					"Sync now",
 				)
 				if (choice === "Sync now") {
-					const result = await runSync(controller)
-					vscode.window.showInformationMessage(result.message)
+					await runSyncInteractive(controller)
 				}
 			} catch (error) {
 				Logger.error("[sync] watcher check failed:", error)

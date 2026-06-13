@@ -109,6 +109,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"flow-edge-create": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
 	"flow-edge-delete": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
 	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
+	"design-sync-now": () => true,
 	log: () => true,
 }
 
@@ -130,5 +131,6 @@ export type DesignMessage =
 	| { source: "caret-vite"; type: "flow-edge-create"; payload: FlowEdgeCreatePayload }
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
+	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
 	| { source: "caret-extension"; type: "edit-result"; payload: EditResultPayload }
 	| { source: "caret-extension"; type: "precompute-result"; payload: PrecomputeResultPayload }

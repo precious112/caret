@@ -20,13 +20,14 @@ import {
 	refreshExternalRulesToggles,
 } from "@core/context/instructions/user-instructions/external-rules"
 import { sendPartialMessageEvent } from "@core/controller/ui/subscribeToPartialMessage"
+import { getRenderingShellPort } from "@core/design/rendering-shell"
+import { onDesignTaskCancelled } from "@core/design/sync/sync-completion"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
 import { executePreCompactHookWithCleanup, HookCancellationError, HookExecution } from "@core/hooks/precompact-executor"
 import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { parseMentions } from "@core/mentions"
-import { getRenderingShellPort } from "@core/design/rendering-shell"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
 import { formatResponse } from "@core/prompts/responses"
@@ -1620,6 +1621,17 @@ export class Task {
 				}
 			}
 
+			// Offer Keep/Discard for orphaned .caret/ changes left by a cancelled
+			// design task — only when this was a resumable cancel (active work), so
+			// it sits alongside the resume affordance. Fire-and-forget; never blocks
+			// abort. No-op outside design mode / when .caret/ is clean.
+			if (shouldRunTaskCancelHook) {
+				onDesignTaskCancelled(this.cwd, () => {
+					const t = this.controller.task
+					return !!t && (t.taskState.isStreaming || t.taskState.isWaitingForFirstChunk)
+				}).catch((error) => Logger.error("[sync] onDesignTaskCancelled failed (non-fatal):", error))
+			}
+
 			// PHASE 5: Immediately update UI to reflect abort state
 			try {
 				await this.messageStateHandler.saveClineMessagesAndUpdateHistory()
@@ -1991,12 +2003,14 @@ export class Task {
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			terminalExecutionMode: this.terminalExecutionMode,
 			designContext: this.stateManager.getGlobalSettingsKey("designContext"),
-			foundationTokensJson: this.stateManager.getGlobalSettingsKey("designContext") === "design"
-				? await this.getFoundationTokensJson()
-				: undefined,
-			renderingShellPort: this.stateManager.getGlobalSettingsKey("designContext") === "design"
-				? getRenderingShellPort() ?? undefined
-				: undefined,
+			foundationTokensJson:
+				this.stateManager.getGlobalSettingsKey("designContext") === "design"
+					? await this.getFoundationTokensJson()
+					: undefined,
+			renderingShellPort:
+				this.stateManager.getGlobalSettingsKey("designContext") === "design"
+					? (getRenderingShellPort() ?? undefined)
+					: undefined,
 		}
 
 		// Notify user if any conditional rules were applied for this request

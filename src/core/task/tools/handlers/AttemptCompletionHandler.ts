@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk"
 import type { ToolUse } from "@core/assistant-message"
-import { onSyncTaskCompleted } from "@core/design/sync/sync-completion"
+import { onDesignTaskCompleted, onSyncTaskCompleted } from "@core/design/sync/sync-completion"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
@@ -224,6 +224,10 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		// sync. No-op for every other task. Driven by our code (not a model file
 		// write) so the sync source-of-truth can't silently drift.
 		await onSyncTaskCompleted(config.taskId)
+
+		// Keep the design layer committed (scoped to .caret/, app-isolated) when a
+		// design task finishes. Setting-gated; no-op outside design mode / when clean.
+		await onDesignTaskCompleted(config.cwd, config.services.stateManager.getGlobalSettingsKey("autoCommitDesignLayer"))
 		await NotificationHook.emitTaskCompleteNotification(
 			{
 				messageStateHandler: config.messageState,

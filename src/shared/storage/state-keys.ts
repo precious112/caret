@@ -278,6 +278,9 @@ const USER_SETTINGS_FIELDS = {
 	doubleCheckCompletionEnabled: { default: false as boolean },
 	lazyTeammateModeEnabled: { default: false as boolean },
 	showFeatureTips: { default: true as boolean },
+	// When on (default), Caret auto-commits the .caret/ design layer (scoped) on
+	// design-task completion so it stays committed for sync.
+	autoCommitDesignLayer: { default: true as boolean },
 
 	// OpenTelemetry configuration
 	openTelemetryEnabled: { default: true as boolean },

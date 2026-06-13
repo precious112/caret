@@ -47,6 +47,8 @@ export interface ExtensionState {
 	preferredLanguage?: string
 	mode: Mode
 	designContext: DesignContext
+	autoCommitDesignLayer: boolean
+	hasDesignLayer: boolean
 	checkpointManagerErrorMessage?: string
 	clineMessages: ClineMessage[]
 	currentTaskItem?: HistoryItem
