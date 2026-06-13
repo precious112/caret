@@ -1598,8 +1598,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 							<ClineRulesToggleModal />
 
-							<SyncDesignButton />
-
 							<ModelContainer>
 								<ModelButtonWrapper>
 									<ModelDisplayButton
@@ -1614,6 +1612,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</ModelContainer>
 						</ButtonGroup>
 					</div>
+					{/* Sync design → app (kept out of the left group so it doesn't crowd the model picker) */}
+					<SyncDesignButton />
 					{/* Design/Code toggle */}
 					<Tooltip>
 						<TooltipContent className="text-xs px-2" side="top">

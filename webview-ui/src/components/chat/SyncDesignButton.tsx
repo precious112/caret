@@ -18,16 +18,21 @@ import { DesignServiceClient } from "@/services/grpc-client"
 // Statuses that need a confirm before Caret mutates git (init / scoped commit).
 const FIXABLE = new Set(["needs-git-setup", "needs-design-commit"])
 
+interface DialogState {
+	message: string
+	/** Present only for a fixable status — re-invoke with autoFix=true on confirm. */
+	fixLabel?: string
+}
+
 /**
  * "Sync design → app" button for the chat input. Shown whenever a `.caret/`
  * design layer exists (in both implementation and design mode — the intended
- * workflow syncs from implementation mode). Drives the git-state confirm flow
- * in-webview via AlertDialog; a started sync renders as a task in the chat.
+ * workflow syncs from implementation mode). Renders only an icon + a portaled
+ * dialog, so it can sit anywhere in the row without consuming layout space.
  */
 export const SyncDesignButton = () => {
 	const { hasDesignLayer } = useExtensionState()
-	const [confirm, setConfirm] = useState<{ message: string; fixLabel: string } | null>(null)
-	const [status, setStatus] = useState<string>("")
+	const [dialog, setDialog] = useState<DialogState | null>(null)
 	const [busy, setBusy] = useState(false)
 
 	if (!hasDesignLayer) {
@@ -36,19 +41,17 @@ export const SyncDesignButton = () => {
 
 	const sync = async (autoFix: boolean) => {
 		setBusy(true)
-		setStatus("")
 		try {
 			const r = await DesignServiceClient.syncDesignToApp(SyncDesignRequest.create({ autoFix }))
 			if (FIXABLE.has(r.status) && r.fixLabel) {
-				setConfirm({ message: r.message, fixLabel: r.fixLabel })
-				return
-			}
-			// started → the sync task appears in the chat; other statuses are terminal.
-			if (r.status !== "started") {
-				setStatus(r.message)
+				setDialog({ message: r.message, fixLabel: r.fixLabel })
+			} else if (r.status !== "started") {
+				// Terminal info (up-to-date / git-not-installed / …); a started sync
+				// renders as a task in the chat and needs no dialog.
+				setDialog({ message: r.message })
 			}
 		} catch (e) {
-			setStatus(e instanceof Error ? e.message : "Sync failed")
+			setDialog({ message: e instanceof Error ? e.message : "Sync failed" })
 		} finally {
 			setBusy(false)
 		}
@@ -59,34 +62,32 @@ export const SyncDesignButton = () => {
 			<VSCodeButton
 				appearance="icon"
 				aria-label="Sync design to app"
-				className="p-0 m-0 flex items-center"
+				className="p-0 m-0 flex items-center mr-1"
 				disabled={busy}
 				onClick={() => sync(false)}
 				title="Sync design to app">
 				<RefreshCwIcon size={13} />
 			</VSCodeButton>
 
-			{status && (
-				<div className="text-foreground" style={{ fontSize: "11px", marginTop: "4px", opacity: 0.85 }}>
-					{status}
-				</div>
-			)}
-
-			<AlertDialog onOpenChange={(open) => !open && setConfirm(null)} open={confirm !== null}>
+			<AlertDialog onOpenChange={(open) => !open && setDialog(null)} open={dialog !== null}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>Sync design → app</AlertDialogTitle>
-						<AlertDialogDescription>{confirm?.message}</AlertDialogDescription>
+						<AlertDialogDescription>{dialog?.message}</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel onClick={() => setConfirm(null)}>Cancel</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={() => {
-								setConfirm(null)
-								void sync(true)
-							}}>
-							{confirm?.fixLabel}
-						</AlertDialogAction>
+						<AlertDialogCancel onClick={() => setDialog(null)}>
+							{dialog?.fixLabel ? "Cancel" : "Close"}
+						</AlertDialogCancel>
+						{dialog?.fixLabel && (
+							<AlertDialogAction
+								onClick={() => {
+									setDialog(null)
+									void sync(true)
+								}}>
+								{dialog.fixLabel}
+							</AlertDialogAction>
+						)}
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
