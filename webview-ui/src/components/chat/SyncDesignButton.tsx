@@ -1,6 +1,4 @@
 import { SyncDesignRequest } from "@shared/proto/cline/design"
-import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
-import { RefreshCwIcon } from "lucide-react"
 import { useState } from "react"
 import {
 	AlertDialog,
@@ -13,6 +11,7 @@ import {
 	AlertDialogTitle,
 } from "@/components/common/AlertDialog"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { cn } from "@/lib/utils"
 import { DesignServiceClient } from "@/services/grpc-client"
 
 // Statuses that need a confirm before Caret mutates git (init / scoped commit).
@@ -25,10 +24,11 @@ interface DialogState {
 }
 
 /**
- * "Sync design → app" button for the chat input. Shown whenever a `.caret/`
- * design layer exists (in both implementation and design mode — the intended
- * workflow syncs from implementation mode). Renders only an icon + a portaled
- * dialog, so it can sit anywhere in the row without consuming layout space.
+ * "Sync design → app" affordance for the chat input. Rendered as a codicon next
+ * to the send button (out of the model-picker row, which is space-constrained).
+ * Shown whenever a `.caret/` design layer exists — in both implementation and
+ * design mode (the intended workflow syncs from implementation mode). Renders
+ * only the icon + a portaled dialog, so it consumes no row layout space.
  */
 export const SyncDesignButton = () => {
 	const { hasDesignLayer } = useExtensionState()
@@ -59,15 +59,13 @@ export const SyncDesignButton = () => {
 
 	return (
 		<>
-			<VSCodeButton
-				appearance="icon"
+			<span
 				aria-label="Sync design to app"
-				className="p-0 m-0 flex items-center mr-1"
-				disabled={busy}
-				onClick={() => sync(false)}
-				title="Sync design to app">
-				<RefreshCwIcon size={13} />
-			</VSCodeButton>
+				className={cn("input-icon-button", { disabled: busy }, "codicon codicon-sync text-sm mr-2")}
+				data-testid="sync-design-button"
+				onClick={() => !busy && sync(false)}
+				title="Sync design to app"
+			/>
 
 			<AlertDialog onOpenChange={(open) => !open && setDialog(null)} open={dialog !== null}>
 				<AlertDialogContent>

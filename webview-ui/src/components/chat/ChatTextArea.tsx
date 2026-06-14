@@ -228,6 +228,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const {
 			mode,
 			designContext,
+			hasDesignLayer,
 			apiConfiguration,
 			openRouterModels,
 			platform,
@@ -1499,7 +1500,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							// borderLeft: "9px solid transparent", // NOTE: react-textarea-autosize doesn't calculate correct height when using borderLeft/borderRight so we need to use horizontal padding instead
 							// Instead of using boxShadow, we use a div with a border to better replicate the behavior when the textarea is focused
 							// boxShadow: "0px 0px 0px 1px var(--vscode-input-border)",
-							padding: "9px 28px 9px 9px",
+							// Extra right padding when the design-layer sync icon sits next to the send button.
+							padding: hasDesignLayer ? "9px 56px 9px 9px" : "9px 28px 9px 9px",
 							cursor: "text",
 							flex: 1,
 							zIndex: 1,
@@ -1539,6 +1541,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						className="absolute flex items-end bottom-4.5 right-5 z-10 h-8 text-xs"
 						style={{ height: textAreaBaseHeight }}>
 						<div className="flex flex-row items-center">
+							<SyncDesignButton />
 							<div
 								className={cn("input-icon-button", { disabled: sendingDisabled }, "codicon codicon-send text-sm")}
 								data-testid="send-button"
@@ -1612,8 +1615,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</ModelContainer>
 						</ButtonGroup>
 					</div>
-					{/* Sync design → app (kept out of the left group so it doesn't crowd the model picker) */}
-					<SyncDesignButton />
 					{/* Design/Code toggle */}
 					<Tooltip>
 						<TooltipContent className="text-xs px-2" side="top">
