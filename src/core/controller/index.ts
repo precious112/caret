@@ -856,6 +856,7 @@ export class Controller {
 		const mode = this.stateManager.getGlobalSettingsKey("mode")
 		const designContext = this.stateManager.getGlobalSettingsKey("designContext")
 		const autoCommitDesignLayer = this.stateManager.getGlobalSettingsKey("autoCommitDesignLayer")
+		const googleFontsApiKey = this.stateManager.getGlobalSettingsKey("googleFontsApiKey")
 		const hasDesignLayer = getHasCaretDir()
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
@@ -938,6 +939,7 @@ export class Controller {
 			mode,
 			designContext,
 			autoCommitDesignLayer,
+			googleFontsApiKey,
 			hasDesignLayer,
 			strictPlanModeEnabled,
 			yoloModeToggled,

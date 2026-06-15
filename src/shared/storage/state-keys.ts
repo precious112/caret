@@ -281,6 +281,9 @@ const USER_SETTINGS_FIELDS = {
 	// When on (default), Caret auto-commits the .caret/ design layer (scoped) on
 	// design-task completion so it stays committed for sync.
 	autoCommitDesignLayer: { default: true as boolean },
+	// BYOK Google Fonts API key — unlocks the full Google Fonts catalog in the
+	// Token Wizard's font picker (otherwise only a small fallback list is shown).
+	googleFontsApiKey: { default: undefined as string | undefined },
 
 	// OpenTelemetry configuration
 	openTelemetryEnabled: { default: true as boolean },

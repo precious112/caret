@@ -48,6 +48,7 @@ export interface ExtensionState {
 	mode: Mode
 	designContext: DesignContext
 	autoCommitDesignLayer: boolean
+	googleFontsApiKey?: string
 	hasDesignLayer: boolean
 	checkpointManagerErrorMessage?: string
 	clineMessages: ClineMessage[]

@@ -356,6 +356,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("autoCommitDesignLayer", request.autoCommitDesignLayer)
 		}
 
+		if (request.googleFontsApiKey !== undefined) {
+			// Empty string clears the key (falls back to env / fallback fonts).
+			controller.stateManager.setGlobalState("googleFontsApiKey", request.googleFontsApiKey || undefined)
+		}
+
 		if (request.designContext !== undefined) {
 			const value = request.designContext === "design" ? "design" : "implementation"
 			controller.stateManager.setGlobalState("designContext", value as any)

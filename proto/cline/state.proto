@@ -289,6 +289,7 @@ message Settings {
   optional bool lazy_teammate_mode_enabled = 183;
   optional string design_context = 184;
   optional bool auto_commit_design_layer = 185;
+  optional string google_fonts_api_key = 186;
 }
 
 message State {
@@ -434,6 +435,7 @@ message UpdateSettingsRequest {
   optional bool lazy_teammate_mode_enabled = 43;
   optional string design_context = 44;
   optional bool auto_commit_design_layer = 45;
+  optional string google_fonts_api_key = 46;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

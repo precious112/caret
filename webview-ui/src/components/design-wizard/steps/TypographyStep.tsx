@@ -75,8 +75,12 @@ export function TypographyStep({ tokens, onChange }: Props) {
 							setShowDropdown(true)
 						}}
 						onFocus={() => setShowDropdown(true)}
-						placeholder="Search fonts..."
-						value={fontSearch || tokens.typography.fontFamily}
+						placeholder={
+							tokens.typography.fontFamily
+								? `Search fonts… (current: ${tokens.typography.fontFamily})`
+								: "Search fonts..."
+						}
+						value={fontSearch}
 					/>
 					{showDropdown && fontResults.length > 0 && (
 						<div

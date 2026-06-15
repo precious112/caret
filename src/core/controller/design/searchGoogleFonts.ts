@@ -9,7 +9,9 @@ export async function searchGoogleFonts(controller: Controller, request: StringR
 	const query = request.value?.toLowerCase() || ""
 
 	try {
-		const apiKey = process.env.GOOGLE_FONTS_API_KEY
+		// Prefer the user's BYOK key from settings; fall back to a build-time env key.
+		const apiKey =
+			controller.stateManager.getGlobalSettingsKey("googleFontsApiKey")?.trim() || process.env.GOOGLE_FONTS_API_KEY
 		let fonts: Array<{ family: string; category: string; variants: string[] }>
 
 		if (apiKey) {

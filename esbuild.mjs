@@ -1,7 +1,12 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import dotenv from "dotenv"
 import * as esbuild from "esbuild"
+
+// Load .env (gitignored) so local builds can inject keys like GOOGLE_FONTS_API_KEY.
+// No-ops in CI where .env is absent and vars come from the real environment.
+dotenv.config()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -142,6 +147,9 @@ if (process.env.TELEMETRY_SERVICE_API_KEY) {
 }
 if (process.env.ERROR_SERVICE_API_KEY) {
 	buildEnvVars["process.env.ERROR_SERVICE_API_KEY"] = JSON.stringify(process.env.ERROR_SERVICE_API_KEY)
+}
+if (process.env.GOOGLE_FONTS_API_KEY) {
+	buildEnvVars["process.env.GOOGLE_FONTS_API_KEY"] = JSON.stringify(process.env.GOOGLE_FONTS_API_KEY)
 }
 
 // OpenTelemetry configuration (injected at build time from GitHub secrets)

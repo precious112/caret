@@ -1,5 +1,6 @@
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
-import { memo, type ReactNode, useCallback } from "react"
+import { memo, type ReactNode, useCallback, useState } from "react"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -227,7 +228,12 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		doubleCheckCompletionEnabled,
 		lazyTeammateModeEnabled,
 		showFeatureTips,
+		googleFontsApiKey,
 	} = useExtensionState()
+
+	// Local draft for the Google Fonts key — committed on blur to avoid a global-state
+	// write on every keystroke.
+	const [fontsKeyDraft, setFontsKeyDraft] = useState(googleFontsApiKey ?? "")
 
 	const handleFocusChainIntervalChange = useCallback(
 		(value: number) => {
@@ -394,6 +400,27 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									</SelectContent>
 								</Select>
 							</div>
+						</div>
+					</div>
+				</div>
+				{/* Design */}
+				<div>
+					<div className="text-xs font-medium text-foreground/80 uppercase tracking-wider mb-3">Design</div>
+					<div className="relative p-3 my-3 rounded-md border border-editor-widget-border/50" id="design-features">
+						<div className="space-y-2">
+							<Label className="text-sm font-medium text-foreground">Google Fonts API Key</Label>
+							<p className="text-xs text-muted-foreground">
+								Bring your own Google Fonts API key to unlock the full font catalog in the Token Wizard's font
+								picker. Without one, only a small built-in fallback list is available. Get a free key from the
+								Google Cloud Console (enable the "Web Fonts Developer API").
+							</p>
+							<Input
+								onBlur={() => updateSetting("googleFontsApiKey", fontsKeyDraft.trim())}
+								onChange={(e) => setFontsKeyDraft(e.target.value)}
+								placeholder="AIza…"
+								type="password"
+								value={fontsKeyDraft}
+							/>
 						</div>
 					</div>
 				</div>
