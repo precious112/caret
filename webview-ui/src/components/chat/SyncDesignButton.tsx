@@ -24,20 +24,17 @@ interface DialogState {
 }
 
 /**
- * "Sync design → app" affordance for the chat input. Rendered as a codicon next
- * to the send button (out of the model-picker row, which is space-constrained).
- * Shown whenever a `.caret/` design layer exists — in both implementation and
- * design mode (the intended workflow syncs from implementation mode). Renders
- * only the icon + a portaled dialog, so it consumes no row layout space.
+ * "Sync design → app" control in the chat footer (Row 1, beside the Design/Code
+ * toggle). Always visible, but only clickable in Design mode — greyed/disabled
+ * in Code mode. Gated on `designContext` (always present in webview state), not
+ * the async `.caret/` cache, so it's reliably visible and correctly enabled.
  */
 export const SyncDesignButton = () => {
-	const { hasDesignLayer } = useExtensionState()
+	const { designContext } = useExtensionState()
 	const [dialog, setDialog] = useState<DialogState | null>(null)
 	const [busy, setBusy] = useState(false)
 
-	if (!hasDesignLayer) {
-		return null
-	}
+	const disabled = busy || designContext !== "design"
 
 	const sync = async (autoFix: boolean) => {
 		setBusy(true)
@@ -59,13 +56,21 @@ export const SyncDesignButton = () => {
 
 	return (
 		<>
-			<span
+			<button
 				aria-label="Sync design to app"
-				className={cn("input-icon-button", { disabled: busy }, "codicon codicon-sync text-sm mr-2")}
-				data-testid="sync-design-button"
-				onClick={() => !busy && sync(false)}
-				title="Sync design to app"
-			/>
+				className={cn(
+					"flex items-center gap-1 bg-transparent border-0 p-0 text-xs select-none",
+					disabled
+						? "text-(--vscode-descriptionForeground) opacity-50 cursor-not-allowed"
+						: "text-(--vscode-descriptionForeground) hover:text-(--vscode-foreground) cursor-pointer",
+				)}
+				disabled={disabled}
+				onClick={() => !disabled && sync(false)}
+				title={designContext === "design" ? "Sync design to app" : "Switch to Design mode to sync design → app"}
+				type="button">
+				<span className="codicon codicon-sync text-sm" />
+				Sync
+			</button>
 
 			<AlertDialog onOpenChange={(open) => !open && setDialog(null)} open={dialog !== null}>
 				<AlertDialogContent>

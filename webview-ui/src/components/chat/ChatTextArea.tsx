@@ -228,7 +228,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const {
 			mode,
 			designContext,
-			hasDesignLayer,
 			apiConfiguration,
 			openRouterModels,
 			platform,
@@ -1500,8 +1499,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							// borderLeft: "9px solid transparent", // NOTE: react-textarea-autosize doesn't calculate correct height when using borderLeft/borderRight so we need to use horizontal padding instead
 							// Instead of using boxShadow, we use a div with a border to better replicate the behavior when the textarea is focused
 							// boxShadow: "0px 0px 0px 1px var(--vscode-input-border)",
-							// Extra right padding when the design-layer sync icon sits next to the send button.
-							padding: hasDesignLayer ? "9px 56px 9px 9px" : "9px 28px 9px 9px",
+							padding: "9px 28px 9px 9px",
 							cursor: "text",
 							flex: 1,
 							zIndex: 1,
@@ -1541,7 +1539,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						className="absolute flex items-end bottom-4.5 right-5 z-10 h-8 text-xs"
 						style={{ height: textAreaBaseHeight }}>
 						<div className="flex flex-row items-center">
-							<SyncDesignButton />
 							<div
 								className={cn("input-icon-button", { disabled: sendingDisabled }, "codicon codicon-send text-sm")}
 								data-testid="send-button"
@@ -1555,6 +1552,38 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						</div>
 					</div>
 				</div>
+				{/* Row 1: design-layer controls — Sync (left) + Design/Code toggle (right) */}
+				<div className="flex justify-between items-center px-3 pb-1">
+					<SyncDesignButton />
+					{/* Design/Code toggle */}
+					<Tooltip>
+						<TooltipContent className="text-xs px-2" side="top">
+							{designContext === "design"
+								? "Design mode: AI generates into .caret/ design layer"
+								: "Code mode: AI works on your application code"}
+						</TooltipContent>
+						<TooltipTrigger>
+							<SwitchContainer data-testid="design-switch" disabled={false} onClick={onDesignContextToggle}>
+								<DesignSlider isDesign={designContext === "design"} />
+								{["Design", "Code"].map((m) => (
+									<div
+										aria-checked={designContext === (m === "Design" ? "design" : "implementation")}
+										className={cn(
+											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
+											designContext === (m === "Design" ? "design" : "implementation")
+												? "text-white"
+												: "text-input-foreground",
+										)}
+										key={m}
+										role="switch">
+										{m}
+									</div>
+								))}
+							</SwitchContainer>
+						</TooltipTrigger>
+					</Tooltip>
+				</div>
+				{/* Row 2: input controls — icons + model picker (left) + Plan/Act toggle (right) */}
 				<div className="flex justify-between items-center -mt-[2px] px-3 pb-2">
 					{/* Always render both components, but control visibility with CSS */}
 					<div className="relative flex-1 min-w-0 h-5">
@@ -1615,33 +1644,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</ModelContainer>
 						</ButtonGroup>
 					</div>
-					{/* Design/Code toggle */}
-					<Tooltip>
-						<TooltipContent className="text-xs px-2" side="top">
-							{designContext === "design"
-								? "Design mode: AI generates into .caret/ design layer"
-								: "Code mode: AI works on your application code"}
-						</TooltipContent>
-						<TooltipTrigger>
-							<SwitchContainer data-testid="design-switch" disabled={false} onClick={onDesignContextToggle}>
-								<DesignSlider isDesign={designContext === "design"} />
-								{["Design", "Code"].map((m) => (
-									<div
-										aria-checked={designContext === (m === "Design" ? "design" : "implementation")}
-										className={cn(
-											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
-											designContext === (m === "Design" ? "design" : "implementation")
-												? "text-white"
-												: "text-input-foreground",
-										)}
-										key={m}
-										role="switch">
-										{m}
-									</div>
-								))}
-							</SwitchContainer>
-						</TooltipTrigger>
-					</Tooltip>
 					{/* Plan/Act toggle */}
 					<Tooltip>
 						<TooltipContent
