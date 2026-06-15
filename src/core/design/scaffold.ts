@@ -61,6 +61,7 @@ const CARET_GITIGNORE = `node_modules/
 vite.log
 thumbnails/
 canvas-layout.json
+.sync-pending.json
 `
 
 /**
@@ -89,10 +90,7 @@ export async function ensureCaretDirectoryExists(workspacePath: string): Promise
 		await fs.writeFile(packageJsonPath, JSON.stringify(CARET_PACKAGE_JSON, null, 2))
 	}
 
-	const gitignorePath = path.join(caretDir, ".gitignore")
-	if (!(await fileExists(gitignorePath))) {
-		await fs.writeFile(gitignorePath, CARET_GITIGNORE)
-	}
+	await ensureCaretGitignore(workspacePath)
 
 	return caretDir
 }
@@ -102,6 +100,28 @@ export async function ensureCaretDirectoryExists(workspacePath: string): Promise
  */
 export async function caretDirectoryExists(workspacePath: string): Promise<boolean> {
 	return fileExists(path.join(workspacePath, ".caret"))
+}
+
+/**
+ * Idempotently ensures `.caret/.gitignore` contains every required ignore line.
+ * Projects scaffolded before a line was added (e.g. `.sync-pending.json`) would
+ * otherwise track that transient file — so this appends any missing lines.
+ */
+export async function ensureCaretGitignore(workspacePath: string): Promise<void> {
+	const gitignorePath = path.join(workspacePath, ".caret", ".gitignore")
+	if (!(await fileExists(gitignorePath))) {
+		await fs.mkdir(path.dirname(gitignorePath), { recursive: true })
+		await fs.writeFile(gitignorePath, CARET_GITIGNORE)
+		return
+	}
+	const existing = await fs.readFile(gitignorePath, "utf-8")
+	const present = new Set(existing.split("\n").map((l) => l.trim()))
+	const missing = CARET_GITIGNORE.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0 && !present.has(l))
+	if (missing.length > 0) {
+		await fs.writeFile(gitignorePath, `${existing.replace(/\n*$/, "")}\n${missing.join("\n")}\n`)
+	}
 }
 
 // Cached `.caret/` presence, kept fresh by DesignMode's watcher. Lives here (a

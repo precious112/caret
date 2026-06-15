@@ -223,7 +223,7 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		// Deterministically advance the design→app sync bookmark if this task was a
 		// sync. No-op for every other task. Driven by our code (not a model file
 		// write) so the sync source-of-truth can't silently drift.
-		await onSyncTaskCompleted(config.taskId)
+		await onSyncTaskCompleted(config.taskId, config.cwd)
 
 		// Keep the design layer committed (scoped to .caret/, app-isolated) when a
 		// design task finishes. Setting-gated; no-op outside design mode / when clean.

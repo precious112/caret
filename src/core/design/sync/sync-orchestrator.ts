@@ -131,7 +131,8 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 
 	// Register the sync so the bookmark advances deterministically (in our code)
 	// when THIS task completes — never via instructing the model to write the file.
-	registerPendingSync(taskId, cwd, targetCommit)
+	// Persisted to disk so it survives an extension reload mid-sync.
+	await registerPendingSync(taskId, cwd, targetCommit)
 
 	Logger.info(
 		`[sync] Started: ${budgetedDiff.shown}/${budgetedDiff.total} diffs inlined, ${budgetedDiff.summarized} summarized, target ${targetCommit.slice(0, 8)}`,
