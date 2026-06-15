@@ -62,6 +62,8 @@ const PAGE_TEMPLATE = (id: string, title: string) => `export default function ${
       <h1 className="text-3xl font-bold text-zinc-900">${title}</h1>
       <p className="text-zinc-600">Fixture page ${id}.</p>
       <button className="bg-blue-600 text-white px-4 py-2 rounded-lg">Go</button>
+      <div style={{ height: 1600 }} />
+      <div data-testid="below-fold" style={{ background: "rgb(255,0,255)", width: 320, height: 160 }}>below fold</div>
     </div>
   )
 }
@@ -606,11 +608,68 @@ async function main() {
 			}
 			return { size: `${img.width}x${img.height}`, blueFraction: blue / total }
 		})
-		await page.close()
 		if ("error" in check) throw new Error(String(check.error))
 		if (check.blueFraction! < 0.3)
 			throw new Error(`only ${Math.round(check.blueFraction! * 100)}% of crop pixels are blue — offset crop?`)
-		return `crop ${check.size}: ${Math.round(check.blueFraction! * 100)}% blue pixels — content matches the cropped button`
+
+		// --- scrolled crop: paint the magenta marker far below the fold ---
+		// This only passes if the crop translates the painted (viewport) rect by the
+		// scroll offset onto the full-page capture; otherwise it grabs top content.
+		await page.evaluate(() => {
+			;(window as any).__POSTED__ = []
+		})
+		const marker = await page.evaluate(() => {
+			const el = document.querySelector('[data-testid="below-fold"]') as HTMLElement
+			el.scrollIntoView({ block: "center" })
+			const r = el.getBoundingClientRect()
+			// The focused page scrolls inside `.caret-focused`, not the window.
+			const scroller = document.querySelector(".caret-focused") as HTMLElement
+			return { x: r.x, y: r.y, w: r.width, h: r.height, scrollTop: scroller ? scroller.scrollTop : window.scrollY }
+		})
+		if (marker.scrollTop < 200) throw new Error(`expected the page to scroll for the marker, scrollTop=${marker.scrollTop}`)
+		await page.click(".caret-focused-paint-btn", { force: true })
+		await page.waitForTimeout(400)
+		await page.mouse.move(marker.x + 5, marker.y + 5)
+		await page.mouse.down()
+		await page.mouse.move(marker.x + marker.w - 5, marker.y + marker.h - 5, { steps: 5 })
+		await page.mouse.up()
+		await page.waitForSelector(".caret-overlay-prompt textarea, .caret-overlay-prompt input", { timeout: 5000 })
+		await page.fill(".caret-overlay-prompt textarea, .caret-overlay-prompt input", "describe this")
+		await page.keyboard.press("Enter")
+		await waitFor(
+			async () => ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).length > 0,
+			20000,
+			"scrolled overlay-edit message",
+		)
+		const scrolled = await page.evaluate(async () => {
+			const shot = (window as any).__POSTED__[0].shot as string
+			if (!shot) return { error: "no screenshot" }
+			const img = new Image()
+			await new Promise((res, rej) => {
+				img.onload = res
+				img.onerror = rej
+				img.src = shot
+			})
+			const c = document.createElement("canvas")
+			c.width = img.width
+			c.height = img.height
+			const ctx = c.getContext("2d")!
+			ctx.drawImage(img, 0, 0)
+			const d = ctx.getImageData(0, 0, img.width, img.height).data
+			let magenta = 0
+			const total = img.width * img.height
+			for (let i = 0; i < d.length; i += 4) {
+				if (d[i] > 150 && d[i + 2] > 150 && d[i + 1] < 100) magenta++
+			}
+			return { size: `${img.width}x${img.height}`, magentaFraction: magenta / total }
+		})
+		await page.close()
+		if ("error" in scrolled) throw new Error(String(scrolled.error))
+		if (scrolled.magentaFraction! < 0.3)
+			throw new Error(
+				`scrolled crop only ${Math.round(scrolled.magentaFraction! * 100)}% magenta — scroll offset not applied to the crop`,
+			)
+		return `unscrolled ${Math.round(check.blueFraction! * 100)}% blue; scrolled (y=${marker.scrollTop}) ${Math.round(scrolled.magentaFraction! * 100)}% magenta — crop tracks scroll`
 	})
 
 	await scenario("k. focused FABs adapt to a light page background", async () => {

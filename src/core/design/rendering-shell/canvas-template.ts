@@ -1207,9 +1207,17 @@ function generateOverlayPainter(): string {
 		        // nesting, oklch) renders exactly like the live page. Its predecessor
 		        // html2canvas re-parsed CSS itself and mangled Tailwind v4 output,
 		        // shifting content relative to the user's crop.
-		        const viewportCanvas = await domToCanvas(document.documentElement, {
-		          width: window.innerWidth,
-		          height: window.innerHeight,
+		        // The focused page scrolls inside a fixed .caret-focused container, so
+		        // window.scrollY is always 0 — the real scroll is on that container.
+		        // Capture the full-height CONTENT element and translate the painted
+		        // (viewport) rect into its coordinate space via its bounding rect, which
+		        // is correct no matter which ancestor actually scrolls.
+		        const captureEl = (document.querySelector(".caret-focused-content") as HTMLElement) || document.documentElement
+		        const fullW = Math.max(captureEl.scrollWidth, captureEl.clientWidth)
+		        const fullH = Math.max(captureEl.scrollHeight, captureEl.clientHeight)
+		        const pageCanvas = await domToCanvas(captureEl, {
+		          width: fullW,
+		          height: fullH,
 		          scale: 1,
 		          filter: (node: Node) => {
 		            const el = node as Element
@@ -1222,7 +1230,10 @@ function generateOverlayPainter(): string {
 		        cropCanvas.height = rect.h
 		        const cropCtx = cropCanvas.getContext("2d")
 		        if (!cropCtx) throw new Error("Failed to get crop canvas context")
-		        cropCtx.drawImage(viewportCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
+		        // rect is viewport/client coords; subtract the capture element's current
+		        // viewport position to get coords within the full-content canvas.
+		        const captureRect = captureEl.getBoundingClientRect()
+		        cropCtx.drawImage(pageCanvas, rect.x - captureRect.left, rect.y - captureRect.top, rect.w, rect.h, 0, 0, rect.w, rect.h)
 
 		        screenshotDataUrl = cropCanvas.toDataURL("image/png")
 		      } catch (captureErr: any) {
