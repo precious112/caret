@@ -281,7 +281,13 @@ export async function getLatestGitCommitHash(cwd: string): Promise<string | null
 // Well-known hash of git's empty tree. Diffing against it makes the entire
 // current .caret/ show up as additions — the uniform code path for a first sync.
 const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-const CARET_PATHSPEC = "-- .caret/"
+// Sync only cares about actual DESIGN CONTENT, not Caret's regenerable rendering
+// shell. Allowlist the content dirs (pages/components/layouts/tokens/flows/assets)
+// so machinery (lib/, main.tsx, index.html, global.css, vite.config.js,
+// package*.json, thumbnails/, canvas-layout.json) and internal state
+// (sync-state.json, .sync-pending.json) never pollute the diff / change detection.
+// An allowlist also keeps any future generated file out automatically.
+const DESIGN_CONTENT_PATHSPEC = "-- .caret/pages/ .caret/components/ .caret/layouts/ .caret/tokens/ .caret/flows/ .caret/assets/"
 
 export interface DesignFileDiff {
 	/** Repo-relative path, e.g. `.caret/pages/checkout/index.tsx`. */
@@ -328,11 +334,11 @@ export async function getDesignLayerDiffSince(cwd: string, sinceCommit: string |
 	const empty: DesignLayerDiff = { isFirstSync, stat: "", files: [] }
 
 	try {
-		const { stdout: stat } = await execAsync(`git --no-pager diff --stat ${base} HEAD ${CARET_PATHSPEC}`, {
+		const { stdout: stat } = await execAsync(`git --no-pager diff --stat ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
 			cwd,
 			maxBuffer: 1024 * 1024 * 50,
 		})
-		const { stdout: raw } = await execAsync(`git --no-pager diff ${base} HEAD ${CARET_PATHSPEC}`, {
+		const { stdout: raw } = await execAsync(`git --no-pager diff ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
 			cwd,
 			maxBuffer: 1024 * 1024 * 50,
 		})
@@ -353,7 +359,7 @@ export async function hasDesignChangesSince(cwd: string, sinceCommit: string | n
 		return false
 	}
 	try {
-		await execAsync(`git --no-pager diff --quiet ${base} HEAD ${CARET_PATHSPEC}`, { cwd })
+		await execAsync(`git --no-pager diff --quiet ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, { cwd })
 		return false // exit 0 → no differences
 	} catch {
 		return true // non-zero exit → differences exist
@@ -373,7 +379,7 @@ export async function getDesignLayerLog(cwd: string, sinceCommit: string | null)
 		return ""
 	}
 	try {
-		const { stdout } = await execAsync(`git --no-pager log --oneline -n 20 ${sinceCommit}..HEAD ${CARET_PATHSPEC}`, {
+		const { stdout } = await execAsync(`git --no-pager log --oneline -n 20 ${sinceCommit}..HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
 			cwd,
 		})
 		return stdout.trim()
@@ -416,7 +422,7 @@ export async function hasUncommittedDesignChanges(cwd: string): Promise<boolean>
 		return false
 	}
 	try {
-		const { stdout } = await execAsync(`git status --porcelain ${CARET_PATHSPEC}`, { cwd })
+		const { stdout } = await execAsync(`git status --porcelain ${DESIGN_CONTENT_PATHSPEC}`, { cwd })
 		return stdout.trim().length > 0
 	} catch (error) {
 		Logger.error("Error checking uncommitted design changes:", error)
