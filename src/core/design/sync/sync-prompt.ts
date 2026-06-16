@@ -14,23 +14,33 @@ async function buildInventory(workspacePath: string): Promise<string> {
 		readFoundationTokens(workspacePath),
 	])
 
+	// All of this is AI-generated/edited and may be missing fields — stay defensive
+	// so the sync prompt never crashes on an incomplete meta.json / flow / tokens file.
 	const pageLines =
 		pages.length === 0
 			? "(none)"
-			: pages.map((p) => ` ${p.id} [${p.type}] — "${p.title}" · states: ${p.states.join(", ") || "—"}`).join("\n")
+			: pages
+					.map(
+						(p) =>
+							` ${p.id} [${p.type ?? "page"}] — "${p.title ?? p.id}" · states: ${(p.states ?? []).join(", ") || "—"}`,
+					)
+					.join("\n")
 
 	const flowLines =
 		flows.length === 0
 			? "(none)"
 			: flows
 					.map((f) => {
-						const chain = f.steps.map((s) => s.page).join(" → ")
-						return ` ${f.id} (${f.name}): ${chain}`
+						const chain = (f.steps ?? [])
+							.map((s) => s?.page)
+							.filter(Boolean)
+							.join(" → ")
+						return ` ${f.id} (${f.name ?? f.id}): ${chain}`
 					})
 					.join("\n")
 
 	const tokenLine = tokens
-		? `brand ${tokens.color.brand.seed} · font ${tokens.typography.fontFamily} · radius ${tokens.radius.character} · spacing ${tokens.spacing.baseUnit}px` +
+		? `brand ${tokens.color?.brand?.seed ?? "—"} · font ${tokens.typography?.fontFamily ?? "—"} · radius ${tokens.radius?.character ?? "—"} · spacing ${tokens.spacing?.baseUnit ?? "—"}px` +
 			` (read .caret/tokens/foundation.json for full scales)`
 		: "(no foundation tokens configured)"
 

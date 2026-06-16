@@ -14,7 +14,16 @@ export async function readPageMeta(workspacePath: string, pageId: string): Promi
 		return null
 	}
 	try {
-		return JSON.parse(content) as PageMeta
+		// Normalize: AI-written meta.json is often valid JSON but missing fields
+		// (e.g. no `states`). Default every field so callers never hit undefined.
+		const raw = (JSON.parse(content) ?? {}) as Partial<PageMeta>
+		return {
+			id: typeof raw.id === "string" ? raw.id : pageId,
+			title: typeof raw.title === "string" ? raw.title : pageId,
+			type: typeof raw.type === "string" ? raw.type : "page",
+			states: Array.isArray(raw.states) ? raw.states : [],
+			tags: Array.isArray(raw.tags) ? raw.tags : [],
+		}
 	} catch (err) {
 		Logger.warn(`[design] Page meta ${metaPath} is not valid JSON and will be ignored: ${err}`)
 		return null
