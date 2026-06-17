@@ -125,8 +125,14 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 	const budgetedDiff = buildBudgetedDiff(diff, diffBudget)
 	const prompt = await buildSyncPrompt(cwd, budgetedDiff, intentLog)
 
-	// Force plan mode — sync always produces a reviewable plan before any app edits.
+	// Force plan mode AND Code context — sync produces a reviewable plan that edits
+	// app code, so the design/code toggle must reflect Code, not Design. Mirrors the
+	// manual toggle handler in updateSettings.ts. initTask posts state afterward, so
+	// both flips reach the webview in one update.
 	controller.stateManager.setGlobalState("mode", "plan")
+	controller.stateManager.setGlobalState("designContext", "implementation")
+	const { setDesignMode } = await import("@/core/design/DesignMode")
+	setDesignMode(false)
 	const taskId = await controller.initTask(prompt)
 
 	// Register the sync so the bookmark advances deterministically (in our code)
