@@ -17,6 +17,9 @@ service DesignService {
   rpc listDesignPages(EmptyRequest) returns (DesignPagesResponse);
   rpc getRenderingShellUrl(EmptyRequest) returns (String);
   rpc syncDesignToApp(SyncDesignRequest) returns (SyncDesignResponse);
+  // Roll back the most recent (possibly half-done) sync: restore the app to its
+  // pre-sync checkpoint and revert the sync bookmark.
+  rpc rollbackSync(EmptyRequest) returns (SyncDesignResponse);
 }
 
 message SyncDesignRequest {

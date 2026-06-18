@@ -1,3 +1,4 @@
+import { EmptyRequest } from "@shared/proto/cline/common"
 import { SyncDesignRequest } from "@shared/proto/cline/design"
 import { useState } from "react"
 import {
@@ -54,6 +55,18 @@ export const SyncDesignButton = () => {
 		}
 	}
 
+	const rollback = async () => {
+		setBusy(true)
+		try {
+			const r = await DesignServiceClient.rollbackSync(EmptyRequest.create({}))
+			setDialog({ message: r.message })
+		} catch (e) {
+			setDialog({ message: e instanceof Error ? e.message : "Roll back failed" })
+		} finally {
+			setBusy(false)
+		}
+	}
+
 	return (
 		<>
 			<button
@@ -70,6 +83,26 @@ export const SyncDesignButton = () => {
 				type="button">
 				<span className="codicon codicon-sync text-sm" />
 				Sync
+			</button>
+
+			<button
+				aria-label="Roll back last sync"
+				className={cn(
+					"flex items-center gap-1 bg-transparent border-0 p-0 text-xs select-none",
+					disabled
+						? "text-(--vscode-descriptionForeground) opacity-50 cursor-not-allowed"
+						: "text-(--vscode-descriptionForeground) hover:text-(--vscode-foreground) cursor-pointer",
+				)}
+				disabled={disabled}
+				onClick={() => !disabled && rollback()}
+				title={
+					designContext === "design"
+						? "Roll back the last sync (restore app + sync state to before it)"
+						: "Switch to Design mode to roll back a sync"
+				}
+				type="button">
+				<span className="codicon codicon-discard text-sm" />
+				Undo sync
 			</button>
 
 			<AlertDialog onOpenChange={(open) => !open && setDialog(null)} open={dialog !== null}>

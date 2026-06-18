@@ -120,10 +120,24 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 	setDesignMode(false)
 	const taskId = await controller.initTask(prompt)
 
+	// Capture a pre-edit checkpoint so a half-done sync can be rolled back (app +
+	// bookmark, since .caret/sync-state.json is inside the checkpoint snapshot).
+	let preSyncCheckpoint: string | undefined
+	try {
+		preSyncCheckpoint = await controller.task?.checkpointManager?.commit()
+	} catch (err) {
+		Logger.warn(`[sync] could not capture pre-sync checkpoint (rollback may be unavailable): ${err}`)
+	}
+
 	// Register the sync so the bookmark advances deterministically (in our code)
-	// when THIS task completes — never via instructing the model to write the file.
-	// Persisted to disk so it survives an extension reload mid-sync.
-	await registerPendingSync(taskId, cwd, targetCommit)
+	// when the user APPLIES it (plan→Act) — never via instructing the model to write
+	// the file. Persisted to disk so it survives an extension reload mid-sync.
+	await registerPendingSync(cwd, {
+		taskId,
+		commit: targetCommit,
+		previousBookmark: lastSyncedCommit,
+		preSyncCheckpoint: typeof preSyncCheckpoint === "string" ? preSyncCheckpoint : undefined,
+	})
 
 	Logger.info(`[sync] Started: ${changedFiles.length} changed design file(s), target ${targetCommit.slice(0, 8)}`)
 

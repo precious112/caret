@@ -406,6 +406,17 @@ export class Controller {
 		if (this.task) {
 			if (this.task.taskState.isAwaitingPlanResponse && didSwitchToActMode) {
 				this.task.taskState.didRespondToPlanAskBySwitchingMode = true
+				// If this task is the in-flight design→app sync, switching to Act is the
+				// user APPLYING it — advance the sync bookmark now. Plan-mode syncs rarely
+				// reach attempt_completion, which used to leave the bookmark stuck at
+				// "never synced" so every sync re-reported the whole design layer.
+				try {
+					const cwd = this.workspaceManager?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
+					const { applySyncBookmark } = await import("@core/design/sync/sync-completion")
+					await applySyncBookmark(this.task.taskId, cwd)
+				} catch (err) {
+					Logger.error("[sync] failed to advance bookmark on plan→act switch:", err)
+				}
 				// Use chatContent if provided, otherwise use default message
 				await this.task.handleWebviewAskResponse(
 					"messageResponse",
