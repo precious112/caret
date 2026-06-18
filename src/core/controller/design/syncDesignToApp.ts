@@ -8,8 +8,8 @@ export async function syncDesignToApp(controller: Controller, request: SyncDesig
 		status: result.status,
 		message: result.message,
 		fixLabel: result.fixLabel ?? "",
-		shown: result.diffStats?.shown ?? 0,
-		total: result.diffStats?.total ?? 0,
-		summarized: result.diffStats?.summarized ?? 0,
+		shown: 0,
+		total: result.changedCount ?? 0,
+		summarized: 0,
 	})
 }

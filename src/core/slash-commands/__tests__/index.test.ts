@@ -141,4 +141,19 @@ describe("slash-commands", () => {
 		// are skipped because they require StateManager initialization when falling
 		// through to workflow checking. The core MCP functionality is covered above.
 	})
+
+	describe("debug-ui-page command", () => {
+		it("expands /debug-ui-page into the healing instruction block and strips the token", async () => {
+			const text = "<task>/debug-ui-page the testimonials heading won't let me edit its color</task>"
+			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined)
+
+			expect(result.processedText).to.include('<explicit_instructions type="debug_ui_page">')
+			// The shared caret-id rules are embedded so the command can't drift from the system prompt.
+			expect(result.processedText).to.include("Static string literal — never an expression")
+			// The user's own complaint rides along after the injected instructions.
+			expect(result.processedText).to.include("the testimonials heading won't let me edit its color")
+			// The slash token itself is removed from the message.
+			expect(result.processedText).to.not.include("/debug-ui-page")
+		})
+	})
 })

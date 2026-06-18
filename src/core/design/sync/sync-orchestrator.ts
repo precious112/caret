@@ -1,9 +1,7 @@
-import { buildApiHandler } from "@core/api"
-import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
 import { Logger } from "@/shared/services/Logger"
 import {
 	assessSyncGitState,
-	getDesignLayerDiffSince,
+	getDesignLayerChangedFiles,
 	getDesignLayerLog,
 	getLatestGitCommitHash,
 	hasDesignChangesSince,
@@ -11,17 +9,10 @@ import {
 import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../../controller"
 import { caretDirectoryExists } from "../scaffold"
-import { buildBudgetedDiff } from "./sync-budget"
 import { registerPendingSync } from "./sync-completion"
 import { commitDesignLayer, ensureGitRepo } from "./sync-git"
 import { buildSyncPrompt } from "./sync-prompt"
 import { readSyncState } from "./sync-state"
-
-// Fraction of the model's safe context budget we allow the sync opening message
-// to occupy. The rest is reserved for the AI's own file reads + reasoning +
-// output during planning (Layer 0). A small message + lazy reads keeps a 2-page
-// sync and a 200-page sync roughly the same opening size.
-const DIFF_BUDGET_FRACTION = 0.35
 
 export type SyncStatus =
 	| "started"
@@ -36,10 +27,8 @@ export interface SyncResult {
 	message: string
 	/** Label for the one-click fix, present on fixable statuses (re-run with { autoFix: true }). */
 	fixLabel?: string
-	/** Present when status === "started". */
-	diffStats?: { shown: number; total: number; summarized: number }
-	/** Present when status === "started" and some files were summarized (Layer 2 cue). */
-	largeSync?: boolean
+	/** Number of changed design files handed to the AI. Present when status === "started". */
+	changedCount?: number
 }
 
 export interface SyncOptions {
@@ -113,17 +102,13 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 		return { status: "up-to-date", message: "Design layer is already in sync with the app." }
 	}
 
-	const diff = await getDesignLayerDiffSince(cwd, lastSyncedCommit)
+	// Net cumulative changed-files worklist (no file content) — the AI reads the
+	// current `.caret/` + app sources itself. See buildSyncPrompt.
+	const changedFiles = await getDesignLayerChangedFiles(cwd, lastSyncedCommit)
 	const intentLog = await getDesignLayerLog(cwd, lastSyncedCommit)
+	const isFirstSync = lastSyncedCommit === null
 
-	// Layer 0 — size the diff section from the model's real context window so it
-	// auto-scales (tight on 200k, generous on 1M) with no hardcoding.
-	const api = buildApiHandler(controller.stateManager.getApiConfiguration(), "plan")
-	const { maxAllowedSize } = getContextWindowInfo(api)
-	const diffBudget = Math.floor(maxAllowedSize * DIFF_BUDGET_FRACTION)
-
-	const budgetedDiff = buildBudgetedDiff(diff, diffBudget)
-	const prompt = await buildSyncPrompt(cwd, budgetedDiff, intentLog)
+	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog })
 
 	// Force plan mode AND Code context — sync produces a reviewable plan that edits
 	// app code, so the design/code toggle must reflect Code, not Design. Mirrors the
@@ -140,23 +125,16 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 	// Persisted to disk so it survives an extension reload mid-sync.
 	await registerPendingSync(taskId, cwd, targetCommit)
 
-	Logger.info(
-		`[sync] Started: ${budgetedDiff.shown}/${budgetedDiff.total} diffs inlined, ${budgetedDiff.summarized} summarized, target ${targetCommit.slice(0, 8)}`,
-	)
+	Logger.info(`[sync] Started: ${changedFiles.length} changed design file(s), target ${targetCommit.slice(0, 8)}`)
 
-	const largeSync = budgetedDiff.summarized > 0
 	const message =
-		budgetedDiff.total === 0
-			? "Syncing design → app (no file-level design changes; AI will reconcile full state)."
-			: `Syncing design → app: ${budgetedDiff.total} changed file(s)` +
-				(largeSync
-					? `, ${budgetedDiff.shown} diffs inlined, ${budgetedDiff.summarized} summarized (AI will read those directly).`
-					: ".")
+		changedFiles.length === 0
+			? "Syncing design → app (reconciling full design state)."
+			: `Syncing design → app: ${changedFiles.length} changed design file(s).`
 
 	return {
 		status: "started",
 		message,
-		diffStats: { shown: budgetedDiff.shown, total: budgetedDiff.total, summarized: budgetedDiff.summarized },
-		largeSync,
+		changedCount: changedFiles.length,
 	}
 }

@@ -14,11 +14,26 @@ export interface DynamicRange {
 	diagnostics: DiagnosticCode[]
 }
 
+/**
+ * Counts of caret-id rule violations the precompute pass had to auto-heal. A
+ * non-zero total means the AI ignored the design-layer caret-id rules — surfaced
+ * so the breakage is observable, not silent.
+ */
+export interface CaretIdViolations {
+	/** `data-caret-id={expr}` (not a string literal) → rewritten to a unique static id. */
+	dynamic: number
+	/** Same static id used on multiple elements → later ones renamed unique. */
+	duplicate: number
+	/** A `data-caret-id` on an element inside `.map()`/iterator → stripped. */
+	inIterator: number
+}
+
 export interface PrecomputeResult {
 	filePath: string
 	modified: boolean
 	correctedSource?: string
 	dynamicRanges: DynamicRange[]
+	caretIdViolations: CaretIdViolations
 }
 
 const VISIBLE_TAGS = new Set([
@@ -93,22 +108,47 @@ function isVisibleTag(tagName: string): boolean {
 	return VISIBLE_TAGS.has(tagName)
 }
 
+/** Native DOM tag name (lowercase JSX identifier) or null. Drives inline-style conversion. */
 function getTagName(node: recast.types.namedTypes.JSXElement): string | null {
 	const name = node.openingElement.name
 	if (name.type === "JSXIdentifier") return name.name
 	return null
 }
 
-function hasCaretId(node: recast.types.namedTypes.JSXElement): boolean {
+/**
+ * The "effective" tag for caret-id targeting. Resolves a plain identifier (`h1`,
+ * `div`, `Button`) AND a member expression's property (`motion.h2` → `"h2"`),
+ * since framer-motion forwards `data-*` attributes to the underlying DOM tag.
+ * Gated downstream by `isVisibleTag`, so only `motion.<visible-tag>` qualifies —
+ * `motion.div` / `Tooltip.Trigger` fall out.
+ */
+function getCaretTagName(node: recast.types.namedTypes.JSXElement): string | null {
+	const name = node.openingElement.name
+	if (name.type === "JSXIdentifier") return name.name
+	if (name.type === "JSXMemberExpression" && name.property.type === "JSXIdentifier") {
+		return name.property.name
+	}
+	return null
+}
+
+function getCaretIdAttr(node: recast.types.namedTypes.JSXElement): recast.types.namedTypes.JSXAttribute | null {
 	for (const attr of node.openingElement.attributes || []) {
-		if (
-			attr.type === "JSXAttribute" &&
-			attr.name.type === "JSXIdentifier" &&
-			attr.name.name === "data-caret-id" &&
-			attr.value?.type === "StringLiteral"
-		) {
-			return true
+		if (attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "data-caret-id") {
+			return attr
 		}
+	}
+	return null
+}
+
+/** Strip every `data-caret-id` attribute from the element. Returns true if any was removed. */
+function removeCaretIdAttribute(node: recast.types.namedTypes.JSXElement): boolean {
+	const attrs = node.openingElement.attributes || []
+	const kept = attrs.filter(
+		(attr) => !(attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "data-caret-id"),
+	)
+	if (kept.length !== attrs.length) {
+		node.openingElement.attributes = kept
+		return true
 	}
 	return false
 }
@@ -184,7 +224,11 @@ function hasDynamicTailwindClass(node: recast.types.namedTypes.JSXElement): bool
 		if (expr.type === "TemplateLiteral" && expr.expressions.length > 0) {
 			for (const quasi of expr.quasis) {
 				const raw = quasi.value.raw
-				if (TAILWIND_COLOR_PREFIXES.some((p) => raw.endsWith(p) || (raw.includes(p) && raw.indexOf(p) < raw.length - p.length))) {
+				if (
+					TAILWIND_COLOR_PREFIXES.some(
+						(p) => raw.endsWith(p) || (raw.includes(p) && raw.indexOf(p) < raw.length - p.length),
+					)
+				) {
 					return true
 				}
 			}
@@ -208,9 +252,7 @@ function getElementRange(node: recast.types.namedTypes.JSXElement): {
 	}
 }
 
-function convertInlineStyle(
-	node: recast.types.namedTypes.JSXElement,
-): { classes: string[]; fullyConverted: boolean } | null {
+function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes: string[]; fullyConverted: boolean } | null {
 	const attrs = node.openingElement.attributes || []
 	let styleAttrIndex = -1
 	let styleExpr: recast.types.namedTypes.ObjectExpression | null = null
@@ -252,7 +294,10 @@ function convertInlineStyle(
 		let value: string | null = null
 		if (prop.value.type === "StringLiteral") {
 			value = prop.value.value
-		} else if (prop.value.type === "NumericLiteral" || (prop.value.type === "Literal" && typeof (prop.value as any).value === "number")) {
+		} else if (
+			prop.value.type === "NumericLiteral" ||
+			(prop.value.type === "Literal" && typeof (prop.value as any).value === "number")
+		) {
 			value = String((prop.value as any).value)
 		}
 
@@ -331,39 +376,62 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 		ast = parseSource(source)
 	} catch (err) {
 		console.error(`[design] precompute: failed to parse ${filePath}:`, err)
-		return { filePath, modified: false, dynamicRanges: [] }
+		return { filePath, modified: false, dynamicRanges: [], caretIdViolations: { dynamic: 0, duplicate: 0, inIterator: 0 } }
 	}
 
 	const dynamicRanges: DynamicRange[] = []
 	let modified = false
 	const idCounters = new Map<string, number>()
+	const violations: CaretIdViolations = { dynamic: 0, duplicate: 0, inIterator: 0 }
 
-	function nextId(tagName: string, hint: string | null): string {
-		const count = (idCounters.get(tagName) || 0) + 1
-		idCounters.set(tagName, count)
-		return toKebabId(`${tagName}-${count}`, hint)
+	// Pre-pass: every static caret-id literal already in the file. Generated ids
+	// must avoid these so we never collide with an author-provided id that appears
+	// later in the document.
+	const existingIds = new Set<string>()
+	recast.types.visit(ast, {
+		visitJSXElement(path) {
+			const attr = getCaretIdAttr(path.node)
+			if (attr?.value?.type === "StringLiteral") existingIds.add(attr.value.value)
+			return this.traverse(path)
+		},
+	})
+
+	// Caret-ids confirmed/assigned so far in document order — the uniqueness set.
+	const usedIds = new Set<string>()
+
+	function freshId(tagName: string, node: recast.types.namedTypes.JSXElement): string {
+		const hint = getSemanticHint(node)
+		let candidate: string
+		do {
+			const count = (idCounters.get(tagName) || 0) + 1
+			idCounters.set(tagName, count)
+			candidate = toKebabId(`${tagName}-${count}`, hint)
+		} while (existingIds.has(candidate) || usedIds.has(candidate))
+		usedIds.add(candidate)
+		return candidate
 	}
 
 	recast.types.visit(ast, {
 		visitJSXElement(path) {
 			const node = path.node
-			const tagName = getTagName(node)
-			if (!tagName) return this.traverse(path)
+			const nativeTag = getTagName(node)
+			const caretTag = getCaretTagName(node)
 
 			const inIterator = isInsideIterator(path)
 			const range = getElementRange(node)
 
-			if (inIterator && range) {
+			if (inIterator && range && caretTag) {
 				const diagnostics: DiagnosticCode[] = []
-				if (isVisibleTag(tagName) && hasDynamicTextChild(node)) diagnostics.push("dynamic-text")
-				if (tagName === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
+				if (isVisibleTag(caretTag) && hasDynamicTextChild(node)) diagnostics.push("dynamic-text")
+				if (caretTag === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
 				if (hasDynamicTailwindClass(node)) diagnostics.push("dynamic-tailwind-class")
 				if (diagnostics.length === 0) diagnostics.push("dynamic-text")
 				dynamicRanges.push({ ...range, diagnostics })
 			}
 
-			// Convert inline styles (both inside and outside iterators)
-			if (isNativeElement(tagName)) {
+			// Convert inline styles — native DOM elements only (never motion.* etc.,
+			// whose `style` can carry animated motion values).
+			if (nativeTag && isNativeElement(nativeTag)) {
 				const conversion = convertInlineStyle(node)
 				if (conversion) {
 					mergeClassesIntoClassName(node, conversion.classes)
@@ -374,20 +442,44 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 				}
 			}
 
-			// Add caret-id and detect dynamic content (only outside iterators)
-			if (!inIterator && isNativeElement(tagName) && isVisibleTag(tagName)) {
-				if (!hasCaretId(node)) {
-					const hint = getSemanticHint(node)
-					const id = nextId(tagName, hint)
-					addCaretIdAttribute(node, id)
-					modified = true
+			// Normalize caret-ids on visible elements (native + motion.<visible-tag>):
+			// every one must be a UNIQUE STATIC string literal, or the AST-based inline
+			// editor can't locate it. This both auto-corrects and counts AI rule breaks.
+			if (caretTag && isVisibleTag(caretTag)) {
+				if (inIterator) {
+					// Elements inside .map() render N times — a single literal id would
+					// duplicate across rows. Inline editing isn't supported here; strip it.
+					if (removeCaretIdAttribute(node)) {
+						modified = true
+						violations.inIterator++
+					}
+				} else {
+					const attr = getCaretIdAttr(node)
+					if (!attr) {
+						addCaretIdAttribute(node, freshId(caretTag, node))
+						modified = true
+					} else if (attr.value?.type !== "StringLiteral") {
+						// Dynamic id (`{expr}` / template / ternary) — the AST matcher only
+						// matches string literals. Replace with a unique static one.
+						removeCaretIdAttribute(node)
+						addCaretIdAttribute(node, freshId(caretTag, node))
+						modified = true
+						violations.dynamic++
+					} else if (usedIds.has(attr.value.value)) {
+						// Duplicate static id — rename the later occurrence.
+						attr.value.value = freshId(caretTag, node)
+						modified = true
+						violations.duplicate++
+					} else {
+						usedIds.add(attr.value.value)
+					}
 				}
 			}
 
-			if (!inIterator && range) {
+			if (!inIterator && range && caretTag) {
 				const diagnostics: DiagnosticCode[] = []
 				if (hasDynamicTextChild(node)) diagnostics.push("dynamic-text")
-				if (tagName === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
+				if (caretTag === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
 				if (hasDynamicTailwindClass(node)) diagnostics.push("dynamic-tailwind-class")
 				if (diagnostics.length > 0) {
 					dynamicRanges.push({ ...range, diagnostics })
@@ -398,7 +490,16 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 		},
 	})
 
-	const result: PrecomputeResult = { filePath, modified, dynamicRanges }
+	const totalViolations = violations.dynamic + violations.duplicate + violations.inIterator
+	if (totalViolations > 0) {
+		console.warn(
+			`[design] precompute: auto-healed ${totalViolations} caret-id violation(s) in ${filePath} ` +
+				`(dynamic: ${violations.dynamic}, duplicate: ${violations.duplicate}, in-iterator: ${violations.inIterator}) — ` +
+				`AI likely ignored the design-layer caret-id rules`,
+		)
+	}
+
+	const result: PrecomputeResult = { filePath, modified, dynamicRanges, caretIdViolations: violations }
 	if (modified) {
 		result.correctedSource = recast.print(ast).code
 	}

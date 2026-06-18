@@ -289,63 +289,89 @@ const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 // An allowlist also keeps any future generated file out automatically.
 const DESIGN_CONTENT_PATHSPEC = "-- .caret/pages/ .caret/components/ .caret/layouts/ .caret/tokens/ .caret/flows/ .caret/assets/"
 
-export interface DesignFileDiff {
-	/** Repo-relative path, e.g. `.caret/pages/checkout/index.tsx`. */
+export type DesignChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "changed"
+
+export interface DesignChangedFile {
+	/** Repo-relative path, e.g. `.caret/pages/checkout/index.tsx` (the new path for renames). */
 	path: string
-	/** The per-file `diff --git …` hunk text. */
-	hunk: string
-	/** Count of added/removed lines (diff body, excluding the +++/--- headers). */
-	changedLines: number
+	status: DesignChangeStatus
 }
 
-export interface DesignLayerDiff {
-	/** True when there is no prior sync bookmark — the whole design layer is "new". */
-	isFirstSync: boolean
-	/** `git diff --stat` for the full changed set — always complete, never truncated. */
-	stat: string
-	/** Per-file diffs, so callers can budget/pack them without losing scope. */
-	files: DesignFileDiff[]
+// Binary image assets carry no readable signal for the AI (it can't read a PNG)
+// and the page source that references them already conveys the intent — so they
+// are dropped from the sync worklist as noise. A future text/SVG asset still
+// flows through.
+const BINARY_ASSET_EXT = /\.(png|jpe?g|gif|webp|ico|avif|bmp|tiff?)$/i
+
+function designChangeStatusFromCode(code: string): DesignChangeStatus {
+	switch (code[0]) {
+		case "A":
+			return "added"
+		case "M":
+			return "modified"
+		case "D":
+			return "deleted"
+		case "R":
+			return "renamed"
+		case "C":
+			return "copied"
+		default:
+			return "changed"
+	}
 }
 
 /**
- * Returns the design-layer (`.caret/`) changes since `sinceCommit` as structured
- * per-file diffs plus a complete `--stat`. Output is intentionally NOT truncated
- * here — the sync budget packer decides what to inline vs. summarize.
+ * Parses `git diff --name-status` output into the design sync worklist, dropping
+ * binary image assets. Pure (no git) so it's unit-testable on its own.
+ */
+export function parseDesignChangedFiles(raw: string): DesignChangedFile[] {
+	const out: DesignChangedFile[] = []
+	for (const line of raw.split("\n")) {
+		const trimmed = line.replace(/\r$/, "")
+		if (!trimmed.trim()) continue
+		const parts = trimmed.split("\t")
+		if (parts.length < 2) continue
+		// Rename/copy lines are `R100\told\tnew` — the new path is always last.
+		const path = parts[parts.length - 1]
+		if (path.startsWith(".caret/assets/") && BINARY_ASSET_EXT.test(path)) continue
+		out.push({ path, status: designChangeStatusFromCode(parts[0]) })
+	}
+	return out
+}
+
+/**
+ * The design-layer (`.caret/`) files that changed since `sinceCommit`, as a net
+ * cumulative `git diff --name-status <base> HEAD` worklist — NOT a per-commit
+ * walk. A file changed-then-reverted across commits nets to "unchanged" and is
+ * omitted; a file touched in several commits appears once at its final state.
+ * No file content is read here: the sync prompt hands this list to the AI, which
+ * reads the current sources itself.
  *
  * @param sinceCommit last-synced commit hash, or null for a first-ever sync.
  */
-export async function getDesignLayerDiffSince(cwd: string, sinceCommit: string | null): Promise<DesignLayerDiff> {
+export async function getDesignLayerChangedFiles(cwd: string, sinceCommit: string | null): Promise<DesignChangedFile[]> {
 	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd)) || !(await checkGitRepoHasCommits(cwd))) {
-		return { isFirstSync: sinceCommit === null, stat: "", files: [] }
+		return []
 	}
 
 	// Stale-bookmark guard: if the bookmark commit no longer resolves (history
 	// rebased/squashed/gc'd), degrade to a full resync (empty-tree base → whole
-	// design treated as new) instead of letting `git diff` error into a silent
-	// empty diff. Safe-failure direction: re-sync everything, never skip.
+	// design treated as new) rather than erroring into a silent empty list.
 	let base = sinceCommit ?? EMPTY_TREE_HASH
-	let isFirstSync = sinceCommit === null
 	if (sinceCommit !== null && !(await commitExists(cwd, sinceCommit))) {
 		Logger.warn(`[sync] bookmark commit ${sinceCommit.slice(0, 8)} no longer resolves — falling back to a full resync`)
 		base = EMPTY_TREE_HASH
-		isFirstSync = true
 	}
 
-	const empty: DesignLayerDiff = { isFirstSync, stat: "", files: [] }
-
 	try {
-		const { stdout: stat } = await execAsync(`git --no-pager diff --stat ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
+		const { stdout } = await execAsync(`git --no-pager diff --name-status ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
 			cwd,
 			maxBuffer: 1024 * 1024 * 50,
 		})
-		const { stdout: raw } = await execAsync(`git --no-pager diff ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
-			cwd,
-			maxBuffer: 1024 * 1024 * 50,
-		})
-		return { isFirstSync, stat: stat.trim(), files: parseDiffByFile(raw) }
+		return parseDesignChangedFiles(stdout)
 	} catch (error) {
-		Logger.error("Error computing design-layer diff:", error)
-		return empty
+		Logger.error("Error computing design-layer changed files:", error)
+		return []
 	}
 }
 
@@ -438,28 +464,6 @@ async function commitExists(cwd: string, ref: string): Promise<boolean> {
 	} catch {
 		return false
 	}
-}
-
-/** Splits a combined `git diff` into per-file entries on `diff --git` boundaries. */
-function parseDiffByFile(raw: string): DesignFileDiff[] {
-	const trimmed = raw.trim()
-	if (!trimmed) {
-		return []
-	}
-	const files: DesignFileDiff[] = []
-	// Split on the start of each file header, keeping the marker.
-	const chunks = trimmed.split(/(?=^diff --git )/m).filter((c) => c.startsWith("diff --git "))
-	for (const hunk of chunks) {
-		const header = hunk.split("\n", 1)[0]
-		// `diff --git a/<path> b/<path>` — prefer the b/ (new) path.
-		const match = header.match(/^diff --git a\/(.+?) b\/(.+)$/)
-		const path = match ? match[2] : header.replace(/^diff --git /, "")
-		const changedLines = hunk
-			.split("\n")
-			.filter((l) => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---")).length
-		files.push({ path, hunk: hunk.trimEnd(), changedLines })
-	}
-	return files
 }
 
 function truncateOutput(content: string): string {

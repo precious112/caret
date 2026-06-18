@@ -50,6 +50,11 @@ export const VSCODE_ONLY_COMMANDS: SlashCommand[] = [
 		description: "Enter design mode and generate pages into the .caret/ design layer",
 		section: "default",
 	},
+	{
+		name: "debug-ui-page",
+		description: "Scan & heal the current design page for code that breaks the visual editor",
+		section: "default",
+	},
 ]
 
 // CLI-only slash commands (handled locally, not sent to backend)

@@ -321,5 +321,131 @@ describe("precomputePage — combined scenarios", () => {
 		const result = precomputePage(source, "test.tsx")
 		result.modified.should.be.false()
 		result.dynamicRanges.length.should.equal(0)
+		result.caretIdViolations.should.eql({ dynamic: 0, duplicate: 0, inIterator: 0 })
+	})
+})
+
+describe("precomputePage — caret-id normalization (unique + static)", () => {
+	it("should rewrite a dynamic (interpolated) caret-id to a unique static literal", () => {
+		const source = "export default function Page() {\n  return <h1 data-caret-id={`title-${id}`}>Hello</h1>\n}"
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('data-caret-id="h1-1"')
+		result.correctedSource!.should.not.containEql("${id}")
+		result.caretIdViolations.dynamic.should.equal(1)
+	})
+
+	it("should rewrite a ternary caret-id expression to a static literal", () => {
+		const source = `export default function Page() {
+  return <p data-caret-id={cond ? "a" : undefined}>Hello</p>
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('data-caret-id="p-1"')
+		result.correctedSource!.should.not.containEql("cond ?")
+		result.caretIdViolations.dynamic.should.equal(1)
+	})
+
+	it("should rename duplicate static caret-ids so each is unique", () => {
+		const source = `export default function Page() {
+  return (
+    <div>
+      <h2 data-caret-id="heading">Loved by developers</h2>
+      <h2 data-caret-id="heading">Trusted widely</h2>
+    </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.caretIdViolations.duplicate.should.equal(1)
+		// First keeps the author id, second is renamed to something else.
+		const ids = [...result.correctedSource!.matchAll(/data-caret-id="([^"]+)"/g)].map((m) => m[1])
+		ids.length.should.equal(2)
+		new Set(ids).size.should.equal(2)
+		ids.should.containEql("heading")
+	})
+
+	it("should strip a static caret-id from an element inside .map()", () => {
+		const source = `export default function Page() {
+  return (
+    <div>
+      {items.map(item => (
+        <a data-caret-id="link" href="#">{item.name}</a>
+      ))}
+    </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.not.containEql("data-caret-id")
+		result.caretIdViolations.inIterator.should.equal(1)
+	})
+
+	it("should strip a dynamic caret-id from an element inside .map()", () => {
+		const source =
+			"export default function Page() {\n  return (\n    <div>\n      {items.map((item, i) => (\n        <span data-caret-id={`item-${i}`}>{item.label}</span>\n      ))}\n    </div>\n  )\n}"
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.not.containEql("data-caret-id")
+		result.caretIdViolations.inIterator.should.equal(1)
+	})
+
+	it("should normalize a dynamic caret-id on a framer-motion element", () => {
+		const source = `export default function Page() {
+  return <motion.h2 data-caret-id={dataCaretId ? "x-title" : undefined}>Hello</motion.h2>
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('data-caret-id="h2-1"')
+		result.caretIdViolations.dynamic.should.equal(1)
+	})
+
+	it("should add a caret-id to a framer-motion visible element missing one", () => {
+		const source = `export default function Page() {
+  return <motion.p>Animated text</motion.p>
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('data-caret-id="p-1"')
+		result.caretIdViolations.should.eql({ dynamic: 0, duplicate: 0, inIterator: 0 })
+	})
+
+	it("should NOT touch motion.div (not a visible tag)", () => {
+		const source = `export default function Page() {
+  return <motion.div className="flex">Content</motion.div>
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.false()
+	})
+
+	it("should leave an already-clean page unchanged (no churn, no violations)", () => {
+		const source = `export default function Page() {
+  return (
+    <div>
+      <h1 data-caret-id="hero-title">Hello</h1>
+      <p data-caret-id="hero-sub">World</p>
+    </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.false()
+		result.caretIdViolations.should.eql({ dynamic: 0, duplicate: 0, inIterator: 0 })
+	})
+
+	it("should generate ids that don't collide with author ids appearing later", () => {
+		const source = `export default function Page() {
+  return (
+    <div>
+      <h1>First</h1>
+      <h1 data-caret-id="h1-1">Second</h1>
+    </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		const ids = [...result.correctedSource!.matchAll(/data-caret-id="([^"]+)"/g)].map((m) => m[1])
+		ids.length.should.equal(2)
+		new Set(ids).size.should.equal(2)
+		ids.should.containEql("h1-1")
 	})
 })

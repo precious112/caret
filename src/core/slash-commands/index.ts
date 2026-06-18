@@ -7,6 +7,7 @@ import { Logger } from "@/shared/services/Logger"
 import { isNativeToolCallingConfig } from "@/utils/model-utils"
 import {
 	condenseToolResponse,
+	debugUiPageToolResponse,
 	deepPlanningToolResponse,
 	designToolResponse,
 	explainChangesToolResponse,
@@ -50,7 +51,17 @@ export async function parseSlashCommands(
 	providerInfo?: ApiProviderInfo,
 	mcpPromptFetcher?: McpPromptFetcher,
 ): Promise<{ processedText: string; needsClinerulesFileCheck: boolean }> {
-	const SUPPORTED_DEFAULT_COMMANDS = ["newtask", "smol", "compact", "newrule", "reportbug", "deep-planning", "explain-changes", "design"]
+	const SUPPORTED_DEFAULT_COMMANDS = [
+		"newtask",
+		"smol",
+		"compact",
+		"newrule",
+		"reportbug",
+		"deep-planning",
+		"explain-changes",
+		"design",
+		"debug-ui-page",
+	]
 
 	// Determine if the current provider/model/setting actually uses native tool calling
 	const willUseNativeTools = isNativeToolCallingConfig(providerInfo!, enableNativeToolCalls || false)
@@ -64,6 +75,7 @@ export async function parseSlashCommands(
 		"deep-planning": deepPlanningToolResponse(focusChainSettings, providerInfo, willUseNativeTools),
 		"explain-changes": explainChangesToolResponse(),
 		design: designToolResponse(),
+		"debug-ui-page": debugUiPageToolResponse(),
 	}
 
 	// Regex patterns to extract content from different XML tags

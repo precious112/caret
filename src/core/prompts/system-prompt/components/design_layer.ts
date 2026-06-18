@@ -1,3 +1,4 @@
+import { CARET_ID_RULES } from "../../design-rules"
 import type { PromptVariant, SystemPromptContext } from "../types"
 
 export async function getDesignLayerSection(_variant: PromptVariant, context: SystemPromptContext): Promise<string> {
@@ -134,36 +135,7 @@ Use standalone \`<img>\` elements with string literal \`src\` and \`data-caret-i
 <img src={product.imageUrl} alt={product.name} />
 \`\`\`
 
-### Element Identification
-Add a unique \`data-caret-id\` attribute to every visible element (headings, paragraphs, buttons, images, spans, links, inputs). Use short descriptive kebab-case IDs unique within each page file:
-
-\`\`\`tsx
-<h1 data-caret-id="hero-title" className="text-6xl font-bold text-white">Welcome</h1>
-<p data-caret-id="hero-subtitle" className="mt-4 text-lg text-zinc-400">Get started today</p>
-<img data-caret-id="hero-image" src="https://placehold.co/600x300" alt="Featured" className="rounded-xl" />
-<button data-caret-id="hero-cta" className="mt-8 bg-white text-zinc-950 px-8 py-3">Shop Now</button>
-\`\`\`
-
-The inline editor uses these IDs to find the exact element in source code. Without them, elements on the same line (e.g. a heading with a nested span) may be ambiguous.
-
-**Do NOT add \`data-caret-id\` inside \`.map()\`, \`.forEach()\`, or other array iteration callbacks.** These elements render multiple times — IDs would be duplicated. The visual editor handles array-rendered content through AI Edit, not inline editing.
-
-When nesting inline elements (e.g. a span inside a heading), add \`data-caret-id\` to both the parent and each child:
-
-\`\`\`tsx
-<h1 data-caret-id="hero-title">Defy <span data-caret-id="hero-accent">Limits</span></h1>
-\`\`\`
-
-### JSX Formatting
-Place each visible element's opening tag on its own line — the editor locates elements by source line number:
-
-\`\`\`tsx
-// Preferred
-<section className="py-16">
-  <h1 data-caret-id="section-title" className="text-4xl font-bold text-white">Welcome</h1>
-  <p data-caret-id="section-subtitle" className="mt-4 text-lg text-zinc-400">Subtitle here</p>
-</section>
-\`\`\`
+${CARET_ID_RULES}
 
 ## Token Usage
 

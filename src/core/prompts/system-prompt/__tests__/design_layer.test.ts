@@ -39,6 +39,13 @@ describe("Design layer prompt gating", () => {
 		expect(systemPrompt).to.include(DESIGN_MARKER)
 	})
 
+	it("includes the strengthened caret-id rules (static + unique) in design mode", async () => {
+		const { systemPrompt } = await getSystemPrompt({ ...baseContext, designContext: "design" })
+		// From the shared CARET_ID_RULES constant.
+		expect(systemPrompt).to.include("Static string literal — never an expression")
+		expect(systemPrompt).to.include("Unique within the page file")
+	})
+
 	it("omits the DESIGN LAYER block when designContext is 'implementation' (code mode)", async () => {
 		const { systemPrompt } = await getSystemPrompt({ ...baseContext, designContext: "implementation" })
 		expect(systemPrompt).to.not.include(DESIGN_MARKER)

@@ -1,5 +1,6 @@
 import type { ApiProviderInfo } from "@/core/api"
 import { getDeepPlanningPrompt } from "./commands/deep-planning"
+import { CARET_ID_RULES } from "./design-rules"
 
 export const newTaskToolResponse = (willUseNativeTools: boolean) => {
 	const xmlExample = `
@@ -337,5 +338,32 @@ Use foundation tokens via CSS custom properties (--color-brand-500, --font-size-
 The page will be rendered by a Vite dev server with HMR — standard React, no framework-specific features.
 
 If the user hasn't configured tokens yet, suggest they complete the Token Wizard first.
+</explicit_instructions>\n
+`
+
+export const debugUiPageToolResponse = () =>
+	`<explicit_instructions type="debug_ui_page">
+The user is in design mode and reports that the VISUAL / INLINE EDITOR is not working on a design page — they can't click to edit some text, color, or image. This almost always means the design-layer code violates the editor's requirements. Your job is to FIND and HEAL those violations WITHOUT changing the rendered appearance of the page.
+
+The visual editor locates each element in the .caret/ source by a UNIQUE STATIC \`data-caret-id\` string literal (an AST match). It cannot find an element whose id is a dynamic expression, and it edits the wrong element when an id is duplicated. So scan for and fix these problems:
+
+- A \`data-caret-id\` that is NOT a plain string literal (a variable, template literal, ternary, or any \`{...}\` expression) → replace it with a unique static kebab-case literal.
+- The SAME \`data-caret-id\` reused on more than one element → give each a distinct id.
+- A \`data-caret-id\` on an element inside \`.map()\`/\`.forEach()\`/other iteration → remove it (those rows are edited via AI Edit, not inline).
+- A visible static element (heading, paragraph, button, image, span, link, input) MISSING a \`data-caret-id\` → add a unique static one.
+- An id threaded through a shared component as a dynamic prop (e.g. \`dataCaretId={someExpr}\`) → make it a static literal on the element that actually renders to the DOM.
+- Multiple distinct static texts sharing one id/attribute so editing one changes another → split them into independent elements each with its own id.
+- A visible element whose opening tag is not on its own source line (the editor also locates by line) → reformat it onto its own line.
+
+How to proceed:
+1. Identify the affected page. If the user named one, use it; otherwise scan all pages under .caret/pages/ (read each .caret/pages/<id>/index.tsx) plus any shared components in .caret/components/ that they import.
+2. Apply the fixes above, preserving the exact visual output — only ids, structure-for-identification, and formatting change, never styling or content.
+3. After editing, re-read each file you changed and confirm it still parses and that every \`data-caret-id\` is a unique static string literal.
+
+The authoring rules you are enforcing (the same ones the design system follows):
+
+${CARET_ID_RULES}
+
+Below is the user's message describing what isn't working.
 </explicit_instructions>\n
 `
