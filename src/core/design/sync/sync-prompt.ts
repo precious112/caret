@@ -151,6 +151,8 @@ The .caret/ design files are the SINGLE SOURCE OF TRUTH for how the app should l
 
 Always reconcile against the CURRENT file contents — never apply a remembered or precomputed diff. A file may have changed many times since the last sync; only its current state matters. If the design needs something the current architecture can't support without a refactor, say so honestly rather than forcing a half-baked patch.
 
+The \`data-caret-id\` attributes in the design sources are Caret's visual-editor tooling metadata (they make inline editing of the .caret/ design UIs deterministic). They have NO meaning in the shipped app — do NOT copy them into the application code. Omit them entirely when translating; carry over only real UI, content, and behavior.
+
 Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source. Do NOT edit .caret/sync-state.json — Caret records the sync automatically when this task completes.
 </explicit_instructions>`
 

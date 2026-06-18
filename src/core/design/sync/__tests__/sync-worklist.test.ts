@@ -53,6 +53,9 @@ describe("buildSyncPrompt", () => {
 		})
 		expect(prompt).to.include("SINGLE SOURCE OF TRUTH")
 		expect(prompt).to.include("READ the current .caret/ source")
+		// Instructs stripping caret-ids (editor metadata) from app code.
+		expect(prompt).to.include("data-caret-id")
+		expect(prompt).to.include("do NOT copy them into the application code")
 		// No diff hunks.
 		expect(prompt).to.not.include("@@")
 		expect(prompt).to.not.include("diff --git")
