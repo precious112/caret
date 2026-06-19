@@ -2,6 +2,8 @@
 .vscode/**
 .vscode-test/**
 .worktrees/**
+# Local agent tooling — contains symlinks that break vsce packaging and must never ship
+.claude/**
 CLAUDE.local.md
 out/
 dist-standalone/

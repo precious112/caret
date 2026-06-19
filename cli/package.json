@@ -1,5 +1,5 @@
 {
-	"name": "caret",
+	"name": "caret-cli",
 	"version": "2.15.0",
 	"description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
 	"main": "dist/lib.mjs",

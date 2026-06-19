@@ -1,5 +1,3 @@
-import { BUILD_CONSTANTS } from "../../constants"
-
 export interface PostHogClientConfig {
 	/**
 	 * The main API key for PostHog telemetry service.
@@ -37,28 +35,28 @@ const useDevEnv = process.env.IS_DEV === "true" || process.env.CLINE_ENVIRONMENT
  * defined in the .github/workflows/publish.yml workflow.
  * NOTE: The development environment variables should be retrieved from 1password shared vault.
  */
-// TODO(caret-rebrand): Telemetry still routes to Cline's PostHog endpoint. Replace
-// `https://data.cline.bot` and the BUILD_CONSTANTS keys with Caret-owned infra (or disable telemetry)
-// before any external distribution. See REBRAND-TODO.md.
+// Caret distribution: telemetry/error-tracking/remote-feature-flags are disabled. Caret has
+// no analytics backend of its own yet, and we must NOT phone home to Cline's PostHog
+// (`https://data.cline.bot`). The keys are left blank and `isPostHogConfigValid()` always
+// returns false, so every PostHog client (telemetry, error tracking, feature flags) is gated
+// off and no events are emitted. Re-enable by wiring Caret-owned keys/host here once that
+// infrastructure exists.
 export const posthogConfig: PostHogClientConfig = {
-	apiKey: BUILD_CONSTANTS.TELEMETRY_SERVICE_API_KEY,
-	errorTrackingApiKey: BUILD_CONSTANTS.ERROR_SERVICE_API_KEY,
-	host: "https://data.cline.bot",
+	apiKey: "",
+	errorTrackingApiKey: "",
+	host: "",
 	uiHost: useDevEnv ? "https://us.i.posthog.com" : "https://us.posthog.com",
-	enableErrorAutocapture: BUILD_CONSTANTS.ENABLE_ERROR_AUTOCAPTURE === "true",
+	enableErrorAutocapture: false,
 }
 
 const isTestEnv = process.env.E2E_TEST === "true" || process.env.IS_TEST === "true"
 
-export function isPostHogConfigValid(config: PostHogClientConfig): config is PostHogClientValidConfig {
+export function isPostHogConfigValid(_config: PostHogClientConfig): _config is PostHogClientValidConfig {
 	// Allow invalid config in test environment to enable mocking and stubbing
 	if (isTestEnv) {
 		return false
 	}
-	return (
-		typeof config.apiKey === "string" &&
-		typeof config.errorTrackingApiKey === "string" &&
-		typeof config.host === "string" &&
-		typeof config.uiHost === "string"
-	)
+	// Caret distribution: telemetry is disabled — never treat the config as valid so no
+	// PostHog client is ever constructed. See note on `posthogConfig` above.
+	return false
 }

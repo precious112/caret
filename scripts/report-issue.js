@@ -12,7 +12,7 @@ const ask = (question) => new Promise((resolve) => rl.question(`\n${question}`, 
 const getClineVersion = () => {
 	try {
 		const extensions = execSync("code --list-extensions --show-versions").toString()
-		const clineMatch = extensions.match(/claude-dev@(\d+\.\d+\.\d+)/)
+		const clineMatch = extensions.match(/caretAI\.caret@(\d+\.\d+\.\d+)/)
 		return clineMatch ? clineMatch[1] : "Not installed"
 	} catch (_err) {
 		return "Error getting version"
@@ -26,7 +26,7 @@ const collectSystemInfo = () => {
 		if (process.platform === "darwin") {
 			cpuInfo = execSync("sysctl -n machdep.cpu.brand_string").toString().trim()
 			memoryInfo = execSync("sysctl -n hw.memsize").toString().trim()
-			memoryInfo = `${Math.round(parseInt(memoryInfo) / 1e9)} GB RAM`
+			memoryInfo = `${Math.round(Number.parseInt(memoryInfo) / 1e9)} GB RAM`
 		} else {
 			// Linux specific commands
 			cpuInfo = execSync("lscpu").toString().split("\n").slice(0, 5).join("\n")
