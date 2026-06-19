@@ -1,0 +1,67 @@
+name: Publish Caret to Open VSX
+
+# Publishes the Caret extension to the Open VSX registry (open-vsx.org) under the
+# caretAI namespace. The Caret IDE bundles this same extension id (caretAI.caret) as a
+# built-in and auto-updates it in place from Open VSX when a newer version is published.
+#
+# NOTE: we publish ONLY to Open VSX. Microsoft's VS Code Marketplace is off-limits to
+# forks and is intentionally not targeted here.
+#
+# Requires repo secret: OVSX_PAT  (Open VSX personal access token for the caretAI namespace)
+
+on:
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: "Git ref (tag/branch/sha) to publish from"
+                required: false
+                default: ""
+    push:
+        tags:
+            - "v*"
+
+jobs:
+    publish-openvsx:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.ref || github.ref }}
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: Install root dependencies
+              run: npm install --include=optional
+
+            - name: Install webview-ui dependencies
+              run: cd webview-ui && npm install --include=optional
+
+            - name: Install publishing tools
+              run: npm install -g @vscode/vsce ovsx
+
+            - name: Get version
+              id: get_version
+              run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+            - name: Package extension
+              run: vsce package --allow-package-secrets sendgrid --no-dependencies --out "caret-${{ steps.get_version.outputs.version }}.vsix"
+
+            - name: Ensure Open VSX namespace exists
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+              run: npx ovsx create-namespace caretAI -p "$OVSX_PAT" || true
+
+            - name: Publish to Open VSX
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+              run: npx ovsx publish "caret-${{ steps.get_version.outputs.version }}.vsix" -p "$OVSX_PAT"
+
+            - name: Upload vsix artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: caret-vsix
+                  path: "caret-${{ steps.get_version.outputs.version }}.vsix"
