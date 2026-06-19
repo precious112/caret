@@ -868,6 +868,7 @@ export class Controller {
 		const designContext = this.stateManager.getGlobalSettingsKey("designContext")
 		const autoCommitDesignLayer = this.stateManager.getGlobalSettingsKey("autoCommitDesignLayer")
 		const googleFontsApiKey = this.stateManager.getGlobalSettingsKey("googleFontsApiKey")
+		const tavilySearchApiKey = this.stateManager.getGlobalSettingsKey("tavilySearchApiKey")
 		const hasDesignLayer = getHasCaretDir()
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
@@ -951,6 +952,7 @@ export class Controller {
 			designContext,
 			autoCommitDesignLayer,
 			googleFontsApiKey,
+			tavilySearchApiKey,
 			hasDesignLayer,
 			strictPlanModeEnabled,
 			yoloModeToggled,

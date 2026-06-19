@@ -50,7 +50,7 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 	}
 
 	return (
-		<div className="space-y-4 rounded-xs">
+		<div className="space-y-4 rounded-lg">
 			{parsedFiles.map((file, index) => (
 				<FileBlock
 					file={file}
@@ -137,7 +137,10 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 		}, [file.lines, startLineNumber])
 
 		return (
-			<div className="bg-code rounded-xs border border-editor-group-border overflow-hidden">
+			<div
+				className={cn("bg-code rounded-lg border border-editor-group-border overflow-hidden", {
+					"animate-caret-pulse": isStreaming,
+				})}>
 				<button
 					className="w-full flex items-center gap-2 p-2 bg-code transition-colors justify-between cursor-pointer"
 					onClick={() => setIsExpanded((prev) => !prev)}

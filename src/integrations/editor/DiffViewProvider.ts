@@ -22,9 +22,16 @@ export abstract class DiffViewProvider {
 	private preDiagnostics: FileDiagnostics[] = []
 	protected relPath?: string
 	protected absolutePath?: string
-	protected fileEncoding: string = "utf8"
+	protected fileEncoding = "utf8"
 	private streamedLines: string[] = []
 	private newContent?: string
+	/**
+	 * When true, edits are applied to the document and saved to disk WITHOUT revealing an
+	 * editor tab or scrolling — used for design-mode writes under `.caret/` so the live
+	 * preview keeps focus. The disk save still fires, so Vite HMR updates the preview.
+	 * Only ever set for design-mode `.caret/` paths; all other writes behave exactly as before.
+	 */
+	protected headless = false
 
 	constructor() {}
 
@@ -34,6 +41,7 @@ export abstract class DiffViewProvider {
 		const absolutePathResolved = workspaceResolver.resolveWorkspacePath(cwd, relPath, "DiffViewProvider.open.absolutePath")
 		this.absolutePath = typeof absolutePathResolved === "string" ? absolutePathResolved : absolutePathResolved.absolutePath
 		this.relPath = options?.displayPath ?? relPath
+		this.headless = await shouldWriteHeadlessly(this.absolutePath)
 		const fileExists = this.editType === "modify"
 
 		// if the file is already open, ensure it's not dirty before getting its contents
@@ -158,7 +166,7 @@ export abstract class DiffViewProvider {
 	 *
 	 * @returns true if the file was saved.
 	 */
-	protected abstract saveDocument(): Promise<Boolean>
+	protected abstract saveDocument(): Promise<boolean>
 
 	/**
 	 * Closes all open diff views.
@@ -503,7 +511,26 @@ export abstract class DiffViewProvider {
 		this.newContent = undefined
 		this.lastUpdateContentLength = -1
 		this.lastUpdateTime = 0
+		this.headless = false
 
 		await this.resetDiffView()
+	}
+}
+
+/**
+ * A write should happen "headlessly" (no editor tab, no focus steal) only when we're in
+ * design mode AND the target lives under the `.caret/` design layer. Lazy-imported to avoid
+ * a static import cycle between this low-level editor integration and the design-mode module.
+ */
+async function shouldWriteHeadlessly(absolutePath: string): Promise<boolean> {
+	try {
+		const { isInDesignMode } = await import("@/core/design/DesignMode")
+		if (!isInDesignMode()) {
+			return false
+		}
+		const normalized = absolutePath.replace(/\\/g, "/")
+		return normalized.includes("/.caret/") || normalized.endsWith("/.caret")
+	} catch {
+		return false
 	}
 }

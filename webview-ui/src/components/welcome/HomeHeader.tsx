@@ -27,7 +27,8 @@ const HomeHeader = ({ shouldShowQuickWins = false }: HomeHeaderProps) => {
 
 	return (
 		<div className="flex flex-col items-center mb-5">
-			<div className="my-7">
+			{/* White rounded chip so the fixed-color Caret mark stays legible against the chat background */}
+			<div className="my-7 bg-white rounded-2xl p-4 shadow-sm">
 				<LogoComponent className="size-20" environment={environment} />
 			</div>
 			<div className="text-center flex items-center justify-center px-4">

@@ -37,7 +37,7 @@ const agentFeatures: FeatureToggle[] = [
 	{
 		id: "subagents",
 		label: "Subagents",
-		description: "Let Cline run focused subagents in parallel to explore the codebase for you.",
+		description: "Let Caret run focused subagents in parallel to explore the codebase for you.",
 		stateKey: "subagentsEnabled",
 		settingKey: "subagentsEnabled",
 	},
@@ -83,7 +83,7 @@ const editorFeatures: FeatureToggle[] = [
 	{
 		id: "show-feature-tips",
 		label: "Feature Tips",
-		description: "Show rotating tips during the thinking phase to help you discover Cline features.",
+		description: "Show rotating tips during the thinking phase to help you discover Caret features.",
 		stateKey: "showFeatureTips",
 		settingKey: "showFeatureTips",
 	},
@@ -103,7 +103,7 @@ const editorFeatures: FeatureToggle[] = [
 	},
 	{
 		id: "cline-web-tools",
-		label: "Cline Web Tools",
+		label: "Web Tools",
 		description: "Access web browsing and search capabilities",
 		stateKey: "clineWebToolsEnabled",
 		settingKey: "clineWebToolsEnabled",
@@ -111,7 +111,7 @@ const editorFeatures: FeatureToggle[] = [
 	{
 		id: "worktrees",
 		label: "Worktrees",
-		description: "Enables git worktree management for running parallel Cline tasks.",
+		description: "Enables git worktree management for running parallel Caret tasks.",
 		stateKey: "worktreesEnabled",
 		settingKey: "worktreesEnabled",
 	},
@@ -137,7 +137,7 @@ const experimentalFeatures: FeatureToggle[] = [
 	{
 		id: "lazy-teammate",
 		label: "Lazy Teammate Mode",
-		description: "Sometimes Cline just isn't feeling it today. For entertainment purposes only.",
+		description: "Sometimes Caret just isn't feeling it today. For entertainment purposes only.",
 		stateKey: "lazyTeammateModeEnabled",
 		settingKey: "lazyTeammateModeEnabled",
 	},
@@ -229,11 +229,14 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		lazyTeammateModeEnabled,
 		showFeatureTips,
 		googleFontsApiKey,
+		tavilySearchApiKey,
 	} = useExtensionState()
 
 	// Local draft for the Google Fonts key — committed on blur to avoid a global-state
 	// write on every keystroke.
 	const [fontsKeyDraft, setFontsKeyDraft] = useState(googleFontsApiKey ?? "")
+	// Local draft for the Tavily web-search key — committed on blur.
+	const [tavilyKeyDraft, setTavilyKeyDraft] = useState(tavilySearchApiKey ?? "")
 
 	const handleFocusChainIntervalChange = useCallback(
 		(value: number) => {
@@ -400,6 +403,27 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									</SelectContent>
 								</Select>
 							</div>
+						</div>
+					</div>
+				</div>
+				{/* Web Search */}
+				<div>
+					<div className="text-xs font-medium text-foreground/80 uppercase tracking-wider mb-3">Web Search</div>
+					<div className="relative p-3 my-3 rounded-md border border-editor-widget-border/50" id="web-search-features">
+						<div className="space-y-2">
+							<Label className="text-sm font-medium text-foreground">Tavily API Key</Label>
+							<p className="text-xs text-muted-foreground">
+								Bring your own Tavily API key (tavily.com) to enable the web search tool with any model provider.
+								Tavily returns cleaned page content alongside results, so no separate scraper is needed. When
+								empty, web search falls back to the Cline-account endpoint (Cline accounts only).
+							</p>
+							<Input
+								onBlur={() => updateSetting("tavilySearchApiKey", tavilyKeyDraft.trim())}
+								onChange={(e) => setTavilyKeyDraft(e.target.value)}
+								placeholder="tvly-…"
+								type="password"
+								value={tavilyKeyDraft}
+							/>
 						</div>
 					</div>
 				</div>

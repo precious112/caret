@@ -1,4 +1,5 @@
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { PRODUCT_NAME } from "@/config/brand"
 import Section from "../Section"
 
 interface AboutSectionProps {
@@ -11,11 +12,13 @@ const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
 			{renderSectionHeader("about")}
 			<Section>
 				<div className="flex px-4 flex-col gap-2">
-					<h2 className="text-lg font-semibold">Cline v{version}</h2>
+					<h2 className="text-lg font-semibold">
+						{PRODUCT_NAME} v{version}
+					</h2>
 					<p>
-						An AI assistant that can use your CLI and Editor. Cline can handle complex software development tasks
-						step-by-step with tools that let him create & edit files, explore large projects, use the browser, and
-						execute terminal commands (after you grant permission).
+						An AI assistant that can use your CLI and Editor. {PRODUCT_NAME} can handle complex software development
+						tasks step-by-step with tools that let him create & edit files, explore large projects, use the browser,
+						and execute terminal commands (after you grant permission).
 					</p>
 
 					<h3 className="text-md font-semibold">Community & Support</h3>

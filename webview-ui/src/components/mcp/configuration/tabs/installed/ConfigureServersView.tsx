@@ -24,7 +24,7 @@ const ConfigureServersView = () => {
 					Model Context Protocol
 				</VSCodeLink>{" "}
 				enables communication with locally running MCP servers that provide additional tools and resources to extend
-				Cline's capabilities. You can use{" "}
+				Caret's capabilities. You can use{" "}
 				<VSCodeLink href="https://github.com/modelcontextprotocol/servers" style={{ display: "inline" }}>
 					community-made servers
 				</VSCodeLink>{" "}
@@ -54,7 +54,7 @@ const ConfigureServersView = () => {
 						})
 					}}
 					style={{ width: "100%", marginBottom: "5px" }}>
-					<span className="codicon codicon-server" style={{ marginRight: "6px" }}></span>
+					<span className="codicon codicon-server" style={{ marginRight: "6px" }} />
 					Configure MCP Servers
 				</VSCodeButton>
 

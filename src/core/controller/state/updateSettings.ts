@@ -361,6 +361,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("googleFontsApiKey", request.googleFontsApiKey || undefined)
 		}
 
+		if (request.tavilySearchApiKey !== undefined) {
+			// Empty string clears the key (falls back to the Cline-account web search path).
+			controller.stateManager.setGlobalState("tavilySearchApiKey", request.tavilySearchApiKey || undefined)
+		}
+
 		if (request.designContext !== undefined) {
 			const value = request.designContext === "design" ? "design" : "implementation"
 			controller.stateManager.setGlobalState("designContext", value as any)

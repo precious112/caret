@@ -168,6 +168,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 									<Progress
 										aria-label="Context window usage progress"
 										color="success"
+										indicatorClassName="bg-caret-accent"
 										value={tokenData.percentage}
 									/>
 									{isOpened}

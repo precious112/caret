@@ -49,7 +49,10 @@ const CodeAccordian = ({
 	}, [code])
 
 	return (
-		<div className="bg-code overflow-hidden rounded-xs border border-editor-group-border">
+		<div
+			className={cn("bg-code overflow-hidden rounded-lg border border-editor-group-border", {
+				"animate-caret-pulse": isLoading,
+			})}>
 			{(path || isFeedback || isConsoleLogs) && (
 				<Button
 					aria-label={isExpanded ? "Collapse code block" : "Expand code block"}

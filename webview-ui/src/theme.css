@@ -1,6 +1,14 @@
 /* Editor theme mapping */
 @theme {
-	--color-cline: #9663f1;
+	/* Caret brand palette (blue, derived from the logo) — deliberately deviates from Cline's purple.
+	   Use these tokens for intentional brand accents (focus rings, progress fill, active-widget glow,
+	   tool-icon tint). Neutral surfaces stay bound to the VS Code theme so light/dark still works. */
+	--color-caret-accent: #0b7aff;
+	--color-caret-accent-hover: #2e8bff;
+	--color-caret-accent-press: #0066db;
+	--color-caret-navy: #16233d;
+
+	--color-cline: var(--color-caret-accent);
 	--color-background: var(--vscode-sideBar-background);
 	--color-border: var(--vscode-focusBorder);
 	--color-border-panel: var(--vscode-panel-border);
@@ -149,6 +157,25 @@
 			transform: translateY(0);
 		}
 	}
+
+	/* Active-glow: the single in-progress widget pulses in Caret blue, then settles to a neutral
+	   border when done. One moving accent per viewport = a real-time "working here" signal. */
+	--animate-caret-pulse: caretPulse 1.8s ease-in-out infinite;
+	@keyframes caretPulse {
+		0%,
+		100% {
+			border-color: var(--color-caret-accent);
+			box-shadow:
+				0 0 0 1px color-mix(in srgb, var(--color-caret-accent) 60%, transparent),
+				0 0 6px -1px color-mix(in srgb, var(--color-caret-accent) 45%, transparent);
+		}
+		50% {
+			border-color: var(--color-caret-accent-hover);
+			box-shadow:
+				0 0 0 1px var(--color-caret-accent),
+				0 0 14px 1px color-mix(in srgb, var(--color-caret-accent) 70%, transparent);
+		}
+	}
 }
 
 @theme inline {
@@ -211,7 +238,7 @@
 	--destructive: oklch(0.577 0.245 27.325);
 	--border: oklch(0.922 0 0);
 	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
+	--ring: var(--color-caret-accent);
 	--chart-1: oklch(0.646 0.222 41.116);
 	--chart-2: oklch(0.6 0.118 184.704);
 	--chart-3: oklch(0.398 0.07 227.392);
@@ -219,12 +246,12 @@
 	--chart-5: oklch(0.769 0.188 70.08);
 	--sidebar: oklch(0.985 0 0);
 	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
+	--sidebar-primary: var(--color-caret-accent);
 	--sidebar-primary-foreground: oklch(0.985 0 0);
 	--sidebar-accent: oklch(0.97 0 0);
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
+	--sidebar-ring: var(--color-caret-accent);
 }
 
 .dark {
@@ -245,7 +272,7 @@
 	--destructive: oklch(0.704 0.191 22.216);
 	--border: oklch(1 0 0 / 10%);
 	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
+	--ring: var(--color-caret-accent);
 	--chart-1: oklch(0.488 0.243 264.376);
 	--chart-2: oklch(0.696 0.17 162.48);
 	--chart-3: oklch(0.769 0.188 70.08);
@@ -253,12 +280,12 @@
 	--chart-5: oklch(0.645 0.246 16.439);
 	--sidebar: oklch(0.205 0 0);
 	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
+	--sidebar-primary: var(--color-caret-accent);
 	--sidebar-primary-foreground: oklch(0.985 0 0);
 	--sidebar-accent: oklch(0.269 0 0);
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
+	--sidebar-ring: var(--color-caret-accent);
 }
 
 @layer utilities {

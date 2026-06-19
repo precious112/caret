@@ -53,11 +53,16 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 			const currentMode = config.services.stateManager.getGlobalSettingsKey("mode")
 			const provider = (currentMode === "plan" ? apiConfig.planModeApiProvider : apiConfig.actModeApiProvider) as string
 
-			// Check if Cline web tools are enabled (both user setting and feature flag)
+			// Provider-agnostic / BYOK path: if a Tavily key is configured, use Tavily regardless of
+			// the model provider. Otherwise fall back to the Cline-account web tools (Cline accounts only).
+			const tavilyApiKey = config.services.stateManager.getGlobalSettingsKey("tavilySearchApiKey")
+			const useTavily = !!tavilyApiKey
 			const clineWebToolsEnabled = config.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled")
 			const featureFlagEnabled = featureFlagsService.getWebtoolsEnabled()
-			if (provider !== "cline" || !clineWebToolsEnabled || !featureFlagEnabled) {
-				return formatResponse.toolError("Cline web tools are currently disabled.")
+			if (!useTavily && (provider !== "cline" || !clineWebToolsEnabled || !featureFlagEnabled)) {
+				return formatResponse.toolError(
+					"Web search is not configured. Add a Tavily API key in Settings → Features → Web Search, or sign in to a Caret (Cline) account.",
+				)
 			}
 
 			// Validate required parameters
@@ -103,7 +108,7 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 			} else {
 				// Manual approval flow
 				showNotificationForApproval(
-					`Cline wants to search for: ${query}`,
+					`Caret wants to search for: ${query}`,
 					config.autoApprovalSettings.enableNotifications,
 				)
 				await config.callbacks.removeLastPartialMessageIfExistsWithType("say", "tool")
@@ -121,18 +126,17 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 						block.isNativeToolCall,
 					)
 					return formatResponse.toolDenied()
-				} else {
-					telemetryService.captureToolUsage(
-						config.ulid,
-						block.name,
-						config.api.getModel().id,
-						provider,
-						false,
-						true,
-						undefined,
-						block.isNativeToolCall,
-					)
 				}
+				telemetryService.captureToolUsage(
+					config.ulid,
+					block.name,
+					config.api.getModel().id,
+					provider,
+					false,
+					true,
+					undefined,
+					block.isNativeToolCall,
+				)
 			}
 
 			// Run PreToolUse hook after approval but before execution
@@ -145,6 +149,11 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 					return formatResponse.toolDenied()
 				}
 				throw error
+			}
+
+			// BYOK Tavily path — provider-agnostic, returns cleaned page content inline.
+			if (useTavily) {
+				return await this.searchWithTavily(tavilyApiKey!, query, allowedDomains, blockedDomains)
 			}
 
 			// Execute the actual search
@@ -202,5 +211,65 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 		} catch (error) {
 			return `Error performing web search: ${(error as Error).message}`
 		}
+	}
+
+	/**
+	 * Provider-agnostic web search via Tavily (https://api.tavily.com/search). Tavily natively
+	 * returns a cleaned, LLM-ready `content` snippet per result and an optional synthesized answer,
+	 * so search + extraction happen in one request (no separate scraper needed).
+	 */
+	private async searchWithTavily(
+		apiKey: string,
+		query: string,
+		allowedDomains: string[],
+		blockedDomains: string[],
+	): Promise<ToolResponse> {
+		const requestBody: {
+			api_key: string
+			query: string
+			search_depth: string
+			max_results: number
+			include_answer: boolean
+			include_domains?: string[]
+			exclude_domains?: string[]
+		} = {
+			api_key: apiKey,
+			query,
+			search_depth: "basic",
+			max_results: 5,
+			include_answer: true,
+		}
+		if (allowedDomains.length > 0) {
+			requestBody.include_domains = allowedDomains
+		}
+		if (blockedDomains.length > 0) {
+			requestBody.exclude_domains = blockedDomains
+		}
+
+		const response = await axios.post("https://api.tavily.com/search", requestBody, {
+			headers: { "Content-Type": "application/json" },
+			timeout: 15000,
+			...getAxiosSettings(),
+		})
+
+		const data = response.data ?? {}
+		const results: Array<{ title?: string; url?: string; content?: string }> = data.results || []
+
+		let resultText = `Search completed (${results.length} results found)`
+		if (results.length > 0) {
+			resultText += ":\n\n"
+			results.forEach((result, index) => {
+				resultText += `${index + 1}. ${result.title ?? result.url ?? ""}\n   ${result.url ?? ""}\n`
+				if (result.content) {
+					resultText += `   ${String(result.content).replace(/\s+/g, " ").trim()}\n`
+				}
+				resultText += "\n"
+			})
+		}
+		if (data.answer) {
+			resultText += `Answer summary: ${data.answer}\n`
+		}
+
+		return formatResponse.toolResult(resultText)
 	}
 }

@@ -49,6 +49,7 @@ export interface ExtensionState {
 	designContext: DesignContext
 	autoCommitDesignLayer: boolean
 	googleFontsApiKey?: string
+	tavilySearchApiKey?: string
 	hasDesignLayer: boolean
 	checkpointManagerErrorMessage?: string
 	clineMessages: ClineMessage[]

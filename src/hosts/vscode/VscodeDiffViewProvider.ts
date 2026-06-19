@@ -10,14 +10,30 @@ export const DIFF_VIEW_URI_SCHEME = "cline-diff"
 
 export class VscodeDiffViewProvider extends DiffViewProvider {
 	private activeDiffEditor?: vscode.TextEditor
+	/** Headless target document for design-mode `.caret/` writes (no visible editor). */
+	private activeDocument?: vscode.TextDocument
 
 	private fadedOverlayController?: DecorationController
 	private activeLineController?: DecorationController
 	private notebookDiffView?: NotebookDiffView
 
+	/** The document being edited, whether shown in a diff editor or opened headlessly. */
+	private getActiveDocument(): vscode.TextDocument | undefined {
+		return this.activeDiffEditor?.document ?? this.activeDocument
+	}
+
 	override async openDiffEditor(): Promise<void> {
 		if (!this.absolutePath) {
 			throw new Error("No file path set")
+		}
+
+		// Design-mode `.caret/` write: load the document into the workspace WITHOUT revealing an
+		// editor tab or stealing focus from the live preview. Edits still apply via applyEdit and
+		// the disk save in saveChanges() still fires, so Vite HMR refreshes the preview in realtime.
+		if (this.headless) {
+			const uri = vscode.Uri.file(this.absolutePath)
+			this.activeDocument = await vscode.workspace.openTextDocument(uri)
+			return
 		}
 
 		// if the file was already open, close it (must happen after showing the diff view since if it's the only tab the column will close)
@@ -96,16 +112,19 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 		rangeToReplace: { startLine: number; endLine: number },
 		currentLine: number | undefined,
 	): Promise<void> {
-		if (!this.activeDiffEditor || !this.activeDiffEditor.document) {
+		const document = this.getActiveDocument()
+		if (!document) {
 			throw new Error("User closed text editor, unable to edit file...")
 		}
 
-		// Place cursor at the beginning of the diff editor to keep it out of the way of the stream animation
-		const beginningOfDocument = new vscode.Position(0, 0)
-		this.activeDiffEditor.selection = new vscode.Selection(beginningOfDocument, beginningOfDocument)
+		// Place cursor at the beginning of the diff editor to keep it out of the way of the stream
+		// animation (only relevant when a visible editor exists — skipped for headless writes).
+		if (this.activeDiffEditor) {
+			const beginningOfDocument = new vscode.Position(0, 0)
+			this.activeDiffEditor.selection = new vscode.Selection(beginningOfDocument, beginningOfDocument)
+		}
 
-		// Replace the text in the diff editor document.
-		const document = this.activeDiffEditor?.document
+		// Replace the text in the document.
 		const replacingToEnd = rangeToReplace.endLine >= document.lineCount
 		const edit = new vscode.WorkspaceEdit()
 		const range = new vscode.Range(rangeToReplace.startLine, 0, rangeToReplace.endLine, 0)
@@ -162,10 +181,10 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 	}
 
 	override async truncateDocument(lineNumber: number): Promise<void> {
-		if (!this.activeDiffEditor) {
+		const document = this.getActiveDocument()
+		if (!document) {
 			return
 		}
-		const document = this.activeDiffEditor.document
 		if (lineNumber < document.lineCount) {
 			const edit = new vscode.WorkspaceEdit()
 			edit.delete(document.uri, new vscode.Range(lineNumber, 0, document.lineCount, 0))
@@ -180,24 +199,19 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 	}
 
 	protected override async getDocumentLineCount(): Promise<number> {
-		return this.activeDiffEditor?.document.lineCount ?? 0
+		return this.getActiveDocument()?.lineCount ?? 0
 	}
 
 	protected override async getDocumentText(): Promise<string | undefined> {
-		if (!this.activeDiffEditor || !this.activeDiffEditor.document) {
-			return undefined
-		}
-		return this.activeDiffEditor.document.getText()
+		return this.getActiveDocument()?.getText()
 	}
 
-	protected override async saveDocument(): Promise<Boolean> {
-		if (!this.activeDiffEditor) {
+	protected override async saveDocument(): Promise<boolean> {
+		const document = this.getActiveDocument()
+		if (!document || !document.isDirty) {
 			return false
 		}
-		if (!this.activeDiffEditor.document.isDirty) {
-			return false
-		}
-		await this.activeDiffEditor.document.save()
+		await document.save()
 		return true
 	}
 
@@ -225,6 +239,7 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 		}
 
 		this.activeDiffEditor = undefined
+		this.activeDocument = undefined
 		this.fadedOverlayController = undefined
 		this.activeLineController = undefined
 	}
@@ -243,6 +258,11 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 	}
 
 	override async showFile(absolutePath: string): Promise<void> {
+		// In headless (design-mode `.caret/`) writes, never reveal the file — the whole point is
+		// to keep focus on the live preview. saveChanges() calls this after saving.
+		if (this.headless) {
+			return
+		}
 		const uri = vscode.Uri.file(absolutePath)
 
 		if (this.isNotebookFile()) {

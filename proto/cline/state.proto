@@ -290,6 +290,7 @@ message Settings {
   optional string design_context = 184;
   optional bool auto_commit_design_layer = 185;
   optional string google_fonts_api_key = 186;
+  optional string tavily_search_api_key = 187;
 }
 
 message State {
@@ -436,6 +437,7 @@ message UpdateSettingsRequest {
   optional string design_context = 44;
   optional bool auto_commit_design_layer = 45;
   optional string google_fonts_api_key = 46;
+  optional string tavily_search_api_key = 47;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

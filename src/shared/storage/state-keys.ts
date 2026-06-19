@@ -284,6 +284,9 @@ const USER_SETTINGS_FIELDS = {
 	// BYOK Google Fonts API key — unlocks the full Google Fonts catalog in the
 	// Token Wizard's font picker (otherwise only a small fallback list is shown).
 	googleFontsApiKey: { default: undefined as string | undefined },
+	// BYOK Tavily API key — provider-agnostic web search. When set, web_search uses
+	// Tavily (works regardless of model provider) instead of the Cline-account endpoint.
+	tavilySearchApiKey: { default: undefined as string | undefined },
 
 	// OpenTelemetry configuration
 	openTelemetryEnabled: { default: true as boolean },
