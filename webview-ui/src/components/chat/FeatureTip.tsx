@@ -8,22 +8,22 @@ interface FeatureTipItem {
 
 const FEATURE_TIPS: FeatureTipItem[] = [
 	{
-		text: 'Enable "Double-Check Completion" in settings to have Cline verify its work before finishing a task.',
+		text: 'Enable "Double-Check Completion" in settings to have Caret verify its work before finishing a task.',
 	},
 	{
-		text: "Add a .clinerules file to your project root to give Cline project-specific instructions.",
+		text: "Add a .clinerules file to your project root to give Caret project-specific instructions.",
 	},
 	{
-		text: "Switch to Plan Mode to discuss and plan an approach before Cline takes action.",
+		text: "Switch to Plan Mode to discuss and plan an approach before Caret takes action.",
 	},
 	{
 		text: "Use @ in the chat input to add files, folders, or URLs as context for your task.",
 	},
 	{
-		text: "Set up MCP Servers to give Cline access to external tools and APIs.",
+		text: "Set up MCP Servers to give Caret access to external tools and APIs.",
 	},
 	{
-		text: "Cline creates checkpoints after changes — you can always restore to a previous state.",
+		text: "Caret creates checkpoints after changes — you can always restore to a previous state.",
 	},
 	{
 		text: "Use /compact to condense long conversations and free up context window space.",
