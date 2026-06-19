@@ -125,7 +125,7 @@ Scoped to the sync mechanic for the V1 launch — it closes the core design→co
 - [x] **caret-ids never leak into app code** — the sync prompt instructs the AI to treat `data-caret-id` as design-only tooling metadata and omit it when translating
 - [x] **caret-id authoring hardened** — precompute auto-heals to unique static ids (native + `motion.*` elements; converts dynamic ids, dedupes duplicates, strips ids inside `.map()`), plus the `/debug-ui-page` healing command and a shared `CARET_ID_RULES` constant used by both the system prompt and the command
 
-**Known follow-ups (tracked, not blocking V1):** inline-text-edit indentation artifact in design source; component prop-threaded caret-ids (e.g. `data-caret-id={prop}` in a reused component) aren't auto-healed by precompute (use `/debug-ui-page`); rollback's app-restore currently requires the sync task to still be the active task.
+**Known follow-ups (tracked, not blocking V1):** inline-text-edit indentation artifact in design source; component prop-threaded caret-ids (e.g. `data-caret-id={prop}` in a reused component) aren't auto-healed by precompute (use `/debug-ui-page`); rollback's app-restore currently requires the sync task to still be the active task; **overlay-editor screenshots aren't seen by native-tool models (Gemini, OpenAI-Responses) on _idle_ edits** — the image rides in `attempt_completion` tool-result feedback, which those formats serialize as text and drop (works on Anthropic and in fresh chats). Proper fix: have the completion-feedback path emit the image as a _separate following_ plain user message instead of inside the tool result (core change in `AttemptCompletionHandler`/task loop — deferred to avoid touching well-tested core/provider code).
 
 ---
 
