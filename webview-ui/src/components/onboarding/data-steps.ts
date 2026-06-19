@@ -16,7 +16,8 @@ export const STEP_CONFIG = {
 		description: "Select an option below to get started.",
 		buttons: [
 			{ text: "Continue", action: "next", variant: "default" },
-			{ text: "Login to Cline", action: "signin", variant: "secondary" },
+			// Caret accounts are not yet available — keep the entry point visible but disabled.
+			{ text: "Login to Caret", action: "signin", variant: "secondary", disabled: true },
 		],
 	},
 	[NEW_USER_TYPE.FREE]: {

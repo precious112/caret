@@ -19,7 +19,7 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 	const { clineUser } = useClineAuth()
 	const rawApiError = apiRequestFailedMessage || apiReqStreamingFailedMessage
 
-	const { isLoginLoading, handleSignIn } = useClineSignIn()
+	const { handleSignIn } = useClineSignIn()
 
 	const renderErrorContent = () => {
 		switch (errorType) {
@@ -77,13 +77,12 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 								<div className="flex items-center justify-center rounded border border-neutral-500/30 bg-vscode-editor-background p-6 text-center text-vscode-foreground">
 									Whoops looks like you're logged out – click below to sign in
 								</div>
-								<Button className="w-full" disabled={isLoginLoading} onClick={handleSignIn}>
-									Sign in to Cline
-									{isLoginLoading && (
-										<span className="ml-1 animate-spin">
-											<span className="codicon codicon-refresh" />
-										</span>
-									)}
+								<Button
+									className="w-full"
+									disabled
+									onClick={handleSignIn}
+									title="Caret accounts are not yet available">
+									Sign in to Caret
 								</Button>
 							</div>
 						) : (

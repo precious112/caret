@@ -406,7 +406,7 @@ const OnboardingView = ({ onboardingModels }: { onboardingModels: OnboardingMode
 					{stepDisplayInfo.buttons.map((btn) => (
 						<Button
 							className={`w-full rounded-xs ${isActionLoading ? "animate-pulse" : ""}`}
-							disabled={isActionLoading}
+							disabled={isActionLoading || (btn as { disabled?: boolean }).disabled === true}
 							key={btn.text}
 							onClick={() => handleFooterAction(btn.action)}
 							variant={btn.variant}>

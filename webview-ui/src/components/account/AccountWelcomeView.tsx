@@ -8,7 +8,7 @@ import CaretLogoVariable from "../../assets/CaretLogoVariable"
 // 		<CaretLogoWhite className="size-16 mb-4" />
 export const AccountWelcomeView = () => {
 	const { environment } = useExtensionState()
-	const { isLoginLoading, handleSignIn } = useClineSignIn()
+	const { handleSignIn } = useClineSignIn()
 
 	return (
 		<div className="flex flex-col items-center gap-2.5">
@@ -19,13 +19,8 @@ export const AccountWelcomeView = () => {
 				upcoming features.
 			</p>
 
-			<VSCodeButton className="w-full mb-4" disabled={isLoginLoading} onClick={handleSignIn}>
-				Sign up with Cline
-				{isLoginLoading && (
-					<span className="ml-1 animate-spin">
-						<span className="codicon codicon-refresh"></span>
-					</span>
-				)}
+			<VSCodeButton className="w-full mb-4" disabled onClick={handleSignIn} title="Caret accounts are not yet available">
+				Sign up with Caret
 			</VSCodeButton>
 
 			<p className="text-(--vscode-descriptionForeground) text-xs text-center m-0">
