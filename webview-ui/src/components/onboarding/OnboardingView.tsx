@@ -274,9 +274,12 @@ const OnboardingView = ({ onboardingModels }: { onboardingModels: OnboardingMode
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 	const { openRouterModels, hideSettings, hideAccount, setShowWelcome } = useExtensionState()
 
-	const [stepNumber, setStepNumber] = useState(0)
+	// Caret is fully BYOK for now: open onboarding directly on the BYOK provider-config step
+	// (step 1) instead of the user-type choice (step 0). Step 0 is intentionally kept intact
+	// and still reachable (e.g. via Back) so a future cloud-models offering can re-enable it.
+	const [stepNumber, setStepNumber] = useState(1)
 	const [isActionLoading, setIsActionLoading] = useState(false)
-	const [userType, setUserType] = useState<NEW_USER_TYPE>(NEW_USER_TYPE.FREE)
+	const [userType, setUserType] = useState<NEW_USER_TYPE>(NEW_USER_TYPE.BYOK)
 
 	const [selectedModelId, setSelectedModelId] = useState("")
 	const [searchTerm, setSearchTerm] = useState("")

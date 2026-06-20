@@ -10,7 +10,9 @@ import { validateApiConfiguration } from "@/utils/validate"
 const WelcomeView = memo(() => {
 	const { apiConfiguration, mode } = useExtensionState()
 	const [apiErrorMessage, setApiErrorMessage] = useState<string | undefined>(undefined)
-	const [showApiOptions, setShowApiOptions] = useState(false)
+	// Caret is fully BYOK for now: show the API-key options by default. The Cline login button
+	// is kept (just secondary) so a future cloud-models offering can use it again.
+	const [showApiOptions, setShowApiOptions] = useState(true)
 	const [isLoading, setIsLoading] = useState(false)
 
 	const disableLetsGoButton = apiErrorMessage != null
