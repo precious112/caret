@@ -20,7 +20,6 @@ const AppContent = () => {
 		didHydrateState,
 		showWelcome,
 		shouldShowAnnouncement,
-		dismissedBanners,
 		showMcp,
 		mcpTab,
 		showSettings,
@@ -58,16 +57,15 @@ const AppContent = () => {
 			})
 	}, [setShouldShowAnnouncement, setShowAnnouncement])
 
+	// Caret: the "Cline Kanban" launch modal is disabled (off-brand Cline marketing). We still
+	// mark it as shown — without ever opening it — so the update-announcement gating below
+	// (which waits on the Kanban modal) is never blocked.
 	useEffect(() => {
 		if (!didHydrateState || showWelcome || hasShownKanbanModal) {
 			return
 		}
-		const hasDismissedKanbanModal = dismissedBanners?.some((banner) => banner.bannerId === CLINE_KANBAN_MODAL_DISMISS_ID)
-		if (!hasDismissedKanbanModal) {
-			setShowKanbanModal(true)
-		}
 		setHasShownKanbanModal(true)
-	}, [didHydrateState, dismissedBanners, hasShownKanbanModal, showWelcome])
+	}, [didHydrateState, hasShownKanbanModal, showWelcome])
 
 	// Keep update announcements queued until the Kanban modal has either shown and closed or been skipped.
 	useEffect(() => {
