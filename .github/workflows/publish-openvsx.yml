@@ -50,6 +50,16 @@ jobs:
             - name: Package extension
               run: vsce package --allow-package-secrets sendgrid --no-dependencies --out "caret-${{ steps.get_version.outputs.version }}.vsix"
 
+            - name: Verify OVSX_PAT is set
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+              run: |
+                  if [ -z "$OVSX_PAT" ]; then
+                    echo "::error::OVSX_PAT secret is empty. Add it to THIS repo (precious112/caret) under Settings → Secrets and variables → Actions."
+                    exit 1
+                  fi
+                  echo "OVSX_PAT is set."
+
             - name: Ensure Open VSX namespace exists
               env:
                   OVSX_PAT: ${{ secrets.OVSX_PAT }}
