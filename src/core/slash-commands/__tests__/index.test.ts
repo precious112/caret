@@ -150,6 +150,12 @@ describe("slash-commands", () => {
 			expect(result.processedText).to.include('<explicit_instructions type="debug_ui_page">')
 			// The shared caret-id rules are embedded so the command can't drift from the system prompt.
 			expect(result.processedText).to.include("Static string literal — never an expression")
+			// The shared inline-editing rules are embedded too (so the command heals more than just ids).
+			expect(result.processedText).to.include("Inline Editing Compatibility")
+			// The expanded anti-pattern scan covers fragmented static text and dynamic content/styling.
+			expect(result.processedText).to.include("FRAGMENTED")
+			expect(result.processedText).to.include("dynamic-image-src")
+			expect(result.processedText).to.include("Inline styles block color/style inline editing")
 			// The user's own complaint rides along after the injected instructions.
 			expect(result.processedText).to.include("the testimonials heading won't let me edit its color")
 			// The slash token itself is removed from the message.

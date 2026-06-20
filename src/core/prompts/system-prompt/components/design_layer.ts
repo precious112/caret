@@ -1,4 +1,4 @@
-import { CARET_ID_RULES } from "../../design-rules"
+import { CARET_ID_RULES, INLINE_EDITING_RULES } from "../../design-rules"
 import type { PromptVariant, SystemPromptContext } from "../types"
 
 export async function getDesignLayerSection(_variant: PromptVariant, context: SystemPromptContext): Promise<string> {
@@ -101,39 +101,7 @@ export default function HeroPage() {
 }
 \`\`\`
 
-## Inline Editing Compatibility
-
-The design preview supports inline editing — users can click text, colors, and images to edit them directly in the preview. To maximize compatibility with inline editing, prefer these patterns for static and decorative content:
-
-### Text
-Write display text as direct inline JSX content. The inline text editor can modify literal text but not variable expressions:
-
-\`\`\`tsx
-// Preferred — editable inline
-<h1>Welcome to Our Store</h1>
-<p>Browse our latest collection</p>
-<button>Shop Now</button>
-
-// Dynamic content — use variables when the content genuinely varies
-{products.map(item => <h3>{item.name}</h3>)}
-\`\`\`
-
-For text attributes, prefer string literals:
-\`\`\`tsx
-<input placeholder="Search products..." />
-<img alt="Hero banner" src="/assets/hero.jpg" />
-\`\`\`
-
-### Images
-Use standalone \`<img>\` elements with string literal \`src\` and \`data-caret-id\` wherever possible. Avoid dynamic image sources unless the content genuinely varies (e.g. items in a list from data). Static images are directly replaceable via the inline editor:
-
-\`\`\`tsx
-// Preferred — editable and identifiable
-<img data-caret-id="hero-banner" src="https://placehold.co/600x400" alt="Featured" className="w-full rounded-lg" />
-
-// Only when image source truly varies per item
-<img src={product.imageUrl} alt={product.name} />
-\`\`\`
+${INLINE_EDITING_RULES}
 
 ${CARET_ID_RULES}
 

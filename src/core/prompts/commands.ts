@@ -1,6 +1,6 @@
 import type { ApiProviderInfo } from "@/core/api"
 import { getDeepPlanningPrompt } from "./commands/deep-planning"
-import { CARET_ID_RULES } from "./design-rules"
+import { CARET_ID_RULES, INLINE_EDITING_RULES } from "./design-rules"
 
 export const newTaskToolResponse = (willUseNativeTools: boolean) => {
 	const xmlExample = `
@@ -343,9 +343,9 @@ If the user hasn't configured tokens yet, suggest they complete the Token Wizard
 
 export const debugUiPageToolResponse = () =>
 	`<explicit_instructions type="debug_ui_page">
-The user is in design mode and reports that the VISUAL / INLINE EDITOR is not working on a design page — they can't click to edit some text, color, or image. This almost always means the design-layer code violates the editor's requirements. Your job is to FIND and HEAL those violations WITHOUT changing the rendered appearance of the page.
+The user is in design mode and reports that the VISUAL / INLINE EDITOR is not working on a design page — they can't click to edit some text, color, or image — OR the generated markup violates the design-layer authoring rules. This almost always means the design-layer code broke the editor's requirements. Your job is to FIND and HEAL those violations WITHOUT changing the rendered appearance of the page.
 
-The visual editor locates each element in the .caret/ source by a UNIQUE STATIC \`data-caret-id\` string literal (an AST match). It cannot find an element whose id is a dynamic expression, and it edits the wrong element when an id is duplicated. So scan for and fix these problems:
+The visual editor locates each element in the .caret/ source by a UNIQUE STATIC \`data-caret-id\` string literal (an AST match). It cannot find an element whose id is a dynamic expression, and it edits the wrong element when an id is duplicated. So scan for and fix these LOCATING problems:
 
 - A \`data-caret-id\` that is NOT a plain string literal (a variable, template literal, ternary, or any \`{...}\` expression) → replace it with a unique static kebab-case literal.
 - The SAME \`data-caret-id\` reused on more than one element → give each a distinct id.
@@ -355,14 +355,24 @@ The visual editor locates each element in the .caret/ source by a UNIQUE STATIC 
 - Multiple distinct static texts sharing one id/attribute so editing one changes another → split them into independent elements each with its own id.
 - A visible element whose opening tag is not on its own source line (the editor also locates by line) → reformat it onto its own line.
 
+Even when an element is locatable, these CONTENT/STYLING anti-patterns silently make it un-editable (the editor greys them out). Scan for and fix these too:
+
+- Static display text FRAGMENTED by inline/structural tags so it isn't a single editable text node — e.g. \`<p>Hi how are <br> you</p>\`, or a sentence split across sibling/inline tags. Recombine it into one contiguous JSX text node; achieve any intended line break with CSS/layout (e.g. block elements or width), NOT a mid-sentence \`<br>\`. If a nested inline element is genuinely needed (e.g. an accent span), keep it but give the parent AND each child its own unique \`data-caret-id\`.
+- A visible element whose display text is a dynamic \`{...}\` expression when the content is actually STATIC (not from data/iteration) → replace it with a plain string literal so it is inline-editable. (The editor flags this as \`dynamic-text\`.)
+- A standalone static \`<img>\` whose \`src\` is a dynamic \`{...}\` expression (not a per-item/data image) → make \`src\` a string literal and give the image a unique \`data-caret-id\`. (Flagged as \`dynamic-image-src\`.)
+- An inline \`style={{ ... }}\` on any element → convert it to equivalent Tailwind utility classes (e.g. \`style={{ padding: "13px" }}\` → \`className="p-[13px]"\`, \`style={{ color: "#ff0000" }}\` → \`className="text-[#ff0000]"\`). Inline styles block color/style inline editing and violate the design rules.
+- A Tailwind class name built by string concatenation of the utility portion (e.g. \`\\\`bg-\${color}-500\\\`\`) → replace with full static class strings selected via a lookup object keyed on the variable. (Flagged as \`dynamic-tailwind-class\`.)
+
 How to proceed:
 1. Identify the affected page. If the user named one, use it; otherwise scan all pages under .caret/pages/ (read each .caret/pages/<id>/index.tsx) plus any shared components in .caret/components/ that they import.
-2. Apply the fixes above, preserving the exact visual output — only ids, structure-for-identification, and formatting change, never styling or content.
-3. After editing, re-read each file you changed and confirm it still parses and that every \`data-caret-id\` is a unique static string literal.
+2. Apply the fixes above, preserving the exact visual output — only ids, text-node structure, identifiers, formatting, and equivalent style/class rewrites change, never the rendered appearance or wording. If a fix could shift layout (e.g. removing a \`<br>\`), use CSS to reproduce the same visual result.
+3. After editing, re-read each file you changed and confirm it still parses, every \`data-caret-id\` is a unique static string literal, and no inline styles / dynamic class names / fragmented static text remain.
 
 The authoring rules you are enforcing (the same ones the design system follows):
 
 ${CARET_ID_RULES}
+
+${INLINE_EDITING_RULES}
 
 Below is the user's message describing what isn't working.
 </explicit_instructions>\n

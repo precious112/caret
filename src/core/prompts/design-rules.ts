@@ -45,3 +45,43 @@ Place each visible element's opening tag on its own line — the editor also loc
   <p data-caret-id="section-subtitle" className="mt-4 text-lg text-zinc-400">Subtitle here</p>
 </section>
 \`\`\``
+
+/**
+ * Inline-editing authoring rules (text & images). Shared between the design-mode system
+ * prompt (`design_layer.ts`) and the `/debug-ui-page` healing command (`commands.ts`) so the
+ * rules the AI is taught match the rules it's told to enforce. Kept verbatim from the original
+ * `design_layer.ts` prose so embedding it there produces byte-identical output.
+ */
+export const INLINE_EDITING_RULES = `## Inline Editing Compatibility
+
+The design preview supports inline editing — users can click text, colors, and images to edit them directly in the preview. To maximize compatibility with inline editing, prefer these patterns for static and decorative content:
+
+### Text
+Write display text as direct inline JSX content. The inline text editor can modify literal text but not variable expressions:
+
+\`\`\`tsx
+// Preferred — editable inline
+<h1>Welcome to Our Store</h1>
+<p>Browse our latest collection</p>
+<button>Shop Now</button>
+
+// Dynamic content — use variables when the content genuinely varies
+{products.map(item => <h3>{item.name}</h3>)}
+\`\`\`
+
+For text attributes, prefer string literals:
+\`\`\`tsx
+<input placeholder="Search products..." />
+<img alt="Hero banner" src="/assets/hero.jpg" />
+\`\`\`
+
+### Images
+Use standalone \`<img>\` elements with string literal \`src\` and \`data-caret-id\` wherever possible. Avoid dynamic image sources unless the content genuinely varies (e.g. items in a list from data). Static images are directly replaceable via the inline editor:
+
+\`\`\`tsx
+// Preferred — editable and identifiable
+<img data-caret-id="hero-banner" src="https://placehold.co/600x400" alt="Featured" className="w-full rounded-lg" />
+
+// Only when image source truly varies per item
+<img src={product.imageUrl} alt={product.name} />
+\`\`\``
