@@ -2,7 +2,7 @@
 	"name": "caret",
 	"displayName": "Caret",
 	"description": "Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
-	"version": "3.79.1",
+	"version": "3.79.2",
 	"icon": "assets/icons/icon.png",
 	"workspaces": [
 		".",
@@ -12,15 +12,18 @@
 		"vscode": "^1.84.0"
 	},
 	"author": {
-		"name": "Cline Bot Inc."
+		"name": "precious112"
 	},
 	"license": "Apache-2.0",
 	"publisher": "caretAI",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/cline/cline"
+		"url": "https://github.com/precious112/caret"
 	},
-	"homepage": "https://cline.bot",
+	"bugs": {
+		"url": "https://github.com/precious112/caret/issues"
+	},
+	"homepage": "https://github.com/precious112/caret-ide",
 	"categories": [
 		"AI",
 		"Chat",
