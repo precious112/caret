@@ -1,14 +1,18 @@
 # Caret
 
-**An AI design tool in your IDE — where design intent becomes running code.**
+**An AI design tool in your IDE — where design and code are one.**
 
 <p align="center">
-  <img src="assets/docs/caret-canvas.png" width="100%" />
+  <img src="https://raw.githubusercontent.com/precious112/Pstore_backend/refs/heads/master/media/media/caret_main_edit-ezgif.com-video-to-gif-converter.gif" width="100%" alt="Caret — edit your UI with AI on a live canvas" />
 </p>
 
-Caret turns your editor into a design surface. You describe what you want, Caret generates real React pages into a standardized design layer, you arrange and edit them on a live canvas, and then sync that design straight into your application — in whatever framework your app actually uses.
+> For decades, design and development have lived in separate worlds: you mock a screen in a design tool, then someone rebuilds it by hand in code — and the two drift apart from the moment they're created. Caret is built on a bet that **this divide no longer needs to exist.** AI is now powerful enough that the design *is* the code.
+>
+> In Caret you describe and shape your UI on a live canvas inside your editor, and it stays real, version-controlled React the entire time — then you sync it straight into the app you ship. No separate design tool. No handoff. No drift. One source of truth that is design and code at once.
+>
+> It's for the people building the modern frontend — **designers moving into code, and frontend engineers who'd rather design where they already work.** As AI erases the line between designing and building, Caret is what's on the other side: **design and code, finally the same thing.**
 
-It's built for the people shipping the product: solo developers, indie hackers, and small teams who design and build at the same time. The design layer is for the apps **you** create with Caret — not a separate Figma file to keep in sync, but design-as-code that lives in your repo and version-controls alongside your app.
+> This repository is the **core Caret extension** (the VS Code extension source). For the ready-to-use desktop app with Caret already built in, see **[Caret IDE](https://github.com/precious112/caret-ide)**.
 
 ---
 
@@ -35,13 +39,27 @@ A guided wizard captures the foundations of your design system — a **vibe** de
 
 All your pages render on a zoomable, pannable canvas — a Figma-style overview of the whole product. The focused page runs as live, interactive React; the rest show as cached thumbnails so the canvas stays fast even with many pages. Click any page to mount it live, switch viewport presets (desktop / tablet / mobile) to check responsiveness, and pan back out to see how everything fits together.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/precious112/Pstore_backend/refs/heads/master/media/media/caret_res_sec_edit-ezgif.com-video-to-gif-converter.gif" width="100%" alt="Switching viewport presets to check responsiveness on the canvas" />
+</p>
+
 ### Visual editing
 
 Edit the rendered UI directly. Right-click an element to change its **text**, **color**, or **image** inline — the change is written back to the exact line of source and reflected instantly via hot-reload, no AI round-trip needed. For anything structural, choose **"Edit with AI"**: Caret hands the model rich context about the element (its source location, component, and props) and applies the change. Element targeting is deterministic via stable `data-caret-id` attributes and AST-level source edits, so edits land precisely instead of guessing.
 
+> **Edit with AI** and all source/file edits are powered by [Cline](https://github.com/cline/cline), the open-source coding agent Caret is built on — it makes the precise code changes behind the scenes.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/precious112/Pstore_backend/refs/heads/master/media/media/caret_inline_edit_third_edit-ezgif.com-video-to-gif-converter.gif" width="100%" alt="Editing text, color, and images inline on the rendered UI" />
+</p>
+
 ### Flows and simulation
 
 Define user journeys as flow graphs in `.caret/flows/*.flow.json`, referencing pages by ID. Overlay flow connections on the canvas to see how pages link together, restructure a flow by dragging an edge (Caret offers to update the underlying navigation to match), and enter **simulation mode** to click through your app in a device frame as a real user would — jumping between page states (empty, loading, error, success) with a state selector.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/precious112/Pstore_backend/refs/heads/master/media/media/caret_flow_edit-ezgif.com-video-to-gif-converter.gif" width="100%" alt="Defining and editing user flows between pages on the canvas" />
+</p>
 
 ### Design → app sync
 
@@ -55,14 +73,21 @@ Caret is built on the open-source [Cline](https://github.com/cline/cline) coding
 
 ## Getting started
 
-Caret is a VS Code extension. To run it from source:
+Caret is a VS Code extension. The easiest way to try it:
+
+- **Use the standalone [Caret IDE](https://github.com/precious112/caret-ide)** — a ready-to-go editor with Caret already built in.
+- **Install the extension into your existing editor:**
+  - **Open VSX** (VSCodium, Cursor, Windsurf, code-server, …): search **"Caret"** in the Extensions panel, or get it at [open-vsx.org/extension/caretAI/caret](https://open-vsx.org/extension/caretAI/caret).
+  - **Microsoft VS Code** (uses its own marketplace): download the `.vsix` from the Open VSX page above, then **Extensions → ⋯ → Install from VSIX…**.
+
+To run it from source:
 
 ```bash
 npm install
 npm run compile
 ```
 
-Then launch the extension from VS Code (Run → Start Debugging) to open a development host with Caret loaded. A packaged release and marketplace listing are coming as Caret matures.
+Then launch the extension from VS Code (Run → Start Debugging) to open a development host with Caret loaded.
 
 ## Contributing
 
