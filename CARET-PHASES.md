@@ -161,15 +161,136 @@ Identity + UX polish plus two capability adds, slotted before Phase 6. The core 
 
 ---
 
-## [ ] Phase 6: Collaboration + Deployment + Voice
+## ~~Phase 6: Collaboration + Deployment + Voice~~ — SUPERSEDED 2026-07-28
 
-Deferred from the original Phase 5 — not required for V1.
+Scoped when Caret was a VS Code extension that owned its agent. Both premises changed.
+See [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) for the pivot and the engineering detail.
+The one surviving idea is the *git branching abstraction for non-devs*, which turns out to
+be the actual paid team product — it moves to Phase 11. Voice input is dropped.
 
-- [ ] Self-hosted web platform deployment (Docker image, GitHub API connection, GitHub OAuth)
-- [ ] Git branching abstraction for non-devs (web platform auto-creates branches, PM sees "design draft for X")
-- [ ] Web platform defaults to main (shipped state), toggle into in-flight design branches
-- [ ] Permissions (edit by default, admin can restrict members to read-only)
-- [ ] Stale design-branch notifications ("design branches awaiting sync")
-- [ ] Voice input (BYOK speech-to-text API key in settings, transcribe → text pipeline)
+---
 
-**Deliverable:** Full V1+ — design→code pipeline with team collaboration.
+# V2 — Desktop, agent-agnostic
+
+Two decisions on 2026-07-28 reshape everything below:
+
+1. **Caret stops owning the agent.** No bundled task loop. Caret exposes a local MCP server
+   and is driven by whatever agent the user already runs (Claude Code, Codex, OpenCode,
+   Kimi, GLM). Sync becomes an agent-invoked job.
+2. **Caret becomes a standalone Electron desktop app**, not a VS Code extension or a
+   VSCodium fork. The Open VSX extension is retired at its last published version.
+
+Phases 7 and 8 ship almost nothing a user can see, and they are the entire difference
+between capabilities that work and capabilities that are buggy. Do not skip them to get to
+Phase 9.
+
+---
+
+## [ ] Phase 6: Desktop App + Agent Decoupling (v1)
+
+**Gate — decide before writing code:**
+
+- [ ] License for new code (recommendation: Apache-2.0 throughout; keeps SignPath eligibility)
+- [ ] Thin auth stub present in v1 even while everything is free (retrofitting auth later is the painful part)
+- [ ] One clean service-client seam so hosted features attach later without surgery
+- [ ] Public commitment: the direct-manipulation editor is local-forever, free-forever
+
+**Desktop shell (Electron — chosen over Tauri because Tauri's system webview renders WebKit on macOS and Chromium on Windows, so the same design would look different per machine):**
+
+- [ ] App shell: windows, menus, native dialogs, preferences store (replaces `StateManager`/globalState)
+- [ ] Project open: pick folder, detect or scaffold `.caret/`, recents
+- [ ] De-vscode the design module — only 3 of 33 files couple to `vscode`: `preview-panel.ts`, `DesignMode.ts`, `SyncWatcher.ts`
+- [ ] Electron window loads the Vite URL directly; the generated canvas in `.caret/lib/canvas/` needs no porting
+- [ ] postMessage relay → Electron IPC; gRPC/proto controller plumbing retired
+- [ ] Replace VS Code diff/editor integration including the Phase 5.5 quiet-write path
+- [ ] Vite lifecycle, file watching (chokidar), git from the main process
+- [ ] **Port `verify:design-shell`** — the 14-scenario harness is the reliability floor
+- [ ] Ad-hoc codesign for Apple Silicon (free, but arm64 will not launch without it)
+- [ ] Unsigned builds: macOS `.zip`, Windows `.exe`, Linux AppImage/`.deb`/`.rpm`
+
+**Agent decoupling + MCP:**
+
+- [ ] Agent-adapter boundary replacing every `controller.initTask()` call site
+- [ ] Local MCP server over HTTP, auto-starting on project open
+- [ ] Tools v1: read `.caret/` structure, pages, tokens, **flows and page states**, screenshots; write pages and components; sync worklist
+- [ ] **`get_guide` tool** — `design_layer.ts` (the always-on design-mode system prompt: `useCaretState()`, `useCaretNavigator()`, flow authoring, caret-id rules) has nowhere to live once the bundled agent is gone. It migrates to an MCP resource, or every connected agent authors `.caret/` pages wrong.
+- [ ] **The no-agent state** — canvas fully usable with nothing connected
+- [ ] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM
+- [ ] Delete: `src/core/api` (84 files), `src/core/task` (86), `src/core/prompts` (115), most of `src/core/controller` (207), checkpoint manager, terminal, browser tool
+
+**Parameter-model substrate (the part Phase 7 needs in order to ship anything):**
+
+- [ ] Selection payload v2: caret-id, resolved path, computed styles, box geometry
+- [ ] `Param` descriptor + registry
+- [ ] Splice write primitive replacing recast for span replacements
+- [ ] Build-time caret-id codemod: promote `page-precompute.ts`, append-only, parse-only + splice
+- [ ] Generalize `InlineEditPayload` from `editType: "text"|"color"|"image"` to `{path, value}`
+- [ ] Property panel: every CSS property, token-aware, override vs token visible
+
+**Ship-readiness:**
+
+- [ ] First-run onboarding: scaffold, token wizard, connect an agent
+- [ ] Migration for existing `.caret/` projects
+- [ ] Docs site + landing page (also the SignPath prerequisite)
+- [ ] Crash and error surfaces without the VS Code notification host
+- [ ] Deprecation notice shipped **in** the final Open VSX extension release
+- [ ] Install instructions using the macOS Sequoia flow (System Settings → Privacy & Security → Open Anyway); the Control-click bypass was removed
+
+**Deliverable:** Caret runs standalone, works with any MCP agent, edits far more than three properties, and ships unsigned on macOS/Linux/Windows.
+
+---
+
+## [ ] Phase 7: Parameter Model complete
+
+- [ ] Resolution chain: literal → binding-follow → literal-array-index → typed refusal with reason
+- [ ] Lint rule + autofix for `dynamic-tailwind-class`
+- [ ] Editor absorbs fragmented text, `dynamic-text`, `dynamic-image-src`, inline styles
+- [ ] Instance discriminator so `.map()`-rendered content becomes editable
+- [ ] Multi-select + bulk edit
+- [ ] Unified undo/redo across inline and agent edits
+
+**Deliverable:** `CARET_ID_RULES` + `INLINE_EDITING_RULES` shrink from twelve rules to roughly one (Tailwind's own constraint), and `/debug-ui-page` becomes a rare judgment-call tool rather than routine maintenance.
+
+---
+
+## [ ] Phase 8: Reverse Sync
+
+- [ ] Design↔app mapping manifest (replaces the lone `lastSyncedCommit` field)
+- [ ] App drift detection
+- [ ] App→design sync path
+- [ ] Incremental sync driven by the manifest instead of full re-reconciliation
+- [ ] Framework-agnostic checkpoint: verified against Vue and Svelte, not only React
+
+**Deliverable:** `.caret/` stops being able to silently lie. Prerequisite for both collaboration and CI drift diffs.
+
+---
+
+## [ ] Phase 9: Precision & Canvas Robustness
+
+- [ ] Snapping, smart guides, align and distribute
+- [ ] Drag to resize and reposition, writing back flexbox/grid rather than absolute offsets
+- [ ] Layers panel mirroring the JSX tree
+- [ ] Canvas perf: virtualized iframes, 60fps at 200+ artboards
+- [ ] Full keyboard map
+
+---
+
+## [ ] Phase 10: Expressive Widgets
+
+- [ ] Gradients (canvas-draggable stops), text gradients, shadows, blend modes, effect tokens
+- [ ] Motion tokens, easing curve editor, timeline scrubbing, scroll-driven animation, flow-step transitions
+- [ ] 3D: R3F scene addressing, transform gizmo, material panel, shader uniform sliders
+- [ ] Lottie / Rive / glTF import into `.caret/assets/`
+
+Explicitly **not** building: pen tool, vector illustration, raster painting, video compositing. Import, do not author.
+
+---
+
+## [ ] Phase 11: Share, then Collaboration
+
+- [ ] **Share** — one-click hosted URL for a canvas or page. First hosted feature, first revenue, and the first increment of the team product (same infrastructure).
+- [ ] Git branching abstraction for non-devs (PM sees "design draft for X") — the surviving idea from old Phase 6
+- [ ] Permissions, review surface, stale design-branch notifications
+- [ ] CI visual diffs: *"did the app drift from the design"*, compared semantically on resolved `Param` values, never pixels
+
+**Deliverable:** desktop authors, web viewers. Engineers and designers work locally against the real repo; PMs and clients open a URL and install nothing.
