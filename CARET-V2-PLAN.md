@@ -258,9 +258,42 @@ list-row[3]/style/padding                 one instance of an iterated template
 
 Three axes the DOM alone cannot express get added: **time**, **scene graph**, **instance**.
 
-**Read from the runtime, write to the source.** `getComputedStyle` knows the cascade, media
-queries, inheritance and token resolution; the AST knows none of it. You cannot build a
-complete property panel from source alone.
+### Source writes, runtime verifies
+
+An earlier draft said "read from the runtime, write to the source". That is right for colour
+and quietly wrong for everything else, because **computed style is a lossy projection**: it
+gives the effective value but not which authored declaration produced it.
+
+- `p-4 md:p-8` — computed style at the current viewport returns one number and no hint which
+  class produced it.
+- px → scale step is ambiguous (`16px` could be `p-4`, `p-[16px]`, inherited, or a token) and
+  depends on the root font size, which `entry-template.ts:279` sets via `--caret-font-base`.
+- Shorthand collapses: `p-4` reads back as four separate longhand properties.
+- Typography is *overwhelmingly inherited*, so computed style routinely reports an ancestor's
+  value with no signal the element declares nothing.
+
+So invert it:
+
+| | role |
+|---|---|
+| **Source** (`className`) | parse to candidate utilities, resolve which is *active* for the current viewport + state → this is `Param.source`, the splice span |
+| **Runtime** (`getComputedStyle`) | the effective value for display, **and a check** that source resolution was right |
+
+**The disagreement is the reliability mechanism.** Agreement means write confidently.
+Disagreement means something else is in play (inline style, a CSS file, a class on a wrapping
+component) so emit `writable: false` with a reason instead of writing the wrong thing.
+
+This is only reliable because `.caret/` is a controlled environment: known Tailwind, known
+breakpoints, and a known current viewport (viewport presets, Phase 4). The class list *is*
+the declaration list and utilities are single-purpose, so expanding them is exact. In an
+arbitrary app you would have to walk `document.styleSheets` and replay the cascade.
+
+**Consequences.** Match tokens from the *source*, not the computed value — `p-4` names step 4
+unambiguously and `bg-brand-500` names its token directly, so reverse-lookup from px or hex is
+only a fallback for arbitrary values. Responsive edits target **the variant that is currently
+active**, shown in the panel as *"editing `md:` · 768px and up"*. Inherited values get the
+same two-way choice as tokens: edit here (add a declaration) or jump to the ancestor
+(`origin: 'inherited'` exists for this).
 
 ```ts
 interface Param {
@@ -277,12 +310,102 @@ interface Param {
 Every update is a **splice** (see §8). `origin: 'data'` + `writable: false` + reason *is* the
 dynamic-content answer, so it needs no special case.
 
-**Open questions for the conversation:** the write-policy layer (token edit versus local
-detach, which is the single most important question a design tool answers); canonical value
-forms to prevent round-trip churn; edit provenance to prevent the write→HMR→read→write echo
-loop; undo across asynchronous multi-file agent edits.
+### Token binding — settled 2026-07-28
 
-**Visualizations planned:** the resolution chain; the instance discriminator.
+**The gap found while designing this:** tokens are currently *copied by value*.
+`design_layer.ts:110-119` instructs the AI to write the seed as a Tailwind arbitrary value
+(`bg-[#1a2b3c]`) and says *"use tokens for data/logic, not for className styling"*. So
+`caretTokensPlugin` serves `foundation.json` over `virtual:caret-tokens` with HMR, but
+**changing a token today changes nothing in already-generated pages**. Tokens are a
+generation-time seed, not a live binding, and `origin: 'token'` would never be true.
+
+**Fix: generate Tailwind 4 `@theme` from `foundation.json`.** Pages write `bg-brand-500`
+instead of `bg-[#3b82f6]`. Change the JSON → regenerate the CSS → every element updates via
+HMR with no page rewrites. Tailwind 4 is already pinned (`scaffold.ts:53`) and
+`entry-template.ts:270` already does `@import "tailwindcss"` with a `--caret-*` `:root` block.
+
+Includes **typography** (`--font-*`, `--text-*`, `--leading-*`, `--tracking-*`,
+`--font-weight-*`); `FoundationTokens.typography` already carries family, fallback,
+scaleRatio, baseSize and scale. One split while in there: **the token is not the loading.**
+Family belongs in `@theme`; the actual font `@import` moves out of per-component CSS
+(`design_layer.ts:113`) into the generated entry CSS — per-component imports duplicate
+requests, cause FOUT, and can't be deduped.
+
+Secondary benefit: `bg-brand-500` carries semantic meaning that maps onto the app's own design
+system during sync. `bg-[#1a2b3c]` is a magic number the agent has to guess about.
+
+**This breaks inline colour editing in three ways, all fixable:**
+
+1. **Silent no-op.** `isTailwindColorClass` (`ast-editor.ts:263`) tests
+   `TAILWIND_COLOR_NAMES.has(parts[0])` against Tailwind's built-in palette. `brand` is never
+   in it, so `bg-brand-500` isn't recognised, `replaceTailwindColorClass` returns `null`, and
+   the edit fails silently. → Make the recogniser token-aware: built-ins ∪ generated `@theme`
+   names, derived from the same file.
+2. **No token path.** `ast-editor.ts:276` unconditionally writes `${prefix}[${newHex}]`, so
+   every edit is a detach by construction. → See the write policy below.
+3. **Picker opens on the wrong colour**, since no hex is parseable from the class. → Read the
+   resolved value from the runtime. (This already mis-behaves today for named Tailwind
+   colours like `bg-blue-500`.)
+
+**Write policy — default follows the entry point.** A modal after a native picker would
+violate the inline-editing rule, so let the gesture imply intent and make the alternative one
+click:
+
+- **Inline** (right-click one element) — you are pointing at one thing → default **detach**.
+- **Panel** (a labelled row reading `background: brand-500`) → default **edit the token**.
+
+After an inline edit, a non-blocking toast: *"Detached from `brand-500`. Change the token
+instead? (47 elements)"*. Rationale is **blast-radius asymmetry**: a wrong detach hits one
+element and is visible immediately; a wrong token edit silently changes 47 elements across 8
+pages. Default to the recoverable action. Caret can compute those counts exactly by scanning
+`.caret/`, which Figma cannot. Also offer to bind when a picked colour exactly matches an
+existing token.
+
+**Accepted risk:** if inline is the primary interaction, defaulting to detach erodes the token
+system. Mitigated but not removed by the one-click promotion and a per-page detached-override
+count in the panel. Observable beats silent.
+
+### Resize is the exception — needs three extra layers
+
+The read/verify half transfers. The write half does not:
+
+- **There is often no responsible declaration.** Width can be *emergent* from a layout
+  algorithm (block fills parent, `flex-1` derives from siblings, grid item from the parent's
+  `grid-cols-*`, inline-block from content). Colour, padding and type always resolve to a
+  declaration somewhere; size may not.
+- **The write target may not be the selected element** — often it's the parent's
+  `grid-cols-*` or `gap-*`, or a sibling's `flex-grow`.
+- **Many encodings produce identical pixels**: `w-[247px]`, `basis-[247px]`,
+  `flex-[0_0_247px]`, `col-span-2`, a parent `gap` change.
+- **The gesture is continuous**, so it needs optimistic DOM preview during the drag and a
+  single source commit on release. That inverts the usual write→HMR→see flow and is where the
+  echo loop is most dangerous, so provenance matters most here.
+- **The gesture is lower-bandwidth than the intent.** A drag usually means "fill the
+  container" or "hug the content", not "247 pixels". Writing the pixel value captures the
+  render and destroys the intent, and the layout then breaks at every other viewport.
+
+**Additions:** a **layout-context resolver** (flow / flex child / grid item / absolute /
+content-driven) that runs first and determines the candidate write targets including the
+parent; a **write policy** choosing among encodings, visible and overridable; a
+**preview/commit split**.
+
+**Recommendation: expose intent, don't infer it.** Explicit sizing modes in the panel —
+hug / fill / fixed → `w-auto`, `flex-1`/`w-full`, `w-[Npx]`. The drag writes a fixed value;
+the mode selector carries the constraint.
+
+> Third time the same move is the answer: record the mapping at sync time rather than infer
+> it; show the blast radius rather than guess token intent; expose the sizing mode rather than
+> deduce it from a drag. **When the information isn't in the gesture, put it in the interface.**
+
+The verifier matters most here: write `w-[247px]`, and if the element still isn't 247px
+because a parent constraint wins, say *"width is controlled by the parent's grid"* and offer
+to edit that — rather than a silent no-op.
+
+**Still open for the conversation:** canonical value forms to prevent round-trip churn; edit
+provenance for the echo loop; undo across asynchronous multi-file agent edits.
+
+**Visualizations planned:** the resolution chain; the instance discriminator; the
+layout-context resolver + encoding choice for resize.
 
 ---
 
@@ -480,6 +603,11 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Keep `data-caret-id` as the anchor | 2026-07-27 | Content-addressed. Fiber-path + source-position failed structurally: React 19 removed `_debugSource` (PR #28265), fiber paths shift under conditional rendering, line/col dies on every write |
 | Codemod generates ids, not the model | 2026-07-27 | Prompt-enforced invariants drift; that's why Phase 3.5 and `/debug-ui-page` exist |
 | Reverse sync records mappings, never infers | 2026-07-28 | Turns fuzzy inference into bookkeeping |
+| Source writes, runtime verifies | 2026-07-28 | Computed style is a lossy projection; it can't name the responsible declaration. Disagreement between the two becomes the reliability check |
+| Tokens bind via Tailwind 4 `@theme` | 2026-07-28 | Tokens are currently copied by value, so editing one changes nothing already generated. Also improves sync: `bg-brand-500` carries meaning, `bg-[#1a2b3c]` doesn't |
+| Typography included in `@theme`; font loading centralised | 2026-07-28 | Per-component `@import` duplicates requests and causes FOUT |
+| Token vs detach defaults by entry point | 2026-07-28 | Blast-radius asymmetry — default to the recoverable action, promote in one click |
+| Resize exposes hug/fill/fixed | 2026-07-28 | The gesture carries less information than the intent |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
 
