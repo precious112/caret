@@ -384,10 +384,71 @@ The read/verify half transfers. The write half does not:
   container" or "hug the content", not "247 pixels". Writing the pixel value captures the
   render and destroys the intent, and the layout then breaks at every other viewport.
 
-**Additions:** a **layout-context resolver** (flow / flex child / grid item / absolute /
-content-driven) that runs first and determines the candidate write targets including the
-parent; a **write policy** choosing among encodings, visible and overridable; a
-**preview/commit split**.
+**Additions:** a **layout-context resolver** (below); a **write policy** choosing among
+encodings, visible and overridable; a **preview/commit split**.
+
+#### The resolver walks, and returns a chain — not a target
+
+**Classification is one level. Attribution is not.** Whether you are a flex item, a grid item
+or a block in flow is decided solely by the parent's `display`, so the branch dispatch is
+correctly one level up. But *where the size comes from, and where to write*, is not bounded:
+
+- **Chained auto blocks.** A `width:auto` block takes its parent's content width; if that
+  parent is also auto, the question forwards again. Verified in the visualization: three
+  pass-through levels before anything declares a width. **One level up points at the wrong
+  element.**
+- **`position:absolute`** resolves against the *containing block* — nearest ancestor with
+  `position` set, or one established by `transform`/`filter`/`contain`. Arbitrary distance,
+  and it skips every intermediate element.
+- **`display:contents`** on the parent means you are laid out as a child of the grandparent,
+  so even classification must skip those ancestors first.
+- **Component wrappers.** The DOM parent may be a `<div class="grid">` rendered inside
+  `<Card>` in another file; finding the *source* to edit is a second hop.
+
+So the resolver returns every participant:
+
+```
+level 0  the element      clicked        declares nothing
+  +1     ancestor         pass-through   width:auto (decides nothing)
+  +2     ancestor         pass-through   width:auto (decides nothing)
+  +3     ancestor         constrainer    width:520px  ← the real target
+```
+
+**Termination is guaranteed**: stop at the first element that declares a size, is a flex/grid
+container, is the containing block for an absolute descendant, or is the document root. Bounded
+by DOM depth (typically <20), computed on selection rather than per frame, cached per selection.
+
+Returning the chain is also better UX than picking one target: the panel can say *"this width
+is decided by 3 things"* and let the user choose, instead of Caret guessing.
+
+#### Height is in scope, and it is not symmetric with width
+
+`resolveSizeContext(el, axis)` takes the axis, because the same keyword means opposite things:
+
+| | `width: auto` | `height: auto` |
+|---|---|---|
+| normal flow | **fill** the parent (resolves *upward*) | **hug** the content (resolves *downward*) |
+| flex row child | main axis — a *share* (`flex-1`) | cross axis — the **tallest sibling** (`align-items:stretch`) |
+| grid item | the column track | the row, which is `auto` = **tallest item in the row** |
+
+Verified on the same element in the visualization: width → `fill-chain` (436px, chain of 4),
+height → `hug` (34px, chain of 2).
+
+Three consequences:
+
+- **Height branches differently.** It additionally consults `align-items`/`align-self` on a row
+  flex parent, `grid-template-rows`/`grid-auto-rows`, and whether an ancestor has a *definite*
+  height (percentage heights against an auto parent resolve to auto).
+- **The default intent differs per axis.** Fixing a width is often legitimate (a sidebar, a card
+  in a grid). Fixing a height usually is not — text grows when copy changes, gets translated, or
+  the user's font size increases, so a pixel height clips or gaps. So `hug` should be the
+  default for height far more often than for width, and dragging a bottom edge deserves more
+  friction than dragging a right edge.
+- **Aspect ratio couples them.** For images, video, canvas and 3D viewports, `aspect-ratio`
+  means resizing one axis should offer to adjust the other. Height-specific concern.
+
+*Deferred:* logical axes (`inline`/`block`) rather than physical width/height. Correct for RTL
+and vertical writing modes, and Tailwind 4 supports the logical properties, but not v1-blocking.
 
 **Recommendation: expose intent, don't infer it.** Explicit sizing modes in the panel —
 hug / fill / fixed → `w-auto`, `flex-1`/`w-full`, `w-[Npx]`. The drag writes a fixed value;
@@ -404,8 +465,12 @@ to edit that — rather than a silent no-op.
 **Still open for the conversation:** canonical value forms to prevent round-trip churn; edit
 provenance for the echo loop; undo across asynchronous multi-file agent edits.
 
-**Visualizations planned:** the resolution chain; the instance discriminator; the
-layout-context resolver + encoding choice for resize.
+**Visualizations.** Built 2026-07-29 in `~/dev/self-learning/caret-learning/visualizations/`:
+`resize-layout-context.html` (the resolver — 6 scenarios × 2 axes, real DOM and real
+`getBoundingClientRect()`, chain output) and `resize-write-policy.html` (drag → choose →
+commit → verify, with the three endings: write succeeds, write silently overridden, and
+pixels-match-but-intent-destroyed). Still planned: the Param resolution chain; the instance
+discriminator.
 
 ---
 
@@ -608,6 +673,8 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Typography included in `@theme`; font loading centralised | 2026-07-28 | Per-component `@import` duplicates requests and causes FOUT |
 | Token vs detach defaults by entry point | 2026-07-28 | Blast-radius asymmetry — default to the recoverable action, promote in one click |
 | Resize exposes hug/fill/fixed | 2026-07-28 | The gesture carries less information than the intent |
+| Resolver walks and returns a chain | 2026-07-29 | Classification is one level, attribution is not — chained auto blocks, `position:absolute`, `display:contents`. One level up points at the wrong element |
+| Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
 
