@@ -458,9 +458,94 @@ the mode selector carries the constraint.
 > it; show the blast radius rather than guess token intent; expose the sizing mode rather than
 > deduce it from a drag. **When the information isn't in the gesture, put it in the interface.**
 
-The verifier matters most here: write `w-[247px]`, and if the element still isn't 247px
-because a parent constraint wins, say *"width is controlled by the parent's grid"* and offer
-to edit that — rather than a silent no-op.
+#### Corrections from measuring a real browser (2026-07-30)
+
+The sketch above was reviewed by re-running its own principle against Chrome rather than
+trusting anyone's CSS knowledge. Four claims in it were wrong. All numbers below are measured,
+not reasoned.
+
+**1. `el.style.width` is not a valid preview channel for the flagship case.** Tailwind's
+`flex-1` is `flex: 1 1 0%`, and when `flex-basis` is `0%` the flex algorithm never consults
+`width`:
+
+```
+flex row, 520px, gap-3, siblings [flex-1, flex-1, w-120]
+  baseline                      a=188  b=188
+  el.style.width = '217px'      a=188  b=188   <- preview does NOTHING
+  min/max-width clamp = 217px   a=217  b=159   <- works, siblings redistribute
+  commit flex:0 0 217px         a=217  b=159   <- identical to the clamp
+```
+
+So the drag handle would move and the box would not. Two consequences:
+
+- **The resolver must run at `pointerdown`, not `pointerup`.** The preview channel depends on
+  the layout context, so the context must be known before the first frame. The prose above
+  already said "on selection"; the code sketch in
+  `visualizations/resize-write-policy.html` contradicts it and is wrong.
+- **Preview and commit must share the encoding policy.** For a flex child the faithful preview
+  is a `min-width`/`max-width` clamp, which the last two rows show produces *byte-identical
+  geometry* to the `basis-[217px] shrink-0` commit. Rule: **the preview must never show a state
+  the commit cannot reproduce.**
+
+**2. A grid item with an explicit width does not snap back — it damages its neighbours.**
+Measured across three track definitions:
+
+| tracks | before | after `width:217px` | neighbourhood |
+|---|---|---|---|
+| `repeat(3,1fr)` | 165.33 | 217 | no overlap, but the **track grew and every sibling shifted** |
+| `repeat(3,minmax(0,1fr))` *(what Tailwind emits)* | 165.33 | 217 | **overlaps the sibling** |
+| `repeat(3,150px)` | 150 | 217 | **overlaps the sibling** |
+
+In all three the item measures exactly what was written, so **element-level verification
+passes on a visibly broken layout**. The snap-back-to-155 story in the visualization is not a
+CSS behaviour at all — the demo produced it by never applying the width. That scenario needs
+rewriting.
+
+**3. Therefore a fifth failure mode exists, and it is catchable:** *write succeeds, target
+verifies clean, a sibling breaks.* Fix is mechanical — snapshot sibling rects plus
+`scrollWidth`/`scrollHeight` overflow state before commit, re-measure after, and flag
+regressions ("now overflows its track", "sibling shrank 40%", "siblings shifted 52px").
+**Verify the neighbourhood, not the node.**
+
+**4. The verifier as sketched produces false positives, which is worse than no verifier.**
+
+```
+transition: width 400ms, 170px -> 217px
+  measured 50ms in       175.88px   -> reports a mismatch that does not exist
+  with transition:none   217px
+grid 521px / 3 cols / 11px gap
+  track width            166.33px   -> Math.round comparison is not integer-safe
+```
+
+So the verify pass needs a **settle protocol**, not just `await hmrSettled()`: suppress
+transitions during measurement (`* { transition: none !important }` or await
+`transitionend`), await `document.fonts.ready`, then a settled `requestAnimationFrame`. And
+compare with an **epsilon (~0.5px)** on fractional values rather than `round(got) !== round(want)`.
+A verifier that cries wolf produces exactly the haunted feeling the design exists to prevent.
+
+**5. Verify across viewports, not just the current one.** `w-[217px]` can verify clean at the
+active preset and break at `sm`. The viewport presets already exist, so re-measuring across
+them is nearly free and catches part of the intent-destruction class that single-viewport
+measurement structurally cannot.
+
+#### Encoding policy: infer it from the codebase
+
+A hardcoded preference is guessing at the user's conventions; reading the repo is not. Scan
+`.caret/` for how comparable cases are already written and match them, because consistency with
+surrounding code is most of what stops generated code feeling alien. Precedence:
+
+1. **Explicit user intent** (the hug/fill/fixed mode) — always wins.
+2. **Project convention** — if other flex children use `basis-*`, use `basis-*`.
+3. **Context default** — the built-in policy per layout kind.
+
+**Cold start matters:** a fresh project has no precedent, and the first write *seeds* the
+convention every later write will copy. So the context defaults need to be the ones you would
+want propagated, not merely the ones that happen to work.
+
+The verifier still matters for the original case: write `w-[247px]`, and if the element isn't
+247px because a parent constraint wins, say *"width is controlled by the parent's grid"* and
+offer to edit that — rather than a silent no-op. But that is now the *easy* half. The hard half
+is the write that succeeds and breaks something else.
 
 **Still open for the conversation:** canonical value forms to prevent round-trip churn; edit
 provenance for the echo loop; undo across asynchronous multi-file agent edits.
@@ -468,8 +553,9 @@ provenance for the echo loop; undo across asynchronous multi-file agent edits.
 **Visualizations.** Built 2026-07-29 in `~/dev/self-learning/caret-learning/visualizations/`:
 `resize-layout-context.html` (the resolver — 6 scenarios × 2 axes, real DOM and real
 `getBoundingClientRect()`, chain output) and `resize-write-policy.html` (drag → choose →
-commit → verify, with the three endings: write succeeds, write silently overridden, and
-pixels-match-but-intent-destroyed). Still planned: the Param resolution chain; the instance
+commit → verify). **`resize-write-policy.html` needs correcting** — its `onPointerUp`
+resolver order and its grid snap-back ending were both disproved by measurement on
+2026-07-30; see the corrections above. `resize-layout-context.html` is unaffected. Still planned: the Param resolution chain; the instance
 discriminator.
 
 ---
@@ -674,6 +760,11 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Token vs detach defaults by entry point | 2026-07-28 | Blast-radius asymmetry — default to the recoverable action, promote in one click |
 | Resize exposes hug/fill/fixed | 2026-07-28 | The gesture carries less information than the intent |
 | Resolver walks and returns a chain | 2026-07-29 | Classification is one level, attribution is not — chained auto blocks, `position:absolute`, `display:contents`. One level up points at the wrong element |
+| Resolver runs at pointerdown, not pointerup | 2026-07-30 | The preview channel depends on the layout context, so the context must be known before frame 1 |
+| Preview must be encoding-aware | 2026-07-30 | `el.style.width` is ignored on `flex:1 1 0%` (measured 188→188). A min/max clamp works and matches the `basis-*` commit exactly (217/159 both ways). Preview must never show a state the commit cannot reproduce |
+| Verify the neighbourhood, not the node | 2026-07-30 | An explicit width on a grid item always applies (217px measured on all three track types) so element-level verification passes on a broken layout: `minmax(0,1fr)` and fixed tracks overlap, plain `1fr` grows the track and shifts every sibling |
+| Verifier needs a settle protocol + epsilon | 2026-07-30 | `transition:width` measured 175.88px mid-flight → false mismatch. Fractional tracks measure 166.33px → `Math.round` is not integer-safe. A verifier that cries wolf is worse than none |
+| Encoding policy inferred from the repo | 2026-07-30 | Explicit user mode > project convention > context default. Cold start seeds the convention, so defaults must be what you want propagated |
 | Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
