@@ -365,6 +365,69 @@ existing token.
 system. Mitigated but not removed by the one-click promotion and a per-page detached-override
 count in the panel. Observable beats silent.
 
+### List items — two identities, and an index that must be built once
+
+A repeated row has **no single source location**. The file holds one row's *appearance* and N
+rows' *content*, in different places. So editing a list row is two operations, not one:
+
+| edit | lands in | reaches |
+|---|---|---|
+| **look** (padding, colour, border) | the row template — written once | **all rows** |
+| **content** (text, image src) | the data — one entry per row | **that row only** |
+
+The defaults match intuition in both directions (retyping a label changes one row; nudging
+padding keeps rows matching), which is why this feels fine in use despite being fiddly underneath.
+
+**Three shapes, visually identical on screen:**
+
+1. **Rows written out separately** — no machinery needed. Each row is an ordinary element with
+   its own id and its own source span.
+2. **One template + the data literal in the same file** — look is shared, content resolves to
+   `items[N].field`. Both editable.
+3. **One template + data from a server** — look behaves as (2); the content *is not in the file*.
+   Emit `writable:false` with a reason, never a silent grey-out.
+
+**Shape 2 dominates inside `.caret/`.** Design pages are self-contained React with no backend,
+so any list they render must carry its own sample data inline. Shape 3 is mostly a property of
+the *shipped app* after sync. Consequence worth designing for later: the design will show three
+tidy rows while production has fourteen with longer strings — a "stress state" (long text, many
+rows, empty) belongs in the Phase 4 page-states machinery.
+
+**Rules:**
+
+- **Identify a row by its key, not its index.** Position-based ids point at the wrong item after
+  a reorder.
+- **"Make this row different" is an explicit restructure**, never an outcome of dragging. Escaping
+  a shared template means adding a condition or splitting the row out; a drag must not silently
+  rewrite the template.
+- **Data-driven styling is ambiguous.** If featured rows already look different, "edit this row's
+  highlight" could mean *unfeature this item* or *change what featured looks like*. Ask.
+- Panel line that removes the whole confusion:
+  `row 2 of 3 · look shared with all rows · content from item 2`
+
+#### Index the file once per parse, not once per lookup (measured 2026-07-30)
+
+The single-edit chain is cheap: one walk to find the element, then pointer-following (parent
+links) and a scope lookup — **0.4ms**. But the property panel resolves ~50 properties per
+selection, and re-walking from the root each time is the real cost:
+
+| page | 50 lookups, re-walking | one walk + an id→node map |
+|---|---|---|
+| typical (60 lines, 12 items) | 13.9ms | **0.6ms** |
+| big list (200 items) | 49.4ms | **1.4ms** |
+| large page (420 lines) | **115ms** | **3.1ms** |
+
+115ms to select an element is a visible stutter. So: **build a `caret-id → node` index once per
+parse**, then every lookup is a map hit (22–37× faster, and the gap widens with file size). Also
+**resolve on click, never on hover** (hover highlighting needs only the DOM) and **once at
+pointerdown, never per frame**.
+
+**The risk here is staleness, not speed.** A cached index whose file changed underneath (HMR,
+an agent edit, an external save) has every offset wrong and will splice into the wrong place
+*silently*. Key the index to the file's content hash and discard on mismatch — hashing is ~30×
+cheaper than parsing, so it is affordable on every access. This is the same rule as
+"recompute spans from disk, never cache across edits", applied one level up.
+
 ### Resize is the exception — needs three extra layers
 
 The read/verify half transfers. The write half does not:
@@ -760,6 +823,8 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Token vs detach defaults by entry point | 2026-07-28 | Blast-radius asymmetry — default to the recoverable action, promote in one click |
 | Resize exposes hug/fill/fixed | 2026-07-28 | The gesture carries less information than the intent |
 | Resolver walks and returns a chain | 2026-07-29 | Classification is one level, attribution is not — chained auto blocks, `position:absolute`, `display:contents`. One level up points at the wrong element |
+| List rows have two identities | 2026-07-31 | Look lives in the row template (shared, all rows); content lives in the data (per-row). Identify rows by key not index. "Make this row different" is an explicit restructure, never a drag outcome |
+| Index caret-id→node once per parse | 2026-07-31 | A single edit resolves in 0.4ms, but the panel does ~50 lookups; re-walking per lookup measured 115ms on a 420-line page vs 3.1ms indexed (22–37× faster). Resolve on click not hover, once at pointerdown not per frame. The real risk is a stale index splicing silently into wrong offsets — key it to the file content hash |
 | Resolver runs at pointerdown, not pointerup | 2026-07-30 | The preview channel depends on the layout context, so the context must be known before frame 1 |
 | Preview must be encoding-aware | 2026-07-30 | `el.style.width` is ignored on `flex:1 1 0%` (measured 188→188). A min/max clamp works and matches the `basis-*` commit exactly (217/159 both ways). Preview must never show a state the commit cannot reproduce |
 | Verify the neighbourhood, not the node | 2026-07-30 | An explicit width on a grid item always applies (217px measured on all three track types) so element-level verification passes on a broken layout: `minmax(0,1fr)` and fixed tracks overlap, plain `1fr` grows the track and shifts every sibling |
