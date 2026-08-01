@@ -10,6 +10,7 @@ one is *how* and *why*. Decisions live here so they don't have to be re-derived.
 | phase | state |
 |---|---|
 | **6** Standalone + agent-agnostic | **specified, ready to build** (§3, §4) |
+| **6.5** Foundation interview | **specified (§4.5)** — library content needs a curation session with the user |
 | **7** Make corrections stick | **not yet specified** — the differentiator, designed together next |
 | **8** Shared human/agent surface | specified (§5), missing the naming layer — see §0.5 Bridge 1 |
 | **9** Reverse sync | specified with its reliability argument (§6) |
@@ -43,6 +44,10 @@ A dev who cannot design, handed a gradient stop editor, produces an ugly gradien
 beautifully draggable stops. **Precision tools amplify taste; they do not supply it.** Track
 C/E/Widgets as originally scoped is Figma parity — necessary so the tool isn't a chat box,
 insufficient for Caret's actual user.
+
+**Persona, pinned 2026-08-01:** a developer — comfortable with a repo, a terminal, and
+connecting an agent — who is not good at design. Not a no-code end user. Onboarding may
+assume a dev; the design surface must never assume design vocabulary.
 
 The specific error: **we designed the manipulation without designing the vocabulary.** Gradient
 stops draggable to the pixel but no notion of "aurora". Easing curves hand-editable but no
@@ -157,6 +162,7 @@ reframe and still use them. Map to the phases in
 |---|---|---|---|
 | §3 | A · Desktop shell | **6** | Claude end-to-end. Surface decisions only. |
 | §4 | B · Agent decoupling + MCP | **6** | Claude end-to-end. Surface decisions only. |
+| §4.5 | *(new)* Foundation interview | **6.5** | Claude end-to-end; the curated library is chosen with the user. |
 | — | *(new)* Make corrections stick | **7** | **Designed together.** Not yet specified — the differentiator; see §0.5. |
 | §5 | C · Parameter model | **8** | **Designed together before code.** Token binding moves to Phase 7. |
 | §6 | D · Reverse sync | **9** | Claude end-to-end, design written up and justified first. |
@@ -183,8 +189,10 @@ it is built is expensive.
 **Final acceptance** is the user attempting to reproduce high-end designs and judging whether
 the tool makes that easy.
 
-**Branch:** work happens on `caret/learning`, merged to `caret/main` when green. Strip
-aggressively; `caret/main` remains the reference for how anything originally worked.
+**Branch:** work happens on `caret/electron-opencode-migration` (the name is historical — it
+predates the drop-the-bundled-agent decision; there is no OpenCode SDK anywhere in this plan),
+merged to `caret/main` when green. Strip aggressively; `caret/main` remains the reference for
+how anything originally worked.
 
 ---
 
@@ -201,10 +209,13 @@ aggressively; `caret/main` remains the reference for how anything originally wor
 └─────────────────────────────────┬───────────────┼───────────────────┘
                           IPC     │               │  HTTP
 ┌─────────────────────────────────▼──────────┐    │
-│ Electron renderer                          │  Claude Code · Codex
-│   loads http://localhost:<vite>/  directly │  OpenCode · Kimi · GLM
-│   = generated canvas in .caret/lib/canvas/ │
-│      └── iframes .caret/pages/*/index.tsx  │
+│ Electron window                            │  Claude Code · Codex
+│   app chrome renderer (projects, wizard,   │  OpenCode · Kimi · GLM
+│   prefs, errors, interview surface)        │
+│   + canvas WebContentsView                 │
+│     → http://localhost:<vite>/  directly   │
+│     = generated canvas in .caret/lib/canvas│
+│        └── iframes .caret/pages/*/index.tsx│
 └────────────────────────────────────────────┘
 ```
 
@@ -221,7 +232,10 @@ app itself is **generated code** written into `.caret/lib/canvas/` by
 
 Consequences:
 
-- Electron's `BrowserWindow` loads the Vite URL **directly**. No iframe shell.
+- The canvas loads the Vite URL **directly** — as a `WebContentsView` inside a window whose
+  chrome is an Electron-owned renderer. "Directly" survives (no iframe shell around the
+  canvas, zero canvas porting); the chrome renderer exists because onboarding, the wizard,
+  project open/recents, preferences and error surfaces need a host that is not generated code.
 - `CanvasApp`, `CanvasView`, `PageThumbnail`, `FocusedPageView`, `OverlayPainter`,
   `CaretStateContext`, `CaretNavigator`, `SimulationView` need **zero porting**.
 - **Flows and simulation come along free.** Their footprint is in `canvas-template.ts` and
@@ -253,9 +267,11 @@ badly on the modern CSS Tailwind 4 emits (`@property`, `color-mix`, `oklch`). El
 a Chromium you control and that matches what most visitors use.
 
 ### A1. Shell
-Windows, menus, native dialogs. Preferences store replacing `StateManager`/globalState —
-a JSON store in `app.getPath('userData')`, with the same get/set shape so call sites barely
-change.
+Windows, menus, native dialogs. The window is **app chrome** — its own renderer hosting
+project open/recents, the wizard and interview surface, preferences and error surfaces — with
+the canvas mounted as a `WebContentsView` pointed at the Vite URL. Preferences store replacing
+`StateManager`/globalState — a JSON store in `app.getPath('userData')`, with the same get/set
+shape so call sites barely change.
 
 ### A2. Project lifecycle
 Pick folder → detect or scaffold `.caret/` (`ensureCaretDirectoryExists` already handles
@@ -312,7 +328,11 @@ Two implementations: `McpBridge` (surfaces the task to a connected agent) and
 call the task loop now degrades honestly instead of silently failing.
 
 ### B2. MCP server
-Local HTTP on a fixed port, auto-started on project open, same shape Paper uses. Tools v1:
+Local HTTP, auto-started on project open, same shape Paper uses. **Not a fixed global port**:
+per-project port written to a discovery file so multiple open projects don't collide and
+client configs point at the project, not the machine. **Bearer-token auth + Origin validation
+are mandatory** — an unauthenticated localhost server that writes files is reachable by any
+local process and, via DNS rebinding, by a malicious web page. Tools v1:
 
 | Read | Write |
 |---|---|
@@ -325,6 +345,10 @@ Local HTTP on a fixed port, auto-started on project open, same shape Paper uses.
 | `get_sync_worklist` — the changed-design worklist | |
 | `get_guide` — authoring rules | |
 
+Phase 6.5 adds the interview tools (§4.5): `present_question`, `present_options`,
+`commit_foundation`. Phase 7 adds `run_design_checks` (the deterministic acceptance checker)
+and `propose_variants`.
+
 ### B3. Foundational context must be ALWAYS-ON, not a pull tool
 
 > **Corrected 2026-08-01.** The design below had the agent *fetch* the guide when it chose to.
@@ -336,6 +360,17 @@ Local HTTP on a fixed port, auto-started on project open, same shape Paper uses.
 > `design_layer.ts` splits: JSON for what the machine consults, prose only where judgment is
 > genuinely required. `get_guide` survives for the prose half.
 
+**Delivery mechanism (settled 2026-08-01): repo rules files, because MCP cannot inject.** An
+MCP server exposes tools, resources and prompts; the *client* decides what enters context — no
+server can force content into every request of an agent it does not own, so "injected into
+every request" is not implementable at the MCP layer. The reliable channel is the one every
+mainstream agent already auto-loads: **rules files in the repo.** Caret generates and maintains
+`AGENTS.md`, `CLAUDE.md` and `.cursor/rules` from `foundation.json` + the authoring rules —
+regenerated whenever tokens change, clearly marked as generated, and versioned with the design
+(which Phase 7 wanted anyway; captured corrections land in the same files, which is how a
+correction reaches every future session of every agent). Backstop: every MCP tool result
+echoes the foundational JSON, so an agent that only touches the tools still gets re-anchored.
+
 **What the original B3 got right, and still holds:**
 `src/core/prompts/system-prompt/design_layer.ts` is the always-on design-mode system prompt.
 It teaches `useCaretState()`, `useCaretNavigator()` + `<a href="/<page-id>">` navigation, flow
@@ -346,15 +381,83 @@ Treat as blocking, not polish.
 
 ### B4. Sync becomes an agent job
 `sync-orchestrator.ts` keeps all its preflight logic (git state assessment, bookmark reading,
-`hasDesignChangesSince` gating, pending-sync registration, pre-sync checkpoint). Only the
+`hasDesignChangesSince` gating, pending-sync registration, pre-sync snapshot). Only the
 final `controller.initTask(prompt)` changes to `bridge.request({kind:'sync', prompt})`.
-`buildSyncPrompt` is unchanged. The plan/act bookmark advance in `sync-completion.ts` needs a
-new completion signal now that there is no local task lifecycle — the agent calls a
-`complete_sync` tool.
+`buildSyncPrompt` is unchanged.
+
+**The pre-sync snapshot is re-implemented on plain git.** The current "Undo sync" restores
+from the checkpoint shadow-git, which dies with the task loop (it is on the deletion
+inventory). The replacement is a git ref/stash taken by the main process at sync start;
+"Undo sync" restores app files from it and reverts the bookmark exactly as today. This also
+removes the old limitation that rollback required the sync task to still be active.
+
+**Completion signal.** The plan/act bookmark advance in `sync-completion.ts` needs a new
+signal now that there is no local task lifecycle — the agent calls a `complete_sync` tool.
+That is **honor-system** for an external agent, and if it forgets, the V1 stuck-bookmark bug
+(every sync re-reporting the whole design layer) returns. Two fallbacks: hash-based detection
+that the worklist entries were addressed (exact once the Phase 9 manifest exists; a coarse
+heuristic before then), and a manual "mark synced" control.
 
 ### B5. Clients
 Claude Code plugin + `claude mcp add`, Cursor, Codex, OpenCode, Kimi, GLM. One docs page each.
 Once the server speaks MCP this is documentation, not architecture.
+
+### B6. The write model is direct-write + watch-and-heal
+
+Nothing makes an external agent use `write_page` — Claude Code will edit `.caret/pages/*` with
+its own file tools, bypassing the MCP write tools, the file-mutation queue and atomic writes.
+Design for that as the **primary** path rather than pretending otherwise:
+
+- The chokidar watcher (A3) triggers the **caret-id codemod + validation on any external
+  change** to `.caret/`. The build-time codemod moves forward from Phase 8; without it, v1
+  ships with the Phase 3.5 reliability story regressed.
+- Inline-edit splices already re-read from disk and key on the content hash (§5), so a
+  concurrent agent write is caught rather than spliced over.
+- Every change lands in the **edit-provenance log**: actor (inline / agent / external), file,
+  param path where known, old → new value. Cheap to write now, impossible to reconstruct
+  later — and it is the substrate Phase 7's correction capture mines.
+- The MCP write tools stay as the *nicer* path (atomicity + validation for free, precise
+  provenance), but they are an optimization, not the guarantee.
+
+---
+
+## 4.5 The foundation interview (Phase 6.5)
+
+**Decided 2026-08-01.** The token wizard stops being a form the user fills in and becomes an
+**agent-led interview** rendered natively in Caret's app chrome. Rationale: the wizard is the
+single moment Caret can inject taste — the highest-leverage anti-slop lever available before
+the Phase 11 research lands — and a form assumes the user already knows what to put in it,
+which is precisely what Caret's persona does not.
+
+**Shape.** The connected agent runs a short interview: a handful of high-level, plain-language
+questions (what is this product, who is it for, three words for how it should feel, louder or
+quieter, warmer or cooler). From the answers it narrows a **curated library** to a few
+candidate foundations and presents them as things to look at, not names to know: type as
+rendered specimens, palettes applied to sample components on the existing wizard live-preview
+surface. The user points. Pointing needs no design vocabulary — the same argument as
+generate-and-pick (§0.5 Bridge 2), applied to the most consequential decision in the project.
+
+**The curated library is what makes this non-slop.** The agent's judgment only *narrows* the
+space; it never invents. Every pickable option — typeface pairing (licensing-clean), palette
+recipe, radius/spacing/density preset — is curated in advance, so the floor is high no matter
+which agent is connected or how bland its taste. Library content is a curation session with
+the user, not a generation task.
+
+**Mechanism.** Three MCP tools: `present_question(question, choices)` renders plain-language
+choices in the chrome and returns the pick; `present_options(candidates)` renders full live
+previews and returns the pick; `commit_foundation(tokens)` writes `foundation.json` through
+the normal validated path and regenerates the rules files (§4 B3). The interview script ships
+as an MCP prompt plus a rules-file instruction, so any client agent can run it.
+
+**Both audiences, one file.** A pro skips the interview at any point into direct token editing
+(the existing wizard widgets); a non-designer never leaves the question-and-point flow. Both
+paths write the same `foundation.json`, which Phase 7's live bindings then make load-bearing.
+
+**Degradation.** No agent connected → the existing wizard form plus the same curated presets.
+The no-agent state stays fully usable; the interview is an enhancement, not a dependency.
+
+**Re-running.** On an existing project, a re-interview produces a token-change *proposal* with
+blast radius shown (Phase 7 machinery), never a silent reset.
 
 ---
 
@@ -458,6 +561,14 @@ requests, cause FOUT, and can't be deduped.
 
 Secondary benefit: `bg-brand-500` carries semantic meaning that maps onto the app's own design
 system during sync. `bg-[#1a2b3c]` is a magic number the agent has to guess about.
+
+**Sync translation (provisional — confirm in the Phase 7 design session):** once pages say
+`bg-brand-500`, sync must decide what the app receives, because the app does not have Caret's
+`@theme`. Default policy: map onto the app's own design system where an equivalent token
+exists (the rules files give the agent the token table, so `brand-500` is meaningful), else
+emit the generated `@theme` block into the app's entry CSS so the classes resolve. **Never
+ship a class that resolves to nothing** — that is a sync correctness bug, and it is checkable
+mechanically.
 
 **This breaks inline colour editing in three ways, all fixable:**
 
@@ -900,7 +1011,7 @@ dressed as authoring constraints. Three-way split:
 
 | Rules | Owner |
 |---|---|
-| 7 locating rules (static/unique/missing ids, iterators, prop threading, own-line tags) | build-time codemod |
+| 7 locating rules (static/unique/missing ids, iterators, prop threading, own-line tags) | build-time codemod (lands in Phase 6 as watch-and-heal — see §4 B6) |
 | `dynamic-tailwind-class` — real, but it's *Tailwind's* constraint (the JIT can't see it either) | lint rule + autofix |
 | fragmented text, `dynamic-text`, `dynamic-image-src`, inline styles | absorbed into the editor as Param capabilities |
 
@@ -982,6 +1093,16 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Supply (grounding/assets/type) deferred, not dropped | 2026-08-01 | Replit answered it by building in Mobbin's 600k screens. Caret has no equivalent and should not guess before the friction research lands |
 | Snapping, gradients, motion, 3D deferred | 2026-08-01 | Precision tools for people who already know what they want. A gradient editor does not help someone who cannot choose a gradient |
 | Encoding policy inferred from the repo | 2026-07-30 | Explicit user mode > project convention > context default. Cold start seeds the convention, so defaults must be what you want propagated |
+| Persona pinned: a developer who is not good at design | 2026-08-01 | Not a no-code end user. Onboarding may assume a dev; the design surface must never assume design vocabulary |
+| Always-on context ships as repo rules files | 2026-08-01 | MCP cannot inject into a client's context. `AGENTS.md`/`CLAUDE.md`/`.cursor/rules` are auto-loaded by every mainstream agent and versioned with the design; tool results echo the JSON as backstop |
+| Direct-write + watch-and-heal is the write model | 2026-08-01 | External agents bypass MCP write tools; chokidar-triggered codemod + validation makes reliability independent of agent cooperation. Codemod moves Phase 8 → 6 |
+| Edit-provenance log lands in Phase 6 | 2026-08-01 | Correction capture needs history to mine; cheap now, impossible to retrofit |
+| Acceptance bar is a deterministic checker Caret runs | 2026-08-01 | An agent that must choose to self-check will not — same failure mode as pull-only `get_guide`. Contrast, identical rows, border-count and missing states are all computable on the rendered page |
+| Pre-sync snapshot re-implemented on plain git | 2026-08-01 | The checkpoint shadow-git dies with the task loop; "Undo sync" and unified undo must survive |
+| `complete_sync` backed by hash detection + manual control | 2026-08-01 | Honor-system completion re-opens the V1 stuck-bookmark bug |
+| Token wizard becomes an agent-led foundation interview | 2026-08-01 | Plain-language questions, curated options, the user points. Curation bounds the agent's taste, so the floor is high regardless of the connected agent — the supply-side v0 without waiting on Phase 11 |
+| App chrome renderer + canvas `WebContentsView` | 2026-08-01 | "Load Vite directly" left onboarding/wizard/prefs with no host; the canvas still needs zero porting |
+| MCP server: per-project port, token auth, Origin checks | 2026-08-01 | A fixed port collides with multi-window; an unauthenticated localhost write server is a DNS-rebinding hole |
 | Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
@@ -990,3 +1111,7 @@ is compatible. Open-core with proprietary modules in-repo is not.
 
 - Which of the four Gate items in Phase 6 are settled (licence, auth stub, service seam, local-forever commitment)
 - Whether `cli/` is deleted or repurposed as a headless Caret client
+- The curated foundation library contents (typeface pairings, palette recipes, presets) — a
+  curation session with the user, before Phase 6.5 ships
+- The sync-translation policy for bound tokens (§5) is provisional — confirm in the Phase 7
+  design session

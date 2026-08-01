@@ -180,6 +180,10 @@ be the actual paid team product — it moves to Phase 11. Voice input is dropped
 Reframed 2026-08-01, after establishing that precision editors amplify taste but do not supply
 it, and that Caret's user is a frontend dev who is not good at design.
 
+**Persona, pinned 2026-08-01:** a developer — comfortable with a repo, a terminal, and
+connecting an agent — who is not good at design. Not a no-code end user. Onboarding may assume
+a dev; the design surface must never assume design vocabulary.
+
 **The problem every AI design tool has, in one sentence:**
 
 > *"AI design is one-shot: the agent generates, you eyeball it, you fix the same problems by
@@ -227,17 +231,26 @@ holds the seam.
 - [ ] Thin auth stub in v1 even while everything is free
 - [ ] One clean service-client seam so hosted features attach later without surgery
 - [ ] Public commitment: the direct-manipulation editor is local-forever, free-forever
+- [ ] MCP server security posture: per-project port + discovery file (multiple open projects
+      must not collide), bearer-token auth, Origin validation — an unauthenticated localhost
+      server that writes files is reachable by any local process and, via DNS rebinding, by a
+      web page
 
 **Desktop shell (Electron — Tauri's system webview renders WebKit on macOS and Chromium on
 Windows, so the same design would look different per machine):**
 
 - [ ] App shell: windows, menus, native dialogs, preferences store (replaces `StateManager`)
+- [ ] App chrome renderer — project open/recents, the wizard, onboarding, preferences and
+      error surfaces need a host that is not generated code
 - [ ] Project open: pick folder, detect or scaffold `.caret/`, recents
 - [ ] De-vscode the design module — only 3 of 33 files couple to `vscode`
-- [ ] Electron window loads the Vite URL directly; the generated canvas needs no porting
+- [ ] Canvas as a `WebContentsView` loading the Vite URL directly (no iframe shell around the
+      canvas; the generated canvas needs no porting)
 - [ ] postMessage relay → IPC; proto/gRPC plumbing retired
 - [ ] Replace VS Code diff/editor integration incl. the Phase 5.5 quiet-write path
 - [ ] Vite lifecycle, chokidar watch, git from the main process
+- [ ] Pre-sync snapshot + "Undo sync" re-implemented on plain git — the checkpoint shadow-git
+      dies with the task loop, and rollback must survive the migration
 - [ ] **Port `verify:design-shell` before any refactor lands** — it is the reliability floor
 - [ ] Ad-hoc codesign for Apple Silicon (free, but arm64 won't launch without it)
 - [ ] Unsigned builds: macOS `.zip`, Windows `.exe`, Linux AppImage/`.deb`/`.rpm`
@@ -245,14 +258,30 @@ Windows, so the same design would look different per machine):**
 **Agent decoupling + MCP:**
 
 - [ ] `AgentBridge` boundary replacing every `controller.initTask()` call site
-- [ ] Local MCP server over HTTP, auto-starting on project open
+- [ ] Local MCP server over HTTP, auto-starting on project open (per-project port + auth —
+      see the Gate)
 - [ ] Tools v1: read `.caret/` structure, pages, tokens, **flows and page states**, screenshots;
       write pages and components; sync worklist
-- [ ] **Always-on foundational context, not a pull-only `get_guide`.** The prior design had the
-      agent fetch the guide when it chose to; that is a documented failure mode. Tokens, spacing,
-      type and the caret-id rules must be injected into every request.
+- [ ] **Always-on foundational context via repo rules files — MCP cannot inject.** An MCP
+      server exposes tools/resources/prompts; the *client* decides what enters context, so no
+      server can force content into an agent it doesn't own. Caret generates and maintains
+      `AGENTS.md` / `CLAUDE.md` / `.cursor/rules` from `foundation.json` + the authoring rules,
+      regenerated on every token change; MCP tool results echo the foundational JSON as a
+      backstop. Pull-only `get_guide` remains a documented failure mode (it survives for the
+      prose-judgment half only).
 - [ ] **Structured (JSON) context for the machine; prose only where judgment is needed.**
       `design_layer.ts` is currently all prose and must be split.
+- [ ] **Watch-and-heal write model.** External agents edit `.caret/` with their own file tools,
+      bypassing the MCP write tools, the mutation queue and atomic writes — treat that as the
+      primary path: chokidar triggers the caret-id codemod + validation on any external change
+      (the build-time codemod is pulled forward from Phase 8). The MCP write tools stay as the
+      *nicer* path (atomicity + validation for free), not the guarantee.
+- [ ] **Edit-provenance event log** — every `.caret/` change recorded with actor (inline edit /
+      agent / external), file, param path where known, old → new value. Cheap now, impossible
+      to retrofit; the substrate Phase 7's correction capture mines.
+- [ ] Sync completion fallbacks — `complete_sync` is honor-system for an external agent; back
+      it with hash-based detection that the worklist was addressed plus a manual "mark synced"
+      control (the V1 stuck-bookmark bug must not return)
 - [ ] **The no-agent state** — canvas fully usable with nothing connected
 - [ ] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM
 - [ ] Delete: `src/core/api` (84), `src/core/task` (86), `src/core/prompts` (115), most of
@@ -260,7 +289,8 @@ Windows, so the same design would look different per machine):**
 
 **Ship-readiness:**
 
-- [ ] First-run onboarding: scaffold, token wizard, connect an agent
+- [ ] First-run onboarding: scaffold, token wizard (the form; the interview upgrade is
+      Phase 6.5), connect an agent
 - [ ] Migration for existing `.caret/` projects
 - [ ] Docs site + landing page (also the SignPath prerequisite)
 - [ ] Crash and error surfaces without the VS Code notification host
@@ -272,28 +302,78 @@ project's design foundations in context rather than guessing at them.
 
 ---
 
+## [ ] Phase 6.5: The foundation interview (token wizard v2)
+
+The wizard stops being a form. Foundations get set in a short **agent-led interview**: plain-
+language questions, then curated options the user points at. This is the supply-side v0 — it
+does not wait on the Phase 11 research, because every pickable option comes from a curated
+library rather than the agent's imagination. It serves both audiences: a non-designer answers
+questions and points; a pro skips straight to direct token editing. Engineering detail in
+[CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.5.
+
+- [ ] Curated foundation library: typeface pairings (licensing-clean), palette recipes,
+      radius/spacing/density presets — every option in it is good; content is a curation
+      session with the user, not a generation task
+- [ ] Interview MCP tools: `present_question` (plain-language choices), `present_options`
+      (candidate foundations rendered as live specimens via the existing wizard preview
+      surface), `commit_foundation`
+- [ ] Interview script shipped as an MCP prompt + rules-file instruction: the agent asks a
+      handful of high-level questions (what is it, who is it for, how should it feel) and
+      **narrows the curated space** — it never invents raw hexes or font names outside the
+      library
+- [ ] Options displayed in plain language: type as rendered specimens, palettes applied to
+      sample components — never jargon without a picture
+- [ ] Pro path: skip the interview at any point into direct token editing — same
+      `foundation.json` either way
+- [ ] No-agent fallback: the existing wizard form + the same curated presets (the no-agent
+      state stays fully usable)
+- [ ] Re-runnable: re-interviewing an existing project produces a token-change proposal with
+      blast radius shown (Phase 7 live bindings), never a silent reset
+
+**Deliverable:** a developer with no design vocabulary answers a few plain questions, picks
+from options that all look good, and lands on foundations worth protecting — which is exactly
+what Phase 7 then makes stick.
+
+---
+
 ## [ ] Phase 7: Make corrections stick
 
 **The differentiator.** Everything here exists to stop the user fixing the same thing twice.
 Nothing in this phase is possible for a tool that regenerates from scratch each session.
 
+**Design session required before implementation** — these bullets are direction, not spec
+(CARET-V2-PLAN §1 marks this phase "designed together"). Do not build from the checklist alone.
+
 - [ ] **Tokens become live bindings.** Generate Tailwind `@theme` from `foundation.json`, so
       pages reference `bg-brand-500` rather than a copied hex. Today `design_layer.ts:110`
       instructs the agent to inline the value, which means editing a token changes nothing
       already generated. Includes typography; font *loading* moves out of per-component
-      `@import` into the generated entry CSS.
+      `@import` into the generated entry CSS. Open for the design session: what sync writes
+      when the app has its own design system — map `brand-*` onto the app's tokens where an
+      equivalent exists, else emit the generated `@theme` into the app's entry CSS; never ship
+      a class that resolves to nothing.
 - [ ] **Corrections get captured.** When the user overrides the same thing repeatedly by hand,
       offer to promote it — into a token, or into the always-on rules. This is the direct fix
-      for "next session it makes them again", and it is the single highest-value item in the plan.
+      for "next session it makes them again", and it is the single highest-value item in the
+      plan. Mines the Phase 6 edit-provenance log; promotions land in the generated rules
+      files, so they reach every future agent session.
 - [ ] **Rules are versioned with the design.** They live in `.caret/`, under git, reviewable in
       a PR, and travel with the project.
 - [ ] **Generate-and-pick.** For anything that cannot be said precisely in words, the agent
       produces N variants and the user points at one. Pointing needs no design vocabulary, which
       is exactly right for a non-designer. Replit ships this as "Ambient Intelligence"; treat it
-      as table stakes rather than a novelty.
-- [ ] **An acceptance bar the agent checks itself against** before handing work back — contrast,
-      focus states, empty and error states, and the named slop tells (identical card rows, a
-      border on everything, unrequested dark mode).
+      as table stakes rather than a novelty. Plumbing: somewhere for variants to render
+      (variant pages or page states), a compare-and-pick canvas surface, and a
+      `propose_variants` MCP tool + rules-file instruction — Caret cannot force an external
+      agent to produce variants, only make it easy and expected.
+- [ ] **A deterministic acceptance checker Caret runs** — not an agent honor-system self-check
+      (an agent that must *choose* to self-check will not; same failure mode as pull-only
+      `get_guide`). Most slop tells are computable on the rendered page: contrast (axe-core),
+      identical card rows (DOM structure comparison), a border on everything (count), missing
+      focus/empty/error states (page-states metadata). Exposed as a `run_design_checks` MCP
+      tool the rules files tell the agent to call before finishing, and surfaced on the canvas
+      regardless of whether it does. The slop-tell list is versioned in `.caret/` and
+      extensible by captured corrections.
 
 **Deliverable:** a correction made once is a correction the agent respects from then on.
 
@@ -304,12 +384,17 @@ Nothing in this phase is possible for a tool that regenerates from scratch each 
 The vocabulary that lets a hand and an agent express the same change with the same precision.
 A human drags a handle and sets `overshoot: 56%`; an agent writes `overshoot: 56%`.
 
+**Design session required before implementation** (CARET-V2-PLAN §1: designed together before
+code).
+
 - [ ] Selection payload v2: caret-id, resolved path, computed styles, box geometry
 - [ ] `Param` descriptor + registry; **index `caret-id → node` once per parse**, keyed to the
       file's content hash (measured: 115ms → 3.1ms for a panel-sized batch, and a stale index
       splices silently into wrong offsets)
 - [ ] Splice write primitive replacing recast for span replacements
 - [ ] Build-time caret-id codemod: promote `page-precompute.ts`, append-only, parse-only + splice
+      — **the watch-and-heal half lands early, in Phase 6**; this phase extends it to the full
+      Param substrate
 - [ ] Generalize `InlineEditPayload` from `"text"|"color"|"image"` to `{path, value}`
 - [ ] Property panel: every CSS property, token-aware, override vs token visible
 - [ ] Resolution chain: literal → binding-follow → literal-array-index → typed refusal
@@ -317,7 +402,8 @@ A human drags a handle and sets `overshoot: 56%`; an agent writes `overshoot: 56
       `dynamic-text`, `dynamic-image-src`, inline styles
 - [ ] Instance discriminator so `.map()` rows are editable (look edits reach all rows, content
       edits reach one)
-- [ ] Multi-select + bulk edit; **unified undo across inline and agent edits**
+- [ ] Multi-select + bulk edit; **unified undo across inline and agent edits** (git-based —
+      the checkpoint shadow-git is gone with the task loop)
 - [ ] **Every parameter needs a name an agent can write as precisely as a hand can drag.**
       `bouncy` above the bezier, `aurora / warm / grainy` above four stacked radials. If a
       parameter has no such name, it is defined at the wrong altitude.
@@ -345,6 +431,10 @@ declared-vs-built gaps being filled in confidently and wrongly.
 
 Deliberately minimal. This is what stops Caret feeling like a chat box with a preview — not
 what makes the output good.
+
+**Designed together before build** — resize is specified (CARET-V2-PLAN §5) but flagged for
+joint design; walk the feel checkpoints (video clips) with the user rather than building and
+merging solo.
 
 - [ ] Resize: layout-context resolver walking a **chain** (classification is one level,
       attribution is not), axis-aware (`width:auto` fills, `height:auto` hugs), preview channel
