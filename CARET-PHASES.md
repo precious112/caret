@@ -4,7 +4,10 @@ Each phase delivers something usable and testable. Dependencies flow forward. Ma
 
 **Status key:** `[ ]` = pending · `[~]` = in progress · `[x]` = complete
 
-For detailed design context behind each item, see [CARET-PLAN.md](./CARET-PLAN.md). For decision rationale, see [CARET-DECISIONS.md](./CARET-DECISIONS.md).
+**Engineering detail and rationale live in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md)** — start
+with its §0.5, which reframes what Caret is for. [CARET-PLAN.md](./CARET-PLAN.md) and
+[CARET-DECISIONS.md](./CARET-DECISIONS.md) are the V1 documents, kept as history; some of their
+decisions are explicitly reversed below.
 
 ---
 

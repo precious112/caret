@@ -3,9 +3,22 @@
 Companion to [CARET-PHASES.md](./CARET-PHASES.md). That file tracks *what* and *when*; this
 one is *how* and *why*. Decisions live here so they don't have to be re-derived.
 
-**Status:** A and B are specified and ready to build. D has its reliability argument below.
-C, E and Widgets are deliberately stubs — those get designed in conversation before code.
-**§0.5 reframes what the whole thing is for; read it before the rest.**
+**Read §0.5 first.** It reframes what Caret is for, and sections 1–12 were written before it.
+
+**Status by phase** (see [CARET-PHASES.md](./CARET-PHASES.md) for the checklists):
+
+| phase | state |
+|---|---|
+| **6** Standalone + agent-agnostic | **specified, ready to build** (§3, §4) |
+| **7** Make corrections stick | **not yet specified** — the differentiator, designed together next |
+| **8** Shared human/agent surface | specified (§5), missing the naming layer — see §0.5 Bridge 1 |
+| **9** Reverse sync | specified with its reliability argument (§6) |
+| **10** Direct manipulation (resize only) | specified (§5, resize subsection) |
+| **11** Supply | **deliberately unspecified** — gated on the friction research |
+| **12** Share, then collaboration | sketched (§11 monetization) |
+
+**Deferred behind Phase 11, not dropped:** snapping, gradient editing, motion timelines, 3D,
+shaders. Notes retained in §7.
 
 ---
 
@@ -136,15 +149,21 @@ Onlook cited applies harder to a VSCodium fork than to a focused app.
 
 ## 1. Working agreement
 
-| Track | Ownership |
-|---|---|
-| **A** Desktop shell | Claude end-to-end. Surface decisions only. |
-| **B** Agent decoupling + MCP | Claude end-to-end. Surface decisions only. |
-| **C** Parameter model | **Designed together before code.** Detailed proposal → discussion → build. |
-| **D** Reverse sync | Claude end-to-end, but the design is written up and justified first. |
-| **E** Precision | **Designed together.** Visualized where hard. |
-| **Widgets** | **Designed together.** Visualized where hard. |
-| **F** Ship-readiness | Claude end-to-end. |
+**Track letters are historical.** Sections 3–7 below were written before the 2026-08-01
+reframe and still use them. Map to the phases in
+[CARET-PHASES.md](./CARET-PHASES.md) as follows:
+
+| §  | Track | Phase | Ownership |
+|---|---|---|---|
+| §3 | A · Desktop shell | **6** | Claude end-to-end. Surface decisions only. |
+| §4 | B · Agent decoupling + MCP | **6** | Claude end-to-end. Surface decisions only. |
+| — | *(new)* Make corrections stick | **7** | **Designed together.** Not yet specified — the differentiator; see §0.5. |
+| §5 | C · Parameter model | **8** | **Designed together before code.** Token binding moves to Phase 7. |
+| §6 | D · Reverse sync | **9** | Claude end-to-end, design written up and justified first. |
+| §5 | C · Resize subsection | **10** | **Designed together.** Specified; the rest of E is deferred. |
+| §7 | E · Precision + Widgets | **deferred** | Behind Phase 11. See §7. |
+| — | *(new)* Supply | **11** | Gated on the friction research. Unspecified by design. |
+| §3–4 | F · Ship-readiness | **6** | Claude end-to-end. |
 
 **Testing.** Claude tests every phase via `playwright._electron` (verified available in the
 installed 1.58.1). Automated coverage is functional and filesystem-level; the decisive
@@ -155,10 +174,11 @@ Gatekeeper, or real agent judgment.
 **Halt-and-notify.** When something needs a human look or a manual test, Claude stops and
 says so rather than guessing past it.
 
-**Feel checkpoints.** Playwright records video. At feel-critical moments (drag-resize,
-snapping, timeline scrubbing, gradient stop dragging) Claude produces a short clip for
-judgment rather than deferring all UX feedback to the end. Resize is the single riskiest
-interaction on the list; discovering it feels wrong after Phase 9 is built is expensive.
+**Feel checkpoints.** Playwright records video. At feel-critical moments Claude produces a
+short clip for judgment rather than deferring all UX feedback to the end. In current scope that
+means **drag-resize only** (Phase 10) — snapping, timeline scrubbing and gradient dragging are
+deferred. Resize is the riskiest interaction still in scope; discovering it feels wrong after
+it is built is expensive.
 
 **Final acceptance** is the user attempting to reproduce high-end designs and judging whether
 the tool makes that easy.
@@ -316,7 +336,7 @@ Local HTTP on a fixed port, auto-started on project open, same shape Paper uses.
 > `design_layer.ts` splits: JSON for what the machine consults, prose only where judgment is
 > genuinely required. `get_guide` survives for the prose half.
 
-### B3 (original). `get_guide` is not optional
+**What the original B3 got right, and still holds:**
 `src/core/prompts/system-prompt/design_layer.ts` is the always-on design-mode system prompt.
 It teaches `useCaretState()`, `useCaretNavigator()` + `<a href="/<page-id>">` navigation, flow
 file generation, and embeds `CARET_ID_RULES` + `INLINE_EDITING_RULES`. With the bundled agent
@@ -338,7 +358,14 @@ Once the server speaks MCP this is documentation, not architecture.
 
 ---
 
-## 5. Track C — Parameter model *(design together — stub)*
+## 5. Track C — Parameter model → **Phases 7, 8 and 10**
+
+> **Split by the 2026-08-01 reframe.** *Token binding* moves up to **Phase 7** (it is the
+> mechanism that makes corrections persist). *Source-writes-runtime-verifies*, *list items* and
+> the *index-once* rule are **Phase 8**. *Resize* is **Phase 10**. Nothing here is dropped.
+> What is missing and matters most: **every parameter needs a name an agent can write as
+> precisely as a hand can drag** — `bouncy` above the bezier, `aurora` above four stacked
+> radials. See §0.5, Bridge 1.
 
 The substrate everything expressive depends on. **`data-caret-id` stops being the whole
 address and becomes the first segment of a path**, which makes this additive rather than a
@@ -784,24 +811,44 @@ per-region hashes anchored on the mapping.
 
 ---
 
-## 7. Tracks E + Widgets *(design together — stub)*
+## 7. Tracks E + Widgets — **DEFERRED behind Phase 11**
 
-Blocked on C. Both get detailed proposals and visualizations before code.
+> **Deferred 2026-08-01**, not dropped. Snapping and smart guides, gradient stop editing,
+> motion timelines and easing editors, 3D scene addressing and shader parameter exposure.
+>
+> **Why:** these are precision tools for people who already know what they want. A beautiful
+> gradient editor does not help someone who cannot choose a gradient. Reviewed against four
+> reference designs, none of them needed any of this — they needed an asset, a typeface and one
+> compositional move (§0.5). Revisit only once the supply side (Phase 11) exists.
+>
+> **Resize is the exception and stays in scope** as Phase 10, because without some direct
+> manipulation Caret is a chat box with a preview. Its full design is in §5.
 
-**E's hard problem, named up front:** drag-to-resize write-back. A 40px drag can validly
-become `w-[240px]`, a flex-basis change, a grid span, a gap adjustment, or an absolute
-offset. All produce the same pixels; choosing wrong generates code the user resents. This is
-a **policy engine, not a formula**, and it is the riskiest interaction in the plan.
+Notes retained for whenever this is picked back up:
 
-**Widgets' hard problems:** time addressing for the timeline; 3D scene addressing with
-raycast hit-testing past the `<canvas>` boundary (R3F components need the codemod to stamp
-stable ids the way JSX elements get caret-ids, since a Three object has no HMR-stable
-identity otherwise).
+**Widgets' hard problems:** time addressing for a timeline (nothing on screen *is* the
+animation — at any instant you see one frame); 3D scene addressing with raycast hit-testing
+past the `<canvas>` boundary, where R3F components need the codemod to stamp stable ids the way
+JSX elements get caret-ids, since a Three object has no HMR-stable identity otherwise.
 
-**Scope line:** for shaders and 3D the job is **parameter exposure, not authoring**. You or
-the agent write the GLSL; Caret surfaces uniforms as live sliders and the camera as a gizmo.
-Nobody authors a fragment shader through a GUI. Not building a pen tool, vector illustration,
-raster painting or video compositing — import, don't author.
+**Verified 2026-07-31, worth not re-deriving:** `document.getAnimations()` exposes CSS
+animations, CSS transitions and JS-driven animations alike, with durations, easings and
+keyframes, and `currentTime` can be set to scrub. So freezing and stepping through an animation
+needs no instrumentation. Unchecked: how much of Framer Motion routes through the browser's
+animation engine versus its own JS loop — if a chunk is invisible, a timeline has holes.
+
+**Gradients, measured 2026-07-30:** the browser rewrites gradient values on read (13 of 15 test
+cases), converting hex and named colours to `rgb()`, expanding double-position stops so the stop
+*count* changes, and evaluating `color-mix` down to a frozen value. So the file is the only
+trustworthy representation. Also: a gradient value cannot be split on commas, because a colour
+can contain them. A fill **stack** (Figma's fill list) matters far more than a good single-
+gradient editor — measured that mesh-plus-grain is one element with five background layers and
+zero child elements.
+
+**Scope line if resumed:** for shaders and 3D the job is **parameter exposure, not authoring**.
+You or the agent writes the GLSL; Caret surfaces uniforms as live sliders and the camera as a
+gizmo. Not building a pen tool, vector illustration, raster painting or video compositing —
+import, don't author.
 
 ---
 

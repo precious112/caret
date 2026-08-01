@@ -2,7 +2,13 @@
 
 Append-only record of design decisions. Each entry: date · decision · rationale · supersedes (if any).
 
-For the current synthesized direction, see [CARET-PLAN.md](./CARET-PLAN.md).
+> **V1 log — closed 2026-08-01.** New decisions go in the decision log at the end of
+> [CARET-V2-PLAN.md](./CARET-V2-PLAN.md). Entries here remain accurate as records of what was
+> decided *at the time*; several are since superseded, most notably one-way sync (reversed:
+> reverse sync is Phase 9) and Caret owning its own agent (reversed: MCP, BYO agent).
+> The two-layer architecture decision below still holds and is load-bearing.
+
+For the current synthesized direction, see [CARET-V2-PLAN.md](./CARET-V2-PLAN.md).
 
 ---
 

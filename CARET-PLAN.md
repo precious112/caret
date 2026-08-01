@@ -1,5 +1,18 @@
 # Caret — Planning & Design Log
 
+> **SUPERSEDED 2026-08-01 by [CARET-V2-PLAN.md](./CARET-V2-PLAN.md).** This is the V1 planning
+> log, kept for history and for the reasoning behind the two-layer architecture, which still
+> holds. Two things in here are now explicitly reversed:
+>
+> - **"Sync is one-way (design → app) for V1 … the design layer will go stale; this is
+>   accepted."** No longer accepted. Drift is a correctness problem — a declared-vs-built gap
+>   gets filled in by an agent confidently and wrongly. Reverse sync is Phase 9.
+> - **Caret as a VS Code extension owning its own agent.** Caret is now a standalone Electron
+>   app driven over MCP by whatever agent the user already runs.
+>
+> The Foundational Note below about scope (Caret's features are for the *user's* projects, not
+> Caret's own UI) still stands.
+
 Living document. The original spec (below) is a starting point; sections above it capture the evolving design.
 
 ---
