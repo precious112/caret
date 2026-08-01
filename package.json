@@ -34,7 +34,8 @@
 		"package": "npm run build && electron-builder --publish never",
 		"package:mac": "npm run build && electron-builder --mac --publish never",
 		"package:win": "npm run build && electron-builder --win --publish never",
-		"package:linux": "npm run build && electron-builder --linux --publish never"
+		"package:linux": "npm run build && electron-builder --linux --publish never",
+		"verify:mcp-client": "npx tsx scripts/verify-mcp-client.ts"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.25.1",

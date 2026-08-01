@@ -28,13 +28,20 @@ than the docs.
 
 ## Clients
 
-### Claude Code
+**Verification status.** The Claude Code path is tested end to end on every
+release by `npm run verify:mcp-client`, which registers the server with the real
+CLI, health-checks it, has an agent call a tool, and confirms a question that
+blocks for 45 seconds still gets its answer. The other snippets follow each
+client's documented format but are **not** covered by that test — if one is
+wrong, please open an issue.
+
+### Claude Code (verified)
 
 ```bash
 claude mcp add --transport http caret <URL> --header "Authorization: Bearer <TOKEN>"
 ```
 
-### Cursor
+### Cursor (untested)
 
 `.cursor/mcp.json`, in the project:
 
@@ -50,7 +57,7 @@ claude mcp add --transport http caret <URL> --header "Authorization: Bearer <TOK
 }
 ```
 
-### Codex
+### Codex (untested)
 
 `~/.codex/config.toml`:
 
@@ -60,7 +67,7 @@ url = "<URL>"
 http_headers = { Authorization = "Bearer <TOKEN>" }
 ```
 
-### OpenCode
+### OpenCode (untested)
 
 `opencode.json`, in the project:
 
@@ -77,7 +84,7 @@ http_headers = { Authorization = "Bearer <TOKEN>" }
 }
 ```
 
-### Kimi CLI and GLM / Zhipu CLI
+### Kimi CLI and GLM / Zhipu CLI (untested)
 
 Both take the standard `mcpServers` block — the same shape as Cursor, in their
 own config file.

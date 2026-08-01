@@ -292,7 +292,10 @@ Windows, so the same design would look different per machine):**
       "mark synced" control
 - [x] **The no-agent state** — every agent-requiring feature refuses with a per-feature
       explanation rather than failing silently
-- [x] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM
+- [x] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM. **Only the
+      Claude Code path is verified against a real client** (`npm run verify:mcp-client`);
+      the rest follow each client's documented format and are marked untested in the docs
+      rather than presented as equally certain
 - [x] Deleted: `src/core/api`, `src/core/task`, `src/core/prompts`, `src/core/controller`,
       `webview-ui`, `cli`, `standalone`, `evals`, `walkthrough`, `proto`, `src/generated`,
       checkpoint manager, terminal, browser tool
@@ -310,6 +313,13 @@ Windows, so the same design would look different per machine):**
       `precious112/caret-landing-page`
 - [ ] Deprecation notice shipped **inside** the final Open VSX extension release — needs a
       publish against the retired extension, whose source this branch no longer contains
+
+**Real-client certification:** `npm run verify:mcp-client` — registers the server with the
+actual `claude` CLI, health-checks it, has an agent list the tools and call `get_project` for
+real data, and confirms a tool that **blocks 45 seconds on a human** still receives its answer.
+That last one was the genuine unknown: the whole foundation interview depends on a client
+tolerating a request held open while somebody decides, and nothing short of a real client
+could answer it. 5/5.
 
 **New app-level reliability floor:** `npm run verify:app` — launches the real Electron binary
 and asserts on disk and over HTTP: launch, MCP discovery file permissions, unauthenticated and
