@@ -27,17 +27,16 @@ export function App() {
 	 * itself on a timer after saving, and that timer landing mid-interview would
 	 * silently remove the screen the agent is waiting on.
 	 *
-	 * Held in a ref as well as state because the callers that need vetoing are
+	 * Held in a ref rather than state because the callers that need vetoing are
 	 * exactly the ones holding a *stale* callback: a `setTimeout` scheduled before
 	 * the interview began captured an older closure, so a dependency-based guard
-	 * reads `false` and lets it through. The ref is always current.
+	 * reads `false` and lets it through. The ref is always current, and nothing
+	 * renders from this, so state would only add a needless re-render.
 	 */
-	const [interviewPending, setInterviewPending] = useState(false)
 	const interviewPendingRef = useRef(false)
 
 	const markInterviewPending = useCallback((pending: boolean) => {
 		interviewPendingRef.current = pending
-		setInterviewPending(pending)
 	}, [])
 	const topBarRef = useRef<HTMLDivElement>(null)
 
