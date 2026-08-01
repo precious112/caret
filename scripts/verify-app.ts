@@ -387,6 +387,23 @@ async function main(): Promise<void> {
 			`an invented candidate id was not refused. Server said: ${bogusText.slice(0, 400)}`,
 		)
 
+		// A combination Caret never offered must be refused even though all three
+		// ids are individually real — curating ingredients is not curating designs.
+		const mismatched = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 6,
+			method: "tools/call",
+			params: {
+				name: "commit_foundation",
+				arguments: { candidateId: "editorial-instrument+deep-technical+pill-expressive", tags: [] },
+			},
+		})
+		const mismatchedText = await mismatched.text()
+		assert(
+			mismatchedText.includes("not a candidate"),
+			`an unapproved combination of real ids was accepted: ${mismatchedText.slice(0, 300)}`,
+		)
+
 		const real = await callMcp(discovery.url, discovery.token, {
 			jsonrpc: "2.0",
 			id: 5,
@@ -427,7 +444,7 @@ async function main(): Promise<void> {
 		)
 		assert(rules.includes("Inter"), "the committed typeface did not reach the rules files")
 
-		return `committed "Editorial · Almost monochrome"; invented ids refused; rules regenerated`
+		return `committed "Editorial · Almost monochrome"; invented ids and unapproved combinations refused`
 	})
 
 	// ── UI ────────────────────────────────────────────────────────────────────

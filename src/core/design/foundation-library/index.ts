@@ -15,8 +15,8 @@
  */
 import { generateTokenScale } from "../token-scales"
 import type { FoundationTokens } from "../types"
-import { findRecipe, narrowRecipes, PALETTE_RECIPES, type PaletteRecipe } from "./palettes"
-import { findPreset, narrowPresets, SHAPE_PRESETS, type ShapePreset } from "./presets"
+import { findRecipe, PALETTE_RECIPES, type PaletteRecipe } from "./palettes"
+import { findPreset, SHAPE_PRESETS, type ShapePreset } from "./presets"
 import { findPairing, googleFontsUrl, narrowPairings, TYPEFACE_PAIRINGS, type TypefacePairing } from "./typefaces"
 
 export { findRecipe, narrowRecipes, PALETTE_RECIPES, type PaletteRecipe } from "./palettes"
@@ -128,12 +128,20 @@ export interface FoundationCandidate {
  */
 export function narrowCandidates(tags: string[], count = 3): FoundationCandidate[] {
 	const typefaces = narrowPairings(tags, count)
-	const palettes = narrowRecipes(tags, count)
-	const shapes = narrowPresets(tags, count)
+	const wanted = new Set(tags.map((t) => t.toLowerCase()))
+	const score = (candidateTags: string[]) => candidateTags.filter((t) => wanted.has(t)).length
 
-	return typefaces.map((typeface, index) => {
-		const palette = palettes[index] ?? palettes[0]
-		const shape = shapes[index] ?? shapes[0]
+	return typefaces.map((typeface) => {
+		// Only combinations the typeface is declared to work with. Ranking the
+		// three axes separately and zipping by index produced pairings nobody
+		// approved — the exact failure this function's existence is meant to
+		// prevent.
+		const palette = bestOf(
+			typeface.pairsWith.palettes.map(findRecipe).filter(Boolean) as PaletteRecipe[],
+			PALETTE_RECIPES,
+			score,
+		)
+		const shape = bestOf(typeface.pairsWith.shapes.map(findPreset).filter(Boolean) as ShapePreset[], SHAPE_PRESETS, score)
 		return {
 			id: `${typeface.id}+${palette.id}+${shape.id}`,
 			name: `${typeface.name} · ${palette.name}`,
@@ -144,6 +152,12 @@ export function narrowCandidates(tags: string[], count = 3): FoundationCandidate
 			tokens: buildTokens({ typeface, palette, shape, tags }),
 		}
 	})
+}
+
+/** The best-scoring allowed option, falling back to the first of all when empty. */
+function bestOf<T extends { tags: string[] }>(allowed: T[], all: T[], score: (tags: string[]) => number): T {
+	const pool = allowed.length > 0 ? allowed : all
+	return [...pool].sort((a, b) => score(b.tags) - score(a.tags))[0]
 }
 
 export interface BuildTokensInput {
@@ -196,6 +210,12 @@ export function resolveCandidate(id: string, tags: string[] = []): FoundationCan
 	const shape = findPreset(shapeId)
 	if (!typeface || !palette || !shape) return null
 
+	// A combination Caret never offered is not a curated foundation, whoever
+	// assembled the id.
+	if (!typeface.pairsWith.palettes.includes(paletteId) || !typeface.pairsWith.shapes.includes(shapeId)) {
+		return null
+	}
+
 	return {
 		id,
 		name: `${typeface.name} · ${palette.name}`,
@@ -230,6 +250,31 @@ function numericScale(scale: Record<string, string>): Record<string, number> {
 		out[key] = Number.parseFloat(value)
 	}
 	return out
+}
+
+/**
+ * Every tag the library recognises.
+ *
+ * This has to be published, because tag matching is exact. An agent describing a
+ * product as "sleek, professional, modern" overlaps nothing, every candidate
+ * scores zero, and the ranking degenerates to "the first three in declaration
+ * order" — which looks identical to a real narrowing and is not one. Silent
+ * theatre is the worst possible failure for the one screen that is supposed to
+ * inject taste, so the vocabulary is advertised and a zero-overlap query is
+ * refused rather than answered.
+ */
+export const LIBRARY_TAGS: string[] = [
+	...new Set([
+		...TYPEFACE_PAIRINGS.flatMap((p) => p.tags),
+		...PALETTE_RECIPES.flatMap((r) => r.tags),
+		...SHAPE_PRESETS.flatMap((s) => s.tags),
+	]),
+].sort()
+
+/** How many of `tags` the library actually recognises. */
+export function countRecognisedTags(tags: string[]): number {
+	const known = new Set(LIBRARY_TAGS)
+	return tags.filter((t) => known.has(t.toLowerCase())).length
 }
 
 /** Every pairing, recipe and preset — the no-agent path shows all of them. */

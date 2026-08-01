@@ -31,6 +31,16 @@ export interface TypefacePairing {
 	mono?: TypefaceRole
 	/** Type scale ratio that suits this pairing. */
 	scaleRatio: number
+	/**
+	 * The palettes and shape presets this typeface is actually good with.
+	 *
+	 * Curating ingredients is not curating designs. Ranking typefaces, palettes
+	 * and presets separately and zipping them by index can produce a rounded,
+	 * airy preset under a high-contrast editorial serif — a combination worse
+	 * than either choice on its own. Compatibility has to be stated, because it
+	 * is the part that cannot be inferred from tags.
+	 */
+	pairsWith: { palettes: string[]; shapes: string[] }
 	/** Why this pairing works, for the agent — not shown to the user. */
 	rationale: string
 }
@@ -70,6 +80,7 @@ const IBM_PLEX_MONO: TypefaceRole = {
 export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	{
 		id: "editorial-instrument",
+		pairsWith: { palettes: ["mono-accent", "quiet-institutional"], shapes: ["editorial-open", "soft-comfortable"] },
 		name: "Editorial",
 		feel: "Considered and magazine-like. Big quiet headlines, plain readable text underneath.",
 		tags: ["editorial", "premium", "calm", "content", "marketing", "considered"],
@@ -87,6 +98,10 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "technical-geist",
+		pairsWith: {
+			palettes: ["deep-technical", "mono-accent", "quiet-institutional"],
+			shapes: ["sharp-dense", "soft-comfortable"],
+		},
 		name: "Technical",
 		feel: "Precise and modern. Reads like a well-built tool.",
 		tags: ["technical", "developer", "product", "dashboard", "precise", "modern", "saas"],
@@ -111,6 +126,7 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "warm-fraunces",
+		pairsWith: { palettes: ["warm-earth", "single-bold"], shapes: ["round-airy", "soft-comfortable"] },
 		name: "Warm",
 		feel: "Friendly and a bit characterful. Softer than most software.",
 		tags: ["warm", "friendly", "human", "playful", "consumer", "wellness", "craft"],
@@ -134,6 +150,7 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "bold-bricolage",
+		pairsWith: { palettes: ["single-bold", "mono-accent"], shapes: ["pill-expressive", "soft-comfortable"] },
 		name: "Bold",
 		feel: "Loud and a little odd. Wants to be noticed.",
 		tags: ["bold", "loud", "creative", "agency", "launch", "expressive", "unusual"],
@@ -151,6 +168,7 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "crisp-space",
+		pairsWith: { palettes: ["deep-technical", "single-bold"], shapes: ["sharp-dense", "soft-comfortable"] },
 		name: "Crisp",
 		feel: "Geometric and slightly retro-technical.",
 		tags: ["technical", "geometric", "retro", "crypto", "developer", "data", "startup"],
@@ -169,6 +187,7 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "institutional-plex",
+		pairsWith: { palettes: ["quiet-institutional", "mono-accent"], shapes: ["sharp-dense", "soft-comfortable"] },
 		name: "Institutional",
 		feel: "Serious and solid. Trustworthy rather than fashionable.",
 		tags: ["serious", "enterprise", "fintech", "healthcare", "government", "trustworthy", "dense"],
@@ -193,6 +212,7 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "newsroom-newsreader",
+		pairsWith: { palettes: ["warm-earth", "mono-accent"], shapes: ["editorial-open", "round-airy"] },
 		name: "Newsroom",
 		feel: "Text-first. Built for reading a lot of words.",
 		tags: ["editorial", "content", "reading", "publishing", "blog", "documentation", "calm"],
@@ -216,6 +236,10 @@ export const TYPEFACE_PAIRINGS: TypefacePairing[] = [
 	},
 	{
 		id: "neutral-archivo",
+		pairsWith: {
+			palettes: ["mono-accent", "quiet-institutional", "single-bold"],
+			shapes: ["soft-comfortable", "sharp-dense"],
+		},
 		name: "Neutral",
 		feel: "Clean and unfussy. Gets out of the way.",
 		tags: ["neutral", "clean", "minimal", "utility", "internal", "flexible"],

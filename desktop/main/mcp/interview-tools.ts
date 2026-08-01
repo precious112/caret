@@ -15,7 +15,9 @@ import { z } from "zod"
 
 import {
 	candidateFontUrl,
+	countRecognisedTags,
 	INTERVIEW_QUESTIONS,
+	LIBRARY_TAGS,
 	narrowCandidates,
 	resolveCandidate,
 	writeFoundationTokens,
@@ -73,16 +75,30 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 		{
 			name: "present_options",
 			title: "Show the user foundations to pick from",
-			description:
-				"Renders complete foundations as live specimens — real typefaces, palettes applied to sample components — and waits for the user to point at one. Pass the vibe tags you inferred from their answers and Caret narrows its curated library; you cannot pass your own colours or font names, by design. Returns the chosen candidate id for commit_foundation.",
+			description: `Renders complete foundations as live specimens — real typefaces, palettes applied to sample components — and waits for the user to point at one. Pass the vibe tags you inferred from their answers and Caret narrows its curated library; you cannot pass your own colours or font names, by design. Returns the chosen candidate id for commit_foundation.\n\nTags are matched exactly against a fixed vocabulary, so use words FROM THIS LIST ONLY:\n${LIBRARY_TAGS.join(", ")}\n\nPick the 3-6 that best fit what the user told you. Tags outside this list are rejected rather than silently ignored.`,
 			inputSchema: {
-				tags: z.array(z.string()).describe('Vibe tags inferred from the interview, e.g. ["technical", "calm", "dense"]'),
+				tags: z
+					.array(z.string())
+					.describe(`Vibe tags from the library vocabulary. Allowed values: ${LIBRARY_TAGS.join(", ")}`),
 				count: z.number().min(2).max(4).default(3).describe("How many candidates to show"),
 				title: z.string().default("Pick the one you like").describe("Heading above the options"),
 				subtitle: z.string().optional(),
 			},
 			async handler(_ctx, args: { tags: string[]; count?: number; title?: string; subtitle?: string }) {
-				const candidates = narrowCandidates(args.tags ?? [], args.count ?? 3)
+				const tags = args.tags ?? []
+
+				// Refuse a query that overlaps the vocabulary nowhere. Ranking by a
+				// score every candidate ties on is not a narrowing — it silently
+				// returns the first few in declaration order, which looks exactly
+				// like a real result and is not one.
+				if (tags.length > 0 && countRecognisedTags(tags) === 0) {
+					return fail(
+						`None of [${tags.join(", ")}] are tags this library knows, so nothing can be narrowed. ` +
+							`Re-tag using these words only: ${LIBRARY_TAGS.join(", ")}`,
+					)
+				}
+
+				const candidates = narrowCandidates(tags, args.count ?? 3)
 				if (candidates.length === 0) {
 					return fail("No candidates matched — pass fewer or broader tags.")
 				}

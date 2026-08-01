@@ -192,6 +192,105 @@ async function main(): Promise<void> {
 		)
 		return "client held the call open 45s+ and received the user's answer"
 	})
+
+	await scenario("6. a real agent runs the WHOLE interview and commits a foundation", async () => {
+		// The scenarios above call one tool each with inputs this script chose.
+		// That is not the feature. The feature is a multi-turn loop in which the
+		// agent decides what to ask, infers the vibe tags ITSELF, chains
+		// present_question → present_options → commit_foundation, and lands on a
+		// real foundation. The agent's own tag vocabulary is the risky part: tags
+		// that match nothing used to return the first three candidates in
+		// declaration order, which is indistinguishable from a real narrowing.
+		const chrome = await app!.firstWindow()
+
+		// Start from no foundation, so the agent has a genuine job to do.
+		await fs.rm(path.join(fixture, ".caret", "tokens", "foundation.json"), { force: true })
+
+		const agent = claude(
+			`-p "Set up this project's visual foundations using the caret MCP server. Run its foundation interview: ask the user a few questions with present_question, then show them options with present_options, then commit what they pick with commit_foundation. Report what was committed." ` +
+				`--allowed-tools "mcp__caret__present_question" "mcp__caret__present_options" "mcp__caret__commit_foundation" "mcp__caret__get_project"`,
+			600_000,
+		)
+
+		// Answer whatever it asks, for as long as it keeps asking. The point is
+		// that the loop runs to completion, not that it asks any particular thing.
+		let questions = 0
+		let picks = 0
+		const deadline = Date.now() + 540_000
+
+		while (Date.now() < deadline) {
+			const question = chrome.locator('[data-testid="interview-choice"]').first()
+			const candidate = chrome.locator('[data-testid="interview-candidate"]').first()
+
+			const which = await Promise.race([
+				question
+					.waitFor({ timeout: 20_000 })
+					.then(() => "question" as const)
+					.catch(() => null),
+				candidate
+					.waitFor({ timeout: 20_000 })
+					.then(() => "candidate" as const)
+					.catch(() => null),
+			])
+
+			if (which === "question") {
+				await question.click()
+				questions++
+			} else if (which === "candidate") {
+				await candidate.click()
+				picks++
+			} else if (picks > 0) {
+				break // it showed options, we picked, and it has stopped asking
+			}
+
+			// The agent has finished if it committed and the run resolved.
+			const settled = await Promise.race([agent.then(() => true), new Promise((r) => setTimeout(() => r(false), 500))])
+			if (settled) break
+		}
+
+		const output = await agent
+		assert(questions > 0, `the agent never asked anything: ${output.slice(0, 500)}`)
+		assert(picks > 0, `the agent never presented options to pick from: ${output.slice(0, 500)}`)
+
+		// The decisive assertion is on disk: a foundation that matches a real
+		// library entry, not something the model invented.
+		const tokens = await waitFor(
+			"the committed foundation",
+			async () => {
+				try {
+					return JSON.parse(await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8"))
+				} catch {
+					return null
+				}
+			},
+			60_000,
+		)
+
+		const { TYPEFACE_PAIRINGS, SHAPE_PRESETS } = await import("../src/core/design/foundation-library")
+		const families = new Set(TYPEFACE_PAIRINGS.map((t) => t.body.family))
+		assert(
+			families.has(tokens.typography?.fontFamily),
+			`committed a typeface that is not in the curated library: ${tokens.typography?.fontFamily}`,
+		)
+		assert(
+			SHAPE_PRESETS.some((preset) => preset.baseSize === tokens.typography?.baseSize),
+			`committed a base size no preset produces: ${tokens.typography?.baseSize}`,
+		)
+		assert(Object.keys(tokens.color?.brand?.scale ?? {}).length === 11, "the brand scale was not derived")
+
+		// And the rules files every future session reads must reflect it.
+		const rules = await waitFor(
+			"the regenerated rules",
+			async () => {
+				const text = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
+				return text.includes(tokens.color.brand.seed) ? text : null
+			},
+			60_000,
+		)
+		assert(rules.includes(tokens.typography.fontFamily), "the committed typeface never reached the rules files")
+
+		return `${questions} question(s), ${picks} pick(s) → ${tokens.typography.fontFamily} @ ${tokens.typography.baseSize}px, seed ${tokens.color.brand.seed}`
+	})
 }
 
 async function cleanup(): Promise<void> {

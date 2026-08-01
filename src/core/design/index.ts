@@ -17,10 +17,12 @@ export {
 export {
 	buildTokens,
 	candidateFontUrl,
+	countRecognisedTags,
 	type FoundationCandidate,
 	fullLibrary,
 	INTERVIEW_QUESTIONS,
 	type InterviewQuestion,
+	LIBRARY_TAGS,
 	narrowCandidates,
 	PALETTE_RECIPES,
 	type PaletteRecipe,
