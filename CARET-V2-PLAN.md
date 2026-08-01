@@ -5,6 +5,93 @@ one is *how* and *why*. Decisions live here so they don't have to be re-derived.
 
 **Status:** A and B are specified and ready to build. D has its reliability argument below.
 C, E and Widgets are deliberately stubs — those get designed in conversation before code.
+**§0.5 reframes what the whole thing is for; read it before the rest.**
+
+---
+
+## 0.5 What Caret is actually for (2026-08-01)
+
+Everything below §1 was designed on the assumption that Caret is a design tool that needs to
+reach Figma parity. That assumption was tested against four "expensive-looking" reference
+designs and against the documented experience of people shipping AI-generated UI, and it does
+not hold.
+
+### Precision does not supply taste
+
+Break down what made those four reference footers look expensive: **an asset, a typeface, and
+one compositional move (crop something huge at the edge), sitting on a completely conventional
+layout.** All four shared the same layout — text block top-left, link columns top-right, thin
+divider, legal row, oversized wordmark bleeding off the bottom. No unusual grid, no clever
+spacing, no decoration. The links are unstyled text.
+
+None of it required a gradient stop dragged or an easing curve tuned.
+
+A dev who cannot design, handed a gradient stop editor, produces an ugly gradient with
+beautifully draggable stops. **Precision tools amplify taste; they do not supply it.** Track
+C/E/Widgets as originally scoped is Figma parity — necessary so the tool isn't a chat box,
+insufficient for Caret's actual user.
+
+The specific error: **we designed the manipulation without designing the vocabulary.** Gradient
+stops draggable to the pixel but no notion of "aurora". Easing curves hand-editable but no
+motion tokens. That is the human half of a two-sided surface, shipped as if it were the feature.
+
+### The problem worth solving
+
+> *"AI design is one-shot: the agent generates, you eyeball it, you fix the same problems by
+> hand, and next session it makes them again."*
+
+v0, Lovable, Bolt and Replit all regenerate from scratch. Corrections evaporate. **`.caret/`
+persists** — in the repo, under git, reviewable in a PR. That is the one structural advantage
+Caret has, and the roadmap is now ordered around it.
+
+### The precision gap, and the two bridges
+
+Human direct manipulation is a **closed loop**: see, adjust, see, twenty times a second. An
+agent writing code is **open loop**: guess, write, hope. Language is lossy for continuous
+perceptual values. So *"a bit bouncier"* is speakable but imprecise, and
+`cubic-bezier(.34,1.56,.64,1)` is precise but unspeakable.
+
+**Bridge 1 — name things at the right altitude.** `brand-500` not `rgb(255,107,107)`; `bouncy`
+not the bezier; `aurora, warm, grainy` not four stacked radials; `hug/fill/fixed` not a pixel
+width. Precise *and* speakable, and because the names live in the project's own token file,
+agent and human share a vocabulary specific to this project. The parameter model is therefore
+not merely how the panel edits — **it is the shared language**. Same parameter, two input
+devices, one source of truth.
+
+**Bridge 2 — when words fail, send options rather than instructions.** The agent produces N
+variants; the human points at one. High bandwidth agent→human without needing high bandwidth
+human→agent, and *pointing requires no design vocabulary*. Replit ships this as "Ambient
+Intelligence"; treat it as table stakes.
+
+### What the research says has to be true
+
+- **Foundational rules always in context, never fetched on demand.** An agent asked to "build me
+  a card" that must *choose* to look up spacing and type will not, and fills the gap from
+  training data. This directly corrects the earlier `get_guide` design (§4 B3), which had the
+  agent pull the guide when it wanted.
+- **Machine-structured (JSON) over prose.** Reported ~80% token reduction and fewer
+  hallucinations versus Markdown. `design_layer.ts` is currently all prose.
+- **Tokens as live bindings, not values copied at generation time.** Otherwise editing a token
+  changes nothing already made — which is exactly today's behaviour (`design_layer.ts:110`).
+- **Declared-vs-built gaps get filled confidently and wrongly**, so drift is correctness work.
+
+### The gap Caret has nothing for
+
+Replit answered the grounding problem by building in Mobbin — 600,000+ real screens from 1,000+
+apps, no separate account, so the agent references real work instead of averaging its training
+data. Caret has no equivalent: no reference library, no asset generation, no typeface strategy.
+
+**Deliberately unplanned.** The user is running hands-on friction research to establish whether
+the sticking point is *"I can't describe what I want"* (a naming problem, solved by showing
+options) or *"I know what I want and can't obtain it"* (a supply problem, solved by grounding).
+Those point at different products. Phase 11 holds the seam; do not guess at its shape.
+
+### What survives from the original design
+
+All of it, re-ranked. The parameter model becomes the shared vocabulary rather than a panel
+feature. Reverse sync becomes correctness rather than tidiness. Resize stays as table stakes.
+Snapping, gradient editing, motion timelines and 3D are deferred behind the supply question,
+because a beautiful gradient editor does not help someone who cannot choose a gradient.
 
 ---
 
@@ -218,7 +305,18 @@ Local HTTP on a fixed port, auto-started on project open, same shape Paper uses.
 | `get_sync_worklist` — the changed-design worklist | |
 | `get_guide` — authoring rules | |
 
-### B3. `get_guide` is not optional
+### B3. Foundational context must be ALWAYS-ON, not a pull tool
+
+> **Corrected 2026-08-01.** The design below had the agent *fetch* the guide when it chose to.
+> Practitioner reporting names that exact pattern as a failure: asked to "build me a card", an
+> agent gets component metadata and **ignores spacing, typography and colour, filling the gap
+> from training data**. Foundational rules (tokens, spacing, type, caret-id rules) must be
+> injected into every request, not offered as a tool call. Additionally, machine-facing context
+> should be **structured JSON, not prose** (~80% token reduction, fewer hallucinations), so
+> `design_layer.ts` splits: JSON for what the machine consults, prose only where judgment is
+> genuinely required. `get_guide` survives for the prose half.
+
+### B3 (original). `get_guide` is not optional
 `src/core/prompts/system-prompt/design_layer.ts` is the always-on design-mode system prompt.
 It teaches `useCaretState()`, `useCaretNavigator()` + `<a href="/<page-id>">` navigation, flow
 file generation, and embeds `CARET_ID_RULES` + `INLINE_EDITING_RULES`. With the bundled agent
@@ -829,6 +927,13 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Preview must be encoding-aware | 2026-07-30 | `el.style.width` is ignored on `flex:1 1 0%` (measured 188→188). A min/max clamp works and matches the `basis-*` commit exactly (217/159 both ways). Preview must never show a state the commit cannot reproduce |
 | Verify the neighbourhood, not the node | 2026-07-30 | An explicit width on a grid item always applies (217px measured on all three track types) so element-level verification passes on a broken layout: `minmax(0,1fr)` and fixed tracks overlap, plain `1fr` grows the track and shifts every sibling |
 | Verifier needs a settle protocol + epsilon | 2026-07-30 | `transition:width` measured 175.88px mid-flight → false mismatch. Fractional tracks measure 166.33px → `Math.round` is not integer-safe. A verifier that cries wolf is worse than none |
+| Persistence is the differentiator, not precision | 2026-08-01 | Every AI design tool is one-shot — corrections evaporate each session. `.caret/` persists in the repo under git. Roadmap re-ordered around exploiting that |
+| Foundational context always-on, never pull-only | 2026-08-01 | An agent that must choose to look up spacing and type will not, and fills the gap from training data. Corrects the earlier `get_guide` design |
+| JSON for machines, prose for judgment | 2026-08-01 | ~80% token reduction and fewer hallucinations vs Markdown; `design_layer.ts` is currently all prose |
+| Capture corrections into the design layer | 2026-08-01 | The direct fix for "next session it makes them again", and only possible because the design layer persists. Highest-value item in the plan |
+| Generate-and-pick as a first-class interaction | 2026-08-01 | Pointing needs no design vocabulary, which suits a non-designer. Replit ships it as "Ambient Intelligence" — table stakes, not novelty |
+| Supply (grounding/assets/type) deferred, not dropped | 2026-08-01 | Replit answered it by building in Mobbin's 600k screens. Caret has no equivalent and should not guess before the friction research lands |
+| Snapping, gradients, motion, 3D deferred | 2026-08-01 | Precision tools for people who already know what they want. A gradient editor does not help someone who cannot choose a gradient |
 | Encoding policy inferred from the repo | 2026-07-30 | Explicit user mode > project convention > context default. Cold start seeds the convention, so defaults must be what you want propagated |
 | Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
