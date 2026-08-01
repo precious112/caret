@@ -154,10 +154,23 @@ async function main(): Promise<void> {
 		env: { ...process.env, CARET_VERIFY_PROJECT: fixture, NODE_ENV: "test" },
 	})
 
-	await scenario("a. app launches and opens the fixture project", async () => {
+	await scenario("a. app launches and the window is named after the project", async () => {
 		const window = await app!.firstWindow({ timeout: 60_000 })
 		assert(window, "no window appeared")
-		return `window title: ${await window.title()}`
+
+		// The *OS* window title, not `document.title` — that is what appears in the
+		// dock and the Window menu, and it is what has to carry the project name so
+		// several open projects are distinguishable.
+		const expected = `${path.basename(fixture)} — Caret`
+		const title = await waitFor(
+			"the window title",
+			async () => {
+				const current = await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle() ?? "")
+				return current === expected ? current : null
+			},
+			30_000,
+		)
+		return `OS window title: ${title}`
 	})
 
 	const discovery = await scenario("b. MCP discovery file is written with a token", async () => {

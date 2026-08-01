@@ -192,6 +192,16 @@ export class ProjectWindow {
 
 	private loadChrome(): void {
 		const { url, file } = this.options.chromeEntry
+
+		// The renderer's own `<title>` wins once the document loads, which would
+		// leave every project window named the same thing — unusable in the dock
+		// and the Window menu with more than one project open.
+		const title = `${path.basename(this.projectPath)} — Caret`
+		this.window.on("page-title-updated", (event) => {
+			event.preventDefault()
+			this.window.setTitle(title)
+		})
+
 		if (url) {
 			void this.window.webContents.loadURL(url)
 		} else if (file) {
