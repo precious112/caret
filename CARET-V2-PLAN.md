@@ -179,14 +179,30 @@ assertion for Caret is almost always *"did the source file change to exactly thi
 nothing else move"*. Claude cannot test feel, taste, Windows/Linux behaviour, macOS Sequoia
 Gatekeeper, or real agent judgment.
 
-**Halt-and-notify.** When something needs a human look or a manual test, Claude stops and
-says so rather than guessing past it.
+**Every phase ends by using the app, not by running unit tests.** Launch the Electron binary,
+open a project, walk the real flows — canvas, focus, an inline edit, a sync — and find the
+broken ones. Unit tests are necessary and are not sufficient; the deliverable of this step is a
+list of actual bugs found by operating the product.
 
-**Feel checkpoints.** Playwright records video. At feel-critical moments Claude produces a
-short clip for judgment rather than deferring all UX feedback to the end. In current scope that
-means **drag-resize only** (Phase 10) — snapping, timeline scrubbing and gradient dragging are
-deferred. Resize is the riskiest interaction still in scope; discovering it feels wrong after
-it is built is expensive.
+**Then continue to the next phase without checking in.** Set 2026-08-01. Asking after each
+phase turns a long autonomous build into a chain of blocking handoffs. Two exceptions only:
+
+1. **Testing is genuinely impossible** — needs real agent judgment, another OS, Gatekeeper, or
+   a surface Playwright cannot reach. Say so plainly and hand over; never guess past it.
+2. **A product-defining feature needs a taste rating** — the user builds something real with it
+   and judges the output. That means the **Phase 6.5 foundation interview**, **Phase 7**
+   correction capture / generate-and-pick / the acceptance checker, the **Phase 7.5** catalog
+   (already gated on curation), and **Phase 10** resize feel. Infrastructure — the Electron
+   shell, MCP plumbing, de-vscoding, reverse-sync correctness — ships autonomously once the
+   app-level tests pass.
+
+The "designed together" marks on Phases 7, 8 and 10 are a **separate, earlier gate**: design
+before code. They do not change the post-phase rule above.
+
+**Feel checkpoints.** Playwright records video, so feel-critical moments produce a short clip
+for judgment rather than deferring UX feedback to the end. Resize (Phase 10) is the riskiest
+interaction still in scope — discovering it feels wrong after it is built is expensive — and
+the taste-rated features in exception 2 get the same treatment.
 
 **Final acceptance** is the user attempting to reproduce high-end designs and judging whether
 the tool makes that easy.
@@ -1205,6 +1221,7 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Generate-and-pick as a first-class interaction | 2026-08-01 | Pointing needs no design vocabulary, which suits a non-designer. Replit ships it as "Ambient Intelligence" — table stakes, not novelty |
 | Supply (grounding/assets/type) deferred, not dropped | 2026-08-01 | Replit answered it by building in Mobbin's 600k screens. Caret has no equivalent and should not guess before the friction research lands |
 | Snapping, gradients, motion, 3D deferred | 2026-08-01 | Precision tools for people who already know what they want. A gradient editor does not help someone who cannot choose a gradient |
+| Phases run autonomously, gated on app-level testing | 2026-08-01 | Each phase ends by driving the real app in Playwright, then continues without checking in. Stop only when testing is impossible, or when a product-defining feature needs the user to build with it and rate it |
 | Encoding policy inferred from the repo | 2026-07-30 | Explicit user mode > project convention > context default. Cold start seeds the convention, so defaults must be what you want propagated |
 | Persona pinned: a developer who is not good at design | 2026-08-01 | Not a no-code end user. Onboarding may assume a dev; the design surface must never assume design vocabulary |
 | Always-on context ships as repo rules files | 2026-08-01 | MCP cannot inject into a client's context. `AGENTS.md`/`CLAUDE.md`/`.cursor/rules` are auto-loaded by every mainstream agent and versioned with the design; tool results echo the JSON as backstop |
