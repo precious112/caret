@@ -379,6 +379,65 @@ Nothing in this phase is possible for a tool that regenerates from scratch each 
 
 ---
 
+## [ ] Phase 7.5: Component supply — the curated catalog
+
+**The supply gap, answered for components.** Reference screenshots (Replit's Mobbin answer) make
+an agent *reproduce* what it saw. A component library makes the quality **transfer as code**, in
+the medium `.caret/` is already written in — no translation loss. For a code-based tool that is
+the strictly better answer, and unlike the rest of Phase 11 it does not wait on the friction
+research: the candidates already exist and the user is already collecting them. Engineering
+detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §5.5.
+
+**Research + curation gate — do this first, then stop and wait:**
+
+- [ ] Survey candidate libraries: micro-interactions and transitions, loaders, effects
+      (ASCII, halftone, grain, displacement), hero/section compositions, animated primitives
+- [ ] For each, verify programmatic access **by running it**, not by reading the marketing page:
+      does the CLI/registry install work headlessly, is there a public repo, what is the licence
+- [ ] Produce the review table — name · what it's for · distribution shape · install command ·
+      licence · repo · registry endpoint reachable · editable once installed · **rendered
+      specimen** (taste is being judged, not just mechanics)
+- [ ] **User reviews the full list and picks what ships.** Nothing enters the catalog without
+      that pass — curation is the entire value; an unreviewed catalog is just more averaging.
+
+**Two tiers (settled 2026-08-01):**
+
+- [ ] **Shipped catalog** — curated, user-reviewed, versioned with Caret. This is the allowlist:
+      pinned versions, licence per entry, one-line "use when" per component.
+- [ ] **Per-project `.caret/`** — what the agent actually installed for *this* project, with
+      provenance (library, version, component, source URL, licence). Under git, so the choice
+      persists across sessions like every other correction.
+
+**Integration rules:**
+
+- [ ] **Use the install path, never the read path.** The agent never fetches a docs site at
+      generation time — bot walls, JS-rendered docs and moved URLs are dependencies Caret does
+      not control. It installs, then reads the resulting source locally, forever.
+- [ ] **Two-axis filter**: *ingestible* (installs programmatically, public repo, readable
+      licence) **and** *editable once installed* (source lands in `.caret/`, takes caret-ids,
+      colours rebindable to `foundation.json`). Both required; they fail independently.
+- [ ] On install: rebind hardcoded colours/type to foundation tokens where they match, and let
+      the Phase 6 watch-and-heal codemod stamp caret-ids (it fires on any `.caret/` write, so
+      installed components become visually editable with no extra machinery)
+- [ ] **Opaque npm packages degrade honestly** — wrap in a `.caret/components/` wrapper that
+      owns props and tokens, mark the interior `writable: false` with a reason. Never a silent
+      dead zone in the canvas.
+- [ ] Catalog **index** (names + "use when") goes in the always-on rules files; full prop APIs
+      are read on demand from installed source. An agent that must *choose* to check the
+      catalog will hand-roll a spinner instead — same failure mode as pull-only `get_guide`.
+- [ ] **Restraint budget: roughly one signature move per page**, enforced in the rules and
+      checked by the Phase 7 acceptance checker. A micro-interaction library is a slop
+      *accelerant* without this — "a bounce animation on every hover" is on the documented
+      slop-tell list, and the reference designs won on restraint everywhere but one move.
+- [ ] Supply-chain posture: allowlist only, pinned versions, explicit user consent on a
+      library's first install into a project
+
+**Deliverable:** the agent reaches for a genuinely good loader, effect or section instead of
+hand-rolling a generic one — from a set the user personally approved, installed as editable
+source that the token system and the canvas both understand.
+
+---
+
 ## [ ] Phase 8: The shared human/agent surface (parameter model)
 
 The vocabulary that lets a hand and an agent express the same change with the same precision.
@@ -458,12 +517,17 @@ beautiful gradient editor does not help someone who cannot choose a gradient.
 non-designer get a typeface, an asset and a composition that are not generic? Do not guess at
 the shape before that research lands.
 
+**Partly answered already:** the *component* half of supply is Phase 7.5 (the curated catalog),
+and foundations are Phase 6.5 (the interview). What remains gated is below.
+
 Known sub-problems:
 
 - **Grounding** — reference designs the agent can consult. Replit bought this (Mobbin, 600k
   screens, built in). Options: a curated open library, an MCP integration, or nothing.
 - **Generation** — grainy gradients, halftone treatments, split wordmarks. All are code, so
-  Caret can own them outright and expose them as tunable parameters.
+  Caret can own them outright and expose them as tunable parameters. **Largely superseded by
+  Phase 7.5**: integrating existing libraries is far cheaper than building these, and their
+  prop APIs already expose the parameters. What stays here is whatever the catalog can't cover.
 - **Typeface** — the highest-leverage single decision in every reference design reviewed, and
   the one a dev reliably gets wrong by defaulting to Inter. Licensing is the hard part.
 - **Composition recipes** — the reference footers shared one layout and differed only in skin.

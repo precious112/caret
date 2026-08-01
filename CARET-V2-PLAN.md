@@ -12,6 +12,7 @@ one is *how* and *why*. Decisions live here so they don't have to be re-derived.
 | **6** Standalone + agent-agnostic | **specified, ready to build** (§3, §4) |
 | **6.5** Foundation interview | **specified (§4.5)** — library content needs a curation session with the user |
 | **7** Make corrections stick | **not yet specified** — the differentiator, designed together next |
+| **7.5** Component supply | **specified (§5.5)** — gated on a user review of the candidate list |
 | **8** Shared human/agent surface | specified (§5), missing the naming layer — see §0.5 Bridge 1 |
 | **9** Reverse sync | specified with its reliability argument (§6) |
 | **10** Direct manipulation (resize only) | specified (§5, resize subsection) |
@@ -164,6 +165,7 @@ reframe and still use them. Map to the phases in
 | §4 | B · Agent decoupling + MCP | **6** | Claude end-to-end. Surface decisions only. |
 | §4.5 | *(new)* Foundation interview | **6.5** | Claude end-to-end; the curated library is chosen with the user. |
 | — | *(new)* Make corrections stick | **7** | **Designed together.** Not yet specified — the differentiator; see §0.5. |
+| §5.5 | *(new)* Component supply | **7.5** | Claude researches and proposes; **the user picks what ships.** |
 | §5 | C · Parameter model | **8** | **Designed together before code.** Token binding moves to Phase 7. |
 | §6 | D · Reverse sync | **9** | Claude end-to-end, design written up and justified first. |
 | §5 | C · Resize subsection | **10** | **Designed together.** Specified; the rest of E is deferred. |
@@ -859,6 +861,117 @@ discriminator.
 
 ---
 
+## 5.5 Component supply — the curated catalog (Phase 7.5)
+
+**Decided 2026-08-01**, prompted by the user's own collection of these libraries — which is the
+friction research producing a signal: the gap is partly supply, and supply for a code tool is
+component libraries, not reference screenshots.
+
+### Why this beats the Mobbin answer, for Caret specifically
+
+Reference screens make an agent **reproduce** what it saw — it looks at pixels and writes its own
+approximation, and the loss in that translation is exactly where slop re-enters. A component
+library **transfers** the quality as code, in the medium `.caret/` is already written in. Zero
+translation. Replit needed screens because it had no other channel; Caret's design layer *is*
+React source, so the higher-fidelity channel is available and cheaper.
+
+Bonus that lands directly on §0.5 Bridge 1: **a library with a good prop API is a pre-built
+parameter namespace.** `<AsciiEffect variant="glitch" glitchIntensity={0.05}>` is already named
+at the right altitude — speakable by a human, writable by an agent, renderable as panel sliders
+by the Phase 8 Param model. Adopting such a library solves the naming problem for that domain
+outright, instead of Caret designing `aurora` from scratch.
+
+### The install path, not the read path
+
+The obvious integration — have the agent read the library's docs site when it needs a component —
+is the wrong one, and not only because those sites block bots. It makes generation depend on
+third-party infrastructure Caret does not control: bot rules change, docs go JS-only, URLs move,
+a library gets acquired. Any of those silently degrades output quality with no error.
+
+These libraries already ship a machine interface that isn't the docs site: **the installer.**
+Amicro's whole pitch is a single CLI command; that CLI reads a JSON registry endpoint. There is a
+structural guarantee in that — **a library cannot bot-block its own install endpoint without
+breaking its own product**, so the install path stays machine-accessible in a way a marketing
+page never does. So: the agent installs, the source lands in the repo, and from then on it reads
+local files forever with no network in the loop.
+
+Discovery is then the only thing that ever touched a website, and it becomes a **local catalog
+curated once** rather than a per-session crawl. Bot-blocking degrades from "blocks the feature"
+to "made curation mildly annoying, once."
+
+### Two axes, failing independently
+
+| axis | test | fails when |
+|---|---|---|
+| **ingestible** | installs headlessly; public repo; readable licence | JS-only docs, no repo, no registry, unclear licence |
+| **editable once installed** | source lands in `.caret/`; takes caret-ids; colours rebindable to `foundation.json` | opaque npm package, minified dist, styles locked in the bundle |
+
+`npm install thinking-orbs` passes the first and fails the second: it installs perfectly and is
+still a dead zone in the canvas — the user clicks it and the property panel has nothing. That is
+the Param model's `writable: false` case applied to a whole subtree. A copy-in library behind an
+aggressive marketing wall is the *better* candidate of the two. Rank on both axes, not on how
+nice the website is.
+
+### Two tiers
+
+**Shipped catalog** (in Caret's bundle, versioned with the app) — the allowlist. Per entry:
+name, what it's for, install command, pinned version, licence, repo, one-line *use when* per
+component, and the axis verdicts. Curated by the user; see the gate below.
+
+**Per-project `.caret/`** — what the agent actually installed for *this* project, with full
+provenance (library, version, component, source URL, licence). Under git, reviewable in a PR,
+travelling with the repo. This is what makes a component choice **persist** the same way every
+other correction does — pick a loader once, and next session's agent uses that loader rather
+than inventing a new one.
+
+### On install
+
+1. Run the library's own installer into `.caret/components/`.
+2. **Rebind** hardcoded colours and type to `foundation.json` tokens where they match; leave
+   genuinely bespoke values alone and record them as detached.
+3. The Phase 6 watch-and-heal codemod fires automatically (it triggers on any `.caret/` write),
+   so installed components get caret-ids and become visually editable with no extra machinery.
+   This composition is why Phase 7.5 is cheap.
+4. Record the provenance entry.
+
+Opaque packages that can't be copied in are **wrapped**, not embedded: a `.caret/components/`
+wrapper owns the props and token bindings, and the interior reports `writable: false` with a
+reason. Honest degradation, never a silent grey-out — the same rule as everywhere else.
+
+### Retrieval
+
+The catalog **index** — names plus one-line *use when* — goes in the always-on rules files
+(§4 B3). Full prop APIs are read on demand from installed source. The split matters: an agent
+that must *choose* to consult a component catalog will not, and will hand-roll a spinner from
+training data. That is the pull-only `get_guide` failure mode, and the index is cheap enough to
+carry always.
+
+### Restraint is the taste, and this is where it can go wrong
+
+A library of premium micro-interactions is a **slop accelerant** applied indiscriminately.
+"A bounce animation on every hover" is on the documented slop-tell list; the four reference
+designs won by being totally restrained everywhere except one move. So the rules carry a
+**budget — roughly one signature move per page** — and the Phase 7 acceptance checker flags
+violations. Stated plainly: the catalog raises the floor on *element* quality and does nothing
+for composition; without the budget it makes output worse, not better.
+
+### Supply chain
+
+An agent installing packages into a real repo is an attack path. Allowlist only, pinned
+versions, explicit user consent the first time a library enters a project. No open search, no
+arbitrary registry URLs.
+
+### The curation gate
+
+Claude surveys candidates and **verifies programmatic access by running it**, not by reading the
+marketing page. The review artifact is a table — name, purpose, distribution shape, install
+command, licence, repo, registry reachable, editable-once-installed, plus a **rendered
+specimen**, because what is being judged is taste and not just mechanics. **The user picks what
+ships.** Nothing enters the catalog otherwise: curation is the entire value, and an unreviewed
+catalog is just averaging with extra steps.
+
+---
+
 ## 6. Track D — Reverse sync
 
 ### The problem
@@ -1103,6 +1216,11 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | Token wizard becomes an agent-led foundation interview | 2026-08-01 | Plain-language questions, curated options, the user points. Curation bounds the agent's taste, so the floor is high regardless of the connected agent — the supply-side v0 without waiting on Phase 11 |
 | App chrome renderer + canvas `WebContentsView` | 2026-08-01 | "Load Vite directly" left onboarding/wizard/prefs with no host; the canvas still needs zero porting |
 | MCP server: per-project port, token auth, Origin checks | 2026-08-01 | A fixed port collides with multi-window; an unauthenticated localhost write server is a DNS-rebinding hole |
+| Component libraries are the supply answer for a code tool | 2026-08-01 | Reference screens make the agent *reproduce*; a library *transfers* quality as code in the medium `.caret/` already uses. Higher fidelity and cheaper than Mobbin-style grounding |
+| Install path, never the read path | 2026-08-01 | Docs sites block bots, go JS-only and move; a library cannot bot-block its own install endpoint without breaking its own CLI. Install, then read local source forever |
+| Two-axis library filter: ingestible + editable | 2026-08-01 | They fail independently — an opaque npm package installs cleanly and is still a dead zone in the canvas; a copy-in library behind a bot wall is the better candidate |
+| Catalog ships with Caret; installs recorded per project | 2026-08-01 | Curation is global and user-reviewed; the per-project set is under git so a component choice persists like every other correction |
+| One signature move per page, enforced | 2026-08-01 | A micro-interaction library is a slop accelerant otherwise — "bounce on every hover" is a documented slop tell, and the reference designs won on restraint |
 | Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
@@ -1113,5 +1231,10 @@ is compatible. Open-core with proprietary modules in-repo is not.
 - Whether `cli/` is deleted or repurposed as a headless Caret client
 - The curated foundation library contents (typeface pairings, palette recipes, presets) — a
   curation session with the user, before Phase 6.5 ships
+- Which component libraries make the shipped catalog (§5.5) — Claude researches and proposes
+  with specimens; the user decides. Candidates already noted from the user's collection:
+  Amicro (micro-interactions/transitions, CLI install, open source), Componentry (effects incl.
+  ASCII), HeroUI Pro (design systems), Collect UI (loaders), thinking-orbs (npm — likely fails
+  the editability axis, useful as the wrapper test case)
 - The sync-translation policy for bound tokens (§5) is provisional — confirm in the Phase 7
   design session
