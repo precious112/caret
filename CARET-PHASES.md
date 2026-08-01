@@ -326,37 +326,41 @@ project's design foundations in context rather than guessing at them.
 
 ---
 
-## [ ] Phase 6.5: The foundation interview (token wizard v2)
+## [x] Phase 6.5: The foundation interview (token wizard v2)
 
-The wizard stops being a form. Foundations get set in a short **agent-led interview**: plain-
-language questions, then curated options the user points at. This is the supply-side v0 — it
-does not wait on the Phase 11 research, because every pickable option comes from a curated
-library rather than the agent's imagination. It serves both audiences: a non-designer answers
-questions and points; a pro skips straight to direct token editing. Engineering detail in
+The wizard stopped being a form. Foundations are set in a short **agent-led interview**:
+plain-language questions, then curated options the user points at. This is the supply-side
+v0 — it did not wait on the Phase 11 research, because every pickable option comes from a
+curated library rather than the agent's imagination. Engineering detail in
 [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.5.
 
-- [ ] Curated foundation library: typeface pairings (licensing-clean), palette recipes,
-      radius/spacing/density presets — every option in it is good; content is a curation
-      session with the user, not a generation task
-- [ ] Interview MCP tools: `present_question` (plain-language choices), `present_options`
-      (candidate foundations rendered as live specimens via the existing wizard preview
-      surface), `commit_foundation`
-- [ ] Interview script shipped as an MCP prompt + rules-file instruction: the agent asks a
-      handful of high-level questions (what is it, who is it for, how should it feel) and
-      **narrows the curated space** — it never invents raw hexes or font names outside the
-      library
-- [ ] Options displayed in plain language: type as rendered specimens, palettes applied to
-      sample components — never jargon without a picture
-- [ ] Pro path: skip the interview at any point into direct token editing — same
-      `foundation.json` either way
-- [ ] No-agent fallback: the existing wizard form + the same curated presets (the no-agent
-      state stays fully usable)
-- [ ] Re-runnable: re-interviewing an existing project produces a token-change proposal with
-      blast radius shown (Phase 7 live bindings), never a silent reset
+- [x] Curated foundation library (`src/core/design/foundation-library/`): 8 typeface
+      pairings, 5 palette recipes, 5 shape/density presets. **Every typeface licence was
+      verified from the family's own source repository**, not from a marketing page — all
+      SIL OFL 1.1, which permits commercial use, self-hosting and bundling.
+- [x] Interview MCP tools: `present_question`, `present_options`, `commit_foundation`.
+      `present_options` takes **library ids only** — an agent cannot pass its own hexes or
+      font names, which is the whole anti-slop mechanism. Certified: an invented candidate
+      id is refused.
+- [x] Interview script shipped as an MCP prompt (`foundation_interview`) **and** as an
+      instruction in the generated rules files, so an agent finds it without being told
+- [x] Options displayed as live specimens — the real typeface loaded, the palette applied
+      to a heading, body copy and one accented button. No hex codes, no scale ratios.
+- [x] Pro path: a tab switches to direct token editing at any point; same `foundation.json`
+- [x] No-agent fallback: the token editor is the default when nothing is connected, and the
+      interview tab is disabled with a reason rather than silently missing
+- [ ] Re-runnable with blast radius shown — the *proposal* half needs Phase 7's live
+      bindings to compute what a token change would affect. Re-running today overwrites,
+      which is why the surface warns before the first commit rather than after.
 
 **Deliverable:** a developer with no design vocabulary answers a few plain questions, picks
-from options that all look good, and lands on foundations worth protecting — which is exactly
-what Phase 7 then makes stick.
+from options that all look good, and lands on foundations worth protecting.
+
+**Bugs this found by driving the real app:** the MCP server answered the *first* request
+correctly and returned 500 to every request after it, forever — `StreamableHTTPServerTransport`
+in stateless mode is single-use and was being reused. Invisible until the certification made a
+second call. Also: a scenario that passed or failed depending on timing, because it read a file
+the tool had only just been asked to write.
 
 ---
 

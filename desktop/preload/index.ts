@@ -36,9 +36,18 @@ const REQUEST_CHANNELS: readonly IpcRequestChannel[] = [
 	"canvas:setBounds",
 	"canvas:setVisible",
 	"notification:respond",
+	"interview:respond",
+	"interview:library",
 ]
 
-const EVENT_CHANNELS: readonly IpcEventChannel[] = ["project:stateChanged", "canvas:message", "notification:show", "log"]
+const EVENT_CHANNELS: readonly IpcEventChannel[] = [
+	"project:stateChanged",
+	"canvas:message",
+	"notification:show",
+	"agent:task",
+	"interview:prompt",
+	"log",
+]
 
 const bridge: CaretBridge = {
 	invoke(channel, ...args) {

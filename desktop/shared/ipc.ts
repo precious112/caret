@@ -99,6 +99,32 @@ export interface AgentClientConfig {
 	targetPath?: string
 }
 
+/** A candidate rendered as something to look at, never as a list of values. */
+export interface PresentedCandidateWire {
+	id: string
+	name: string
+	summary: string
+	fontUrl: string
+	displayFamily: string
+	bodyFamily: string
+	brandColor: string
+	neutralCharacter: string
+	radius: number[]
+	baseSize: number
+}
+
+export type InterviewPromptWire =
+	| { kind: "question"; id: string; question: string; hint?: string; choices: string[]; step?: number; total?: number }
+	| {
+			kind: "options"
+			id: string
+			title: string
+			subtitle?: string
+			candidates: PresentedCandidateWire[]
+			step?: number
+			total?: number
+	  }
+
 export interface SyncOutcome {
 	status: string
 	message: string
@@ -152,6 +178,10 @@ export interface IpcRequests {
 
 	/** Answers a `notify` prompt raised by main. */
 	"notification:respond": (id: string, action: string | null) => void
+	/** Answers an interview question or option set. Null means the user skipped. */
+	"interview:respond": (id: string, answer: string | null) => void
+	/** The full curated library, for the no-agent path. */
+	"interview:library": () => unknown
 }
 
 /** Main → renderer. Each entry is an `ipcRenderer.on` channel. */
@@ -160,6 +190,7 @@ export interface IpcEvents {
 	"canvas:message": (projectPath: string, message: DesignOutboundWire) => void
 	"notification:show": (request: NotificationRequest) => void
 	"agent:task": (task: { kind: string; prompt: string }) => void
+	"interview:prompt": (prompt: InterviewPromptWire) => void
 	log: (line: string) => void
 }
 

@@ -17,8 +17,10 @@ import type { AddressInfo } from "net"
 
 import { type AgentBridge, type AgentTask, NullBridge, setProjectBridge } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
+import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import { authorize, generateToken } from "./auth"
 import { clearDiscovery, writeDiscovery } from "./discovery"
+import { buildInterviewTools, INTERVIEW_PROMPT } from "./interview-tools"
 import { logToolError, TOOLS, type ToolContext } from "./tools"
 
 const MCP_PATH = "/mcp"
@@ -34,12 +36,12 @@ export interface CaretMcpServerOptions {
 	screenshot?(pageId: string): Promise<string | null>
 	/** Surfaces an outbound agent task (sync, visual edit) to the user. */
 	onAgentTask?(task: AgentTask): void
+	/** Sends an interview question or option set to the chrome renderer. */
+	onInterviewPrompt?(prompt: InterviewPrompt): void
 }
 
 export class CaretMcpServer {
 	private http: Server | null = null
-	private mcp: McpServer | null = null
-	private transport: StreamableHTTPServerTransport | null = null
 	private token = generateToken()
 	private port: number | null = null
 	private connected = false
@@ -71,14 +73,6 @@ export class CaretMcpServer {
 	async start(): Promise<void> {
 		if (this.http) return
 
-		this.mcp = new McpServer({ name: "caret", version: "0.1.0" })
-		this.registerTools(this.mcp)
-
-		// No session id: each request is independent, which suits an agent that
-		// may reconnect between turns without losing anything.
-		this.transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-		await this.mcp.connect(this.transport)
-
 		this.http = createServer((req, res) => void this.handleRequest(req, res))
 
 		await new Promise<void>((resolve, reject) => {
@@ -108,16 +102,16 @@ export class CaretMcpServer {
 	}
 
 	async stop(): Promise<void> {
+		// Any tool call still waiting on the user would otherwise hang against a
+		// window that no longer exists.
+		cancelInterviewPrompts()
 		setProjectBridge(this.options.projectPath, new NullBridge())
 		await clearDiscovery(this.options.projectPath)
-		await this.mcp?.close().catch(() => {})
 		await new Promise<void>((resolve) => {
 			if (!this.http) return resolve()
 			this.http.close(() => resolve())
 		})
 		this.http = null
-		this.mcp = null
-		this.transport = null
 		this.port = null
 		this.setConnected(false)
 	}
@@ -143,7 +137,20 @@ export class CaretMcpServer {
 			screenshot: (pageId) => this.options.screenshot?.(pageId) ?? Promise.resolve(null),
 		}
 
-		for (const tool of TOOLS) {
+		const tools = [...TOOLS, ...buildInterviewTools({ send: (prompt) => this.options.onInterviewPrompt?.(prompt) })]
+
+		// The interview script ships as a prompt so any client can run it without
+		// the user having to know what to type.
+		mcp.registerPrompt(
+			"foundation_interview",
+			{
+				title: "Set up this project's visual foundations",
+				description: "A short plain-language interview that lands on foundations from Caret's curated library.",
+			},
+			() => ({ messages: [{ role: "user", content: { type: "text", text: INTERVIEW_PROMPT } }] }),
+		)
+
+		for (const tool of tools) {
 			mcp.registerTool(
 				tool.name,
 				{ title: tool.title, description: tool.description, inputSchema: tool.inputSchema },
@@ -185,8 +192,24 @@ export class CaretMcpServer {
 		}
 
 		this.setConnected(true)
+
+		// A fresh server and transport per request. `StreamableHTTPServerTransport`
+		// in stateless mode (no session id) is single-use: reusing one instance
+		// answers the first request correctly and then returns 500 to every request
+		// after it, forever. That is invisible until something makes a second call,
+		// which is why `verify:app` now makes several.
+		const mcp = new McpServer({ name: "caret", version: "0.1.0" })
+		const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+
+		res.on("close", () => {
+			void transport.close().catch(() => {})
+			void mcp.close().catch(() => {})
+		})
+
 		try {
-			await this.transport?.handleRequest(req, res, body)
+			this.registerTools(mcp)
+			await mcp.connect(transport)
+			await transport.handleRequest(req, res, body)
 		} catch (err) {
 			Logger.error("[mcp] request handling failed:", err)
 			if (!res.headersSent) res.writeHead(500).end()

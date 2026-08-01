@@ -11,6 +11,7 @@ import { dialog, ipcMain } from "electron"
 import {
 	completeSync,
 	type FoundationTokens,
+	fullLibrary,
 	generateTokenScale,
 	listPages,
 	readFoundationTokens,
@@ -22,6 +23,7 @@ import {
 import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
+import { answerInterviewPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import type { DesignInboundMessage } from "./types"
@@ -147,4 +149,10 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("notification:respond", (_event, id: string, action: string | null) => {
 		resolveNotification(id, action)
 	})
+
+	ipcMain.handle("interview:respond", (_event, id: string, answer: string | null) => {
+		answerInterviewPrompt(id, answer)
+	})
+
+	ipcMain.handle("interview:library", () => fullLibrary())
 }

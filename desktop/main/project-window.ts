@@ -96,6 +96,7 @@ export class ProjectWindow {
 			onAgentConnectionChanged: () => void this.pushState(),
 			screenshot: (pageId) => this.screenshotPage(pageId),
 			onAgentTask: (task) => this.sendToChrome("agent:task", task),
+			onInterviewPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
 		})
 
 		this.healer = new WatchAndHeal({

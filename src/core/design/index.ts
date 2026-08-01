@@ -14,6 +14,23 @@ export {
 	validateFlowDefinition,
 	writeFlowDefinition,
 } from "./flow-meta"
+export {
+	buildTokens,
+	candidateFontUrl,
+	type FoundationCandidate,
+	fullLibrary,
+	INTERVIEW_QUESTIONS,
+	type InterviewQuestion,
+	narrowCandidates,
+	PALETTE_RECIPES,
+	type PaletteRecipe,
+	resolveCandidate,
+	SHAPE_PRESETS,
+	type ShapePreset,
+	TYPEFACE_PAIRINGS,
+	type TypefacePairing,
+	tagsFromAnswers,
+} from "./foundation-library"
 export { type FontOption, searchGoogleFonts } from "./google-fonts"
 export { type DesignHost, type NotifyLevel, nullDesignHost } from "./host"
 export { listPages, readPageMeta, validatePageMeta, writePageMeta } from "./page-meta"

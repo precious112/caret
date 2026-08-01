@@ -134,6 +134,18 @@ async function callMcp(url: string, token: string | null, body: unknown): Promis
 	})
 }
 
+/**
+ * MCP requires the client to confirm initialization before the server will
+ * answer anything else. Skipping it makes every later call look like the server
+ * is missing tools it actually has.
+ */
+const INITIALIZED_NOTIFICATION = { jsonrpc: "2.0", method: "notifications/initialized" }
+
+async function openMcpSession(url: string, token: string): Promise<void> {
+	await callMcp(url, token, INITIALIZE)
+	await callMcp(url, token, INITIALIZED_NOTIFICATION)
+}
+
 const INITIALIZE = {
 	jsonrpc: "2.0",
 	id: 1,
@@ -310,6 +322,100 @@ async function main(): Promise<void> {
 			"the heal itself was not recorded",
 		)
 		return `${records.length} record(s), actors: ${[...new Set(records.map((r) => r.actor))].join(", ")}`
+	})
+
+	await scenario("l. the interview tools and prompt are exposed over MCP", async () => {
+		assert(discovery, "no discovery record")
+
+		// A fresh MCP session, then list what the server offers. The interview is
+		// worthless if an agent cannot discover it.
+		await openMcpSession(discovery.url, discovery.token)
+		const toolsResponse = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 2,
+			method: "tools/list",
+			params: {},
+		})
+		const toolsText = await toolsResponse.text()
+		for (const tool of ["present_question", "present_options", "commit_foundation"]) {
+			assert(toolsText.includes(tool), `${tool} is not exposed. Server said: ${toolsText.slice(0, 400)}`)
+		}
+
+		const promptsResponse = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 3,
+			method: "prompts/list",
+			params: {},
+		})
+		const promptsText = await promptsResponse.text()
+		assert(
+			promptsText.includes("foundation_interview"),
+			`the interview prompt is not exposed. Server said: ${promptsText.slice(0, 400)}`,
+		)
+
+		return "present_question, present_options, commit_foundation + foundation_interview prompt"
+	})
+
+	await scenario("m. committing a foundation writes tokens and regenerates the rules", async () => {
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		// The candidate id is composite — typeface+palette+shape — and only ids the
+		// curated library recognises are accepted. This is the anti-slop mechanism,
+		// so it is worth asserting that a made-up one is refused.
+		const bogus = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 4,
+			method: "tools/call",
+			params: { name: "commit_foundation", arguments: { candidateId: "my-own-invention", tags: [] } },
+		})
+		const bogusText = await bogus.text()
+		assert(
+			bogusText.includes("not a candidate"),
+			`an invented candidate id was not refused. Server said: ${bogusText.slice(0, 400)}`,
+		)
+
+		const real = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 5,
+			method: "tools/call",
+			params: {
+				name: "commit_foundation",
+				arguments: { candidateId: "editorial-instrument+mono-accent+editorial-open", tags: ["editorial", "calm"] },
+			},
+		})
+		// MCP returns 200 for a *tool* error too, so the HTTP status proves nothing.
+		// The body has to be checked or a silently failing tool reads as a pass.
+		const realText = await real.text()
+		assert(real.ok, `commit_foundation failed with ${real.status}`)
+		assert(!realText.includes('"isError":true'), `commit_foundation errored: ${realText.slice(0, 500)}`)
+
+		// Poll rather than read once. The tool call returns as soon as the write is
+		// issued, so a single read races it — and a certification that passes or
+		// fails depending on timing is worse than no certification at all.
+		const tokens = await waitFor(
+			"the committed foundation",
+			async () => {
+				const parsed = JSON.parse(await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8"))
+				return parsed.radius?.character === "sharp" ? parsed : null
+			},
+			30_000,
+		)
+		assert(tokens.typography.fontFamily === "Inter", `expected the pairing's body face, got ${tokens.typography.fontFamily}`)
+		assert(tokens.typography.baseSize === 17, `expected the preset's base size, got ${tokens.typography.baseSize}`)
+		assert(Object.keys(tokens.color.brand.scale).length === 11, "the brand scale was not derived")
+
+		const rules = await waitFor(
+			"the regenerated rules",
+			async () => {
+				const text = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8")
+				return text.includes(tokens.color.brand.seed) ? text : null
+			},
+			30_000,
+		)
+		assert(rules.includes("Inter"), "the committed typeface did not reach the rules files")
+
+		return `committed "Editorial · Almost monochrome"; invented ids refused; rules regenerated`
 	})
 
 	await scenario("k. sync refuses honestly with no agent connected", async () => {

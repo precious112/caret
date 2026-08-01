@@ -129,9 +129,17 @@ generated UI reads as generated.
 \`\`\`json
 ${JSON.stringify(context.tokens, null, 2)}
 \`\`\``
-		: `This project has no foundation tokens yet. Ask the user to run the foundation
-interview in Caret before generating pages — without tokens, every page you write will
-have to be re-styled later.`
+		: `**This project has no foundation tokens yet.** Do not start generating pages —
+everything you write would have to be re-styled once foundations exist.
+
+Run the foundation interview first: use \`present_question\` to ask the user a few
+plain-language questions about the product and how it should feel, then
+\`present_options\` with the vibe tags you infer, then \`commit_foundation\` with the
+candidate they pick. The full script is in the \`foundation_interview\` prompt on the
+Caret MCP server.
+
+Ask about the product, never about design terms. "What are you building?" gets an
+answer; "what type scale do you want?" gets a guess.`
 }
 
 ## What already exists
