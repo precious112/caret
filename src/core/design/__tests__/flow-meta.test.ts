@@ -2,7 +2,7 @@ import * as fs from "fs/promises"
 import { afterEach, beforeEach, describe, it } from "mocha"
 import * as os from "os"
 import * as path from "path"
-import "should"
+import should from "should"
 
 import { listFlows, mutateFlowDefinition, readFlowDefinition, resolveFlowFile, writeFlowDefinition } from "../flow-meta"
 import type { FlowDefinition } from "../types"

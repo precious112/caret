@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/*
+ * Caret's own chrome. Deliberately quiet and dark: it frames the user's design
+ * work, and chrome that competes with the canvas makes their colours hard to
+ * judge — which is the one thing this window exists to let them do.
+ */
+@theme {
+	--color-caret-accent: #0b7aff;
+	--color-caret-accent-hover: #2e8bff;
+	--color-caret-accent-press: #0066db;
+	--color-caret-navy: #16233d;
+
+	--color-shell-bg: #0b0d12;
+	--color-shell-panel: #12151c;
+	--color-shell-border: #1e232e;
+	--color-shell-text: #e6e9ef;
+	--color-shell-muted: #8b93a7;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	background: var(--color-shell-bg);
+	color: var(--color-shell-text);
+	font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size: 13px;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* Room for the macOS traffic lights under `titleBarStyle: hiddenInset`. */
+.titlebar-drag {
+	-webkit-app-region: drag;
+}
+
+.titlebar-nodrag {
+	-webkit-app-region: no-drag;
+}
+
+@keyframes caret-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.fade-in {
+	animation: caret-fade-in 160ms ease-out both;
+}

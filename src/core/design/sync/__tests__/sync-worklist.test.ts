@@ -48,6 +48,7 @@ describe("buildSyncPrompt", () => {
 
 	it("contains no inlined file/diff content and instructs reading the current source", async () => {
 		const prompt = await buildSyncPrompt(cwd, {
+			syncId: "test-sync",
 			changedFiles: [{ path: ".caret/pages/landing/index.tsx", status: "modified" }],
 			isFirstSync: false,
 		})
@@ -63,6 +64,7 @@ describe("buildSyncPrompt", () => {
 
 	it("renders a grouped worklist: pages by id, shared design separately", async () => {
 		const prompt = await buildSyncPrompt(cwd, {
+			syncId: "test-sync",
 			changedFiles: [
 				{ path: ".caret/pages/landing/index.tsx", status: "modified" },
 				{ path: ".caret/pages/landing/meta.json", status: "modified" },
@@ -81,6 +83,7 @@ describe("buildSyncPrompt", () => {
 
 	it("marks the intent log as context-only when provided", async () => {
 		const prompt = await buildSyncPrompt(cwd, {
+			syncId: "test-sync",
 			changedFiles: [{ path: ".caret/pages/home/index.tsx", status: "modified" }],
 			isFirstSync: false,
 			intentLog: "abc123 redesign hero\ndef456 revert hero",
@@ -90,7 +93,7 @@ describe("buildSyncPrompt", () => {
 	})
 
 	it("handles an empty worklist (first sync) by telling the AI to reconcile the full design", async () => {
-		const prompt = await buildSyncPrompt(cwd, { changedFiles: [], isFirstSync: true })
+		const prompt = await buildSyncPrompt(cwd, { syncId: "test-sync", changedFiles: [], isFirstSync: true })
 		expect(prompt).to.include("first sync")
 		expect(prompt).to.include("ENTIRE current design layer")
 	})

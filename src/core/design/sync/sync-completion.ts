@@ -1,36 +1,50 @@
+/**
+ * Advancing the sync bookmark, and undoing a sync.
+ *
+ * The bookmark in `.caret/sync-state.json` is advanced by OUR code, never by
+ * instructing a model to write the file. That rule survives the move to an
+ * external agent, but the *signal* had to change: there is no local task
+ * lifecycle to hook any more, so completion arrives one of three ways, in
+ * descending order of confidence:
+ *
+ *   1. the agent calls the `complete_sync` MCP tool (honor-system, but explicit)
+ *   2. Caret detects the app tree moved since the pre-sync snapshot, and offers
+ *      to mark it synced (never advances on this alone — it is a heuristic)
+ *   3. the user marks it synced by hand
+ *
+ * All three matter. V1 shipped with only an implicit signal and the bookmark got
+ * stuck at "never synced", which made every subsequent sync re-report the entire
+ * design layer. That bug must not return.
+ */
 import * as fs from "fs/promises"
 import * as path from "path"
-import { HostProvider } from "@/hosts/host-provider"
-import { ShowMessageType } from "@/shared/proto/host/window"
+
 import { Logger } from "@/shared/services/Logger"
-import { hasUncommittedDesignChanges } from "@/utils/git"
 import { runExclusive, writeFileAtomic } from "../file-mutation-queue"
-import { ensureCaretGitignore, isDesignModeActive } from "../scaffold"
-import { commitDesignLayer, discardDesignLayerChanges } from "./sync-git"
-import { advanceSyncState } from "./sync-state"
+import { ensureCaretGitignore } from "../scaffold"
+import { clearSyncSnapshot, diffCountAgainstSnapshot, restoreSyncSnapshot, type SnapshotRestoreResult } from "./sync-snapshot"
+import { advanceSyncState, writeSyncState } from "./sync-state"
 
 /**
- * Durable record of the single in-flight sync. The bookmark in
- * `.caret/sync-state.json` is advanced by OUR code (here) when the sync task
- * completes successfully — never by instructing the model to write the file.
+ * Durable record of the single in-flight sync.
  *
- * It is persisted to a gitignored `.caret/.sync-pending.json` (not an in-memory
- * map) because a sync spans a long flow (plan → review → Act → apply → complete)
- * during which the extension host can reload; an in-memory entry would be lost
- * and the bookmark would never advance. The resumed-after-reload task keeps the
- * same taskId, so the persisted record still matches at completion. Only one
- * sync runs at a time (initTask clears any prior task), so a single record
- * suffices.
+ * Persisted to a gitignored `.caret/.sync-pending.json` rather than held in
+ * memory because a sync spans a long human-in-the-loop flow — the agent
+ * proposes, the user reads, the user accepts — during which Caret may be
+ * restarted. Only one sync runs at a time, so a single record suffices.
  */
 export interface PendingSync {
-	taskId: string
+	/** Caret-generated id for this sync. Echoed back by the agent's `complete_sync` call. */
+	syncId: string
 	/** The design HEAD this sync is reconciling the app up to. */
 	commit: string
 	/** The bookmark BEFORE this sync started — restored if the sync is rolled back. */
 	previousBookmark: string | null
-	/** Checkpoint hash captured before the sync edited anything — the rollback target. */
-	preSyncCheckpoint?: string
-	/** True once the sync began applying (bookmark advanced). Gates idempotent re-advance. */
+	/** Pre-sync git snapshot commit — the rollback target. Absent if capture failed. */
+	preSyncSnapshot?: string
+	/** ISO timestamp the sync was handed to the agent. */
+	startedAt: string
+	/** True once the bookmark has been advanced. Makes completion idempotent. */
 	applied?: boolean
 }
 
@@ -42,7 +56,7 @@ function pendingPath(cwd: string): string {
 export async function readPendingSync(cwd: string): Promise<PendingSync | null> {
 	try {
 		const parsed = JSON.parse(await fs.readFile(pendingPath(cwd), "utf-8")) as PendingSync
-		return parsed && typeof parsed.taskId === "string" ? parsed : null
+		return parsed && typeof parsed.syncId === "string" ? parsed : null
 	} catch {
 		return null
 	}
@@ -55,112 +69,127 @@ async function writePendingSync(cwd: string, entry: PendingSync): Promise<void> 
 	})
 }
 
-/** Records that `taskId` is syncing the design layer up to `commit` (durable). */
+/** Records that `syncId` is syncing the design layer up to `commit` (durable). */
 export async function registerPendingSync(
 	cwd: string,
-	entry: { taskId: string; commit: string; previousBookmark: string | null; preSyncCheckpoint?: string },
+	entry: Omit<PendingSync, "applied" | "startedAt"> & { startedAt?: string },
 ): Promise<void> {
 	// Guarantee `.sync-pending.json` is ignored before creating it, so it can't be
 	// swept into the design auto-commit or trip the dirty check (handles existing
 	// projects whose .gitignore predates this file).
 	await ensureCaretGitignore(cwd).catch(() => {})
-	await writePendingSync(cwd, { ...entry, applied: false })
+	await writePendingSync(cwd, { ...entry, startedAt: entry.startedAt ?? new Date().toISOString(), applied: false })
 }
 
-/** Drops the pending sync without advancing (e.g. caller-side cleanup). */
+/** Drops the pending sync without advancing (caller-side cleanup). */
 export async function clearPendingSync(cwd: string): Promise<void> {
 	await fs.rm(pendingPath(cwd), { force: true }).catch(() => {})
+	await clearSyncSnapshot(cwd)
+}
+
+export type CompleteSyncOutcome = "advanced" | "already-applied" | "no-pending-sync" | "wrong-sync" | "failed"
+
+/**
+ * Advances the bookmark for `syncId`. Idempotent — repeated calls after the
+ * first are reported as `already-applied` rather than double-advancing.
+ *
+ * @param syncId omit to complete whichever sync is pending (the manual
+ *   "mark synced" control, where the user is the authority rather than an agent).
+ */
+export async function completeSync(cwd: string, syncId?: string): Promise<CompleteSyncOutcome> {
+	const entry = await readPendingSync(cwd)
+	if (!entry) {
+		return "no-pending-sync"
+	}
+	if (syncId !== undefined && entry.syncId !== syncId) {
+		Logger.warn(`[sync] complete_sync for ${syncId} ignored — pending sync is ${entry.syncId}`)
+		return "wrong-sync"
+	}
+	if (entry.applied) {
+		return "already-applied"
+	}
+
+	try {
+		await advanceSyncState(cwd, entry.commit)
+	} catch (err) {
+		Logger.error(`[sync] failed to advance bookmark for sync ${entry.syncId}:`, err)
+		return "failed"
+	}
+
+	entry.applied = true
+	await writePendingSync(cwd, entry)
+	Logger.info(`[sync] bookmark advanced to ${entry.commit.slice(0, 8)} (sync ${entry.syncId})`)
+	return "advanced"
 }
 
 /**
- * Advances the sync bookmark when its task starts APPLYING the sync (the user
- * switches the plan-mode sync into Act), and again — defensively — on full
- * completion. Idempotent: the `applied` flag means repeated triggers never
- * double-advance. No-op for every non-sync task, so it's cheap to call broadly.
+ * Whether the app appears to have been changed since the sync started.
  *
- * Why not only on `attempt_completion`: a plan-mode sync frequently never reaches
- * it (the user reviews/applies the plan without a formal completion), which left
- * the bookmark stuck at "never synced" so every sync re-reported the whole design.
- *
- * @param final when true (task completed), the record is cleared afterwards — the
- *   sync is accepted, so the one-click rollback is no longer offered.
+ * Deliberately coarse: it compares the current app tree against the pre-sync
+ * snapshot, so it answers "did anything happen" and not "was the worklist
+ * addressed". Phase 9's mapping manifest makes this exact. Until then it is only
+ * ever used to *offer* marking the sync complete — never to advance the bookmark
+ * on its own, because a wrong advance silently drops design changes from every
+ * future sync.
  */
-export async function applySyncBookmark(taskId: string, cwd: string, final = false): Promise<void> {
+export async function detectSyncAddressed(cwd: string): Promise<boolean> {
 	const entry = await readPendingSync(cwd)
-	if (!entry || entry.taskId !== taskId) {
-		return // no pending sync, or a different task — leave the record intact
+	if (!entry?.preSyncSnapshot || entry.applied) {
+		return false
 	}
-	if (!entry.applied) {
-		try {
-			await advanceSyncState(cwd, entry.commit)
-			entry.applied = true
-			await writePendingSync(cwd, entry)
-			Logger.info(`[sync] bookmark advanced to ${entry.commit.slice(0, 8)} (task ${taskId} applied)`)
-		} catch (err) {
-			Logger.error(`[sync] failed to advance bookmark for task ${taskId}:`, err)
-			return
+	return (await diffCountAgainstSnapshot(cwd, entry.preSyncSnapshot)) > 0
+}
+
+export interface RollbackResult {
+	status: "rolledback" | "nothing"
+	message: string
+	restore?: SnapshotRestoreResult
+}
+
+/**
+ * Undoes the most recent (possibly half-applied) sync: app files go back to the
+ * pre-sync snapshot and the bookmark reverts to its previous value.
+ *
+ * The design change is deliberately preserved — it is committed in `.caret/` and
+ * is the thing the user wanted synced — so the next sync re-offers it. Unlike
+ * V1, this no longer requires the sync to still be the active task; there are no
+ * tasks, and the snapshot is a git object that outlives any session.
+ */
+export async function rollbackSync(cwd: string): Promise<RollbackResult> {
+	const record = await readPendingSync(cwd)
+	if (!record) {
+		return { status: "nothing", message: "No recent sync to roll back." }
+	}
+
+	let restore: SnapshotRestoreResult | undefined
+	if (record.preSyncSnapshot) {
+		restore = await restoreSyncSnapshot(cwd, record.preSyncSnapshot)
+	}
+
+	try {
+		await writeSyncState(cwd, { lastSyncedCommit: record.previousBookmark })
+	} catch (err) {
+		Logger.error("[sync] rollback: failed to revert bookmark:", err)
+	}
+
+	await clearPendingSync(cwd)
+
+	if (!restore?.restored) {
+		return {
+			status: "rolledback",
+			message:
+				"Reverted the sync bookmark. App file edits could not be undone automatically — no pre-sync snapshot was available.",
+			restore,
 		}
 	}
-	if (final) {
-		await clearPendingSync(cwd)
-	}
-}
 
-/**
- * Fired when a task completes successfully. If design mode is active and the
- * design layer is dirty, commits `.caret/` (scoped) so it stays committed — the
- * sole, deterministic, app-isolated commit path. Setting-gated and silent (with
- * a transparency toast). No-op outside design mode / when clean / when disabled.
- */
-export async function onDesignTaskCompleted(cwd: string, autoCommitEnabled: boolean): Promise<void> {
-	if (!autoCommitEnabled || !isDesignModeActive()) {
-		return
+	const changed = restore.reverted.length + restore.removed.length
+	return {
+		status: "rolledback",
+		message:
+			changed === 0
+				? "Rolled back the last sync — the app had not been changed yet."
+				: `Rolled back the last sync — ${restore.reverted.length} file(s) reverted, ${restore.removed.length} removed. Your design changes are untouched.`,
+		restore,
 	}
-	if (!(await hasUncommittedDesignChanges(cwd))) {
-		return
-	}
-	const hash = await commitDesignLayer(cwd, "design: auto-checkpoint")
-	if (hash) {
-		Logger.info(`[sync] auto-committed .caret/ → ${hash.slice(0, 8)} on design task completion`)
-		HostProvider.window.showMessage({
-			type: ShowMessageType.INFORMATION,
-			message: "Committed design changes to .caret/",
-		})
-	}
-}
-
-/**
- * Fired when a (resumable) task is cancelled. If design mode is active and the
- * design layer has uncommitted orphans, offers Keep/Discard alongside Cline's
- * own Resume button. Discard is `.caret/`-scoped and race-guarded: if the user
- * resumed (a task is active again) it leaves the changes alone.
- */
-export async function onDesignTaskCancelled(cwd: string, isTaskActive: () => boolean): Promise<void> {
-	if (!isDesignModeActive()) {
-		return
-	}
-	if (!(await hasUncommittedDesignChanges(cwd))) {
-		return
-	}
-	const choice = await HostProvider.window.showMessage({
-		type: ShowMessageType.WARNING,
-		message: "Design task cancelled with uncommitted changes in .caret/. Discard reverts ALL uncommitted .caret/ changes.",
-		options: { items: ["Discard", "Keep"] },
-	})
-	if (choice.selectedOption !== "Discard") {
-		return
-	}
-	// Resume-then-Discard guard: don't revert work that's now back in progress.
-	if (isTaskActive()) {
-		HostProvider.window.showMessage({
-			type: ShowMessageType.INFORMATION,
-			message: "Task resumed — design changes kept.",
-		})
-		return
-	}
-	await discardDesignLayerChanges(cwd)
-	HostProvider.window.showMessage({
-		type: ShowMessageType.INFORMATION,
-		message: "Discarded uncommitted .caret/ changes.",
-	})
 }

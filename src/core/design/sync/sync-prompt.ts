@@ -10,6 +10,8 @@ export interface SyncPromptInput {
 	isFirstSync: boolean
 	/** Commit-subject narrative — context only, may list superseded changes. */
 	intentLog?: string
+	/** Caret's id for this sync, which the agent echoes back via `complete_sync`. */
+	syncId: string
 }
 
 /**
@@ -153,7 +155,9 @@ Always reconcile against the CURRENT file contents — never apply a remembered 
 
 The \`data-caret-id\` attributes in the design sources are Caret's visual-editor tooling metadata (they make inline editing of the .caret/ design UIs deterministic). They have NO meaning in the shipped app — do NOT copy them into the application code. Omit them entirely when translating; carry over only real UI, content, and behavior.
 
-Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source. Do NOT edit .caret/sync-state.json — Caret records the sync automatically when this task completes.
+Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source.
+
+When you are done, call the \`complete_sync\` tool on the Caret MCP server with syncId "${input.syncId}". That is the ONLY way to record the sync. Do NOT edit .caret/sync-state.json by hand — Caret owns that file, and writing it yourself will be overwritten.
 </explicit_instructions>`
 
 	const sections = [header, "", "─".repeat(60), worklist]

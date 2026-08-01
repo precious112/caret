@@ -2,7 +2,7 @@ import * as fs from "fs/promises"
 import { afterEach, beforeEach, describe, it } from "mocha"
 import * as os from "os"
 import * as path from "path"
-import "should"
+import should from "should"
 
 import {
 	editJSXColor,
@@ -20,9 +20,9 @@ describe("findJSXElementByCaretId", () => {
 		const ast = parseSource(source)
 		const result = findJSXElementByCaretId(ast, "title")
 		should(result).not.be.null()
-		result?.openingElement.name.type.should.equal("JSXIdentifier")
+		result!.openingElement.name.type.should.equal("JSXIdentifier")
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("h1")
+		;(result!.openingElement.name as any).name.should.equal("h1")
 	})
 
 	it("should find a nested element, not the parent", () => {
@@ -35,7 +35,7 @@ describe("findJSXElementByCaretId", () => {
 		const result = findJSXElementByCaretId(ast, "subtitle")
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("span")
+		;(result!.openingElement.name as any).name.should.equal("span")
 	})
 
 	it("should find h1 when queried by h1 caret id (same-line siblings)", () => {
@@ -45,12 +45,12 @@ describe("findJSXElementByCaretId", () => {
 		const h1 = findJSXElementByCaretId(ast, "title")
 		should(h1).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(h1?.openingElement.name as any).name.should.equal("h1")
+		;(h1!.openingElement.name as any).name.should.equal("h1")
 
 		const span = findJSXElementByCaretId(ast, "accent")
 		should(span).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(span?.openingElement.name as any).name.should.equal("span")
+		;(span!.openingElement.name as any).name.should.equal("span")
 	})
 
 	it("should return null when no match exists", () => {
@@ -72,7 +72,7 @@ describe("findJSXElementByCaretId", () => {
 		const result = findJSXElementByCaretId(ast, "deep-text")
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("p")
+		;(result!.openingElement.name as any).name.should.equal("p")
 	})
 })
 
@@ -85,7 +85,7 @@ describe("findJSXElementAtLine", () => {
 		const result = findJSXElementAtLine(ast, 2)
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("h1")
+		;(result!.openingElement.name as any).name.should.equal("h1")
 	})
 
 	it("should find nearest element with matching tagName when no exact line match", () => {
@@ -98,7 +98,7 @@ describe("findJSXElementAtLine", () => {
 		const result = findJSXElementAtLine(ast, 5, "span")
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("span")
+		;(result!.openingElement.name as any).name.should.equal("span")
 	})
 
 	it("should return null when no match exists", () => {
@@ -275,7 +275,7 @@ describe("findJSXElementAtPosition", () => {
 		const result = findJSXElementAtPosition(ast, 1, 16)
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("span")
+		;(result!.openingElement.name as any).name.should.equal("span")
 	})
 
 	it("should find the outer element when position is on opening tag", () => {
@@ -284,7 +284,7 @@ describe("findJSXElementAtPosition", () => {
 		const result = findJSXElementAtPosition(ast, 1, 5)
 		should(result).not.be.null()
 		// biome-ignore lint/suspicious/noExplicitAny: recast AST node types
-		;(result?.openingElement.name as any).name.should.equal("h1")
+		;(result!.openingElement.name as any).name.should.equal("h1")
 	})
 
 	it("should return null for position outside any element", () => {

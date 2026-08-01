@@ -1,10 +1,18 @@
 import * as fs from "fs/promises"
+import { createRequire } from "module"
 
 import * as recast from "recast"
 
 import { writeFileAtomic } from "../file-mutation-queue"
 
-const babelParser = require("recast/parsers/babel-ts")
+/**
+ * `recast/parsers/babel-ts` is CommonJS and has no ESM entry point, and a bare
+ * `require` does not exist inside an ES module — which is what the main process
+ * bundle is. `createRequire` is the supported way to reach a CJS-only module
+ * from ESM, and it keeps the parser object's shape intact (a plain `import`
+ * would go through default-interop and hand recast the wrong thing).
+ */
+const babelParser = createRequire(import.meta.url)("recast/parsers/babel-ts")
 
 type ASTNode = recast.types.namedTypes.Node
 

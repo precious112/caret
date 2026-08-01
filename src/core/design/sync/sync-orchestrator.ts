@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto"
+
 import { Logger } from "@/shared/services/Logger"
 import {
 	assessSyncGitState,
@@ -6,18 +8,20 @@ import {
 	getLatestGitCommitHash,
 	hasDesignChangesSince,
 } from "@/utils/git"
-import { getCwd, getDesktopDir } from "@/utils/path"
-import type { Controller } from "../../controller"
+import { NoAgentConnectedError } from "../agent/bridge"
 import { caretDirectoryExists } from "../scaffold"
-import { registerPendingSync } from "./sync-completion"
+import { bridgeFor } from "../services"
+import { clearPendingSync, registerPendingSync } from "./sync-completion"
 import { commitDesignLayer, ensureGitRepo } from "./sync-git"
 import { buildSyncPrompt } from "./sync-prompt"
+import { captureSyncSnapshot } from "./sync-snapshot"
 import { readSyncState } from "./sync-state"
 
 export type SyncStatus =
 	| "started"
 	| "up-to-date"
 	| "no-caret-dir"
+	| "no-agent"
 	| "git-not-installed"
 	| "needs-git-setup"
 	| "needs-design-commit"
@@ -27,8 +31,10 @@ export interface SyncResult {
 	message: string
 	/** Label for the one-click fix, present on fixable statuses (re-run with { autoFix: true }). */
 	fixLabel?: string
-	/** Number of changed design files handed to the AI. Present when status === "started". */
+	/** Number of changed design files handed to the agent. Present when status === "started". */
 	changedCount?: number
+	/** Id of the sync just started, for `complete_sync`. Present when status === "started". */
+	syncId?: string
 }
 
 export interface SyncOptions {
@@ -37,16 +43,23 @@ export interface SyncOptions {
 }
 
 /**
- * Runs a design→app sync as a specialized plan-mode task: gather the design-layer
- * diff since the last sync, budget it (token guardrails), build the prompt, force
- * plan mode, and hand it to the AI. The bookmark in sync-state.json is advanced by
- * the AI as the final step of the sync (instructed in the prompt).
+ * Runs a design→app sync: get the design layer into a committed state, compute
+ * the net changed-files worklist since the last sync, capture a rollback point,
+ * and hand the prompt to whichever agent is connected.
+ *
+ * The preflight is unchanged from V1 — it was the reliable part. What changed is
+ * the far end: instead of `controller.initTask(prompt)` starting a local
+ * plan-mode task, the prompt goes out over the {@link AgentBridge} and Caret
+ * waits for a completion signal it does not control (see `sync-completion.ts`).
  */
-export async function runSync(controller: Controller, opts: SyncOptions = {}): Promise<SyncResult> {
-	const cwd = controller.getWorkspaceManager()?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
-
+export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<SyncResult> {
 	if (!(await caretDirectoryExists(cwd))) {
-		return { status: "no-caret-dir", message: "No .caret/ design layer in this workspace — nothing to sync." }
+		return { status: "no-caret-dir", message: "No .caret/ design layer in this project — nothing to sync." }
+	}
+
+	// Fail before doing any git work if there is nobody to hand the sync to.
+	if (!bridgeFor(cwd).connected()) {
+		return { status: "no-agent", message: new NoAgentConnectedError("sync").message }
 	}
 
 	// Preflight: get the design layer into a committed state (the bookmark is a
@@ -102,53 +115,51 @@ export async function runSync(controller: Controller, opts: SyncOptions = {}): P
 		return { status: "up-to-date", message: "Design layer is already in sync with the app." }
 	}
 
-	// Net cumulative changed-files worklist (no file content) — the AI reads the
+	// Net cumulative changed-files worklist (no file content) — the agent reads the
 	// current `.caret/` + app sources itself. See buildSyncPrompt.
 	const changedFiles = await getDesignLayerChangedFiles(cwd, lastSyncedCommit)
 	const intentLog = await getDesignLayerLog(cwd, lastSyncedCommit)
 	const isFirstSync = lastSyncedCommit === null
 
-	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog })
+	const syncId = randomUUID()
+	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog, syncId })
 
-	// Force plan mode AND Code context — sync produces a reviewable plan that edits
-	// app code, so the design/code toggle must reflect Code, not Design. Mirrors the
-	// manual toggle handler in updateSettings.ts. initTask posts state afterward, so
-	// both flips reach the webview in one update.
-	controller.stateManager.setGlobalState("mode", "plan")
-	controller.stateManager.setGlobalState("designContext", "implementation")
-	const { setDesignMode } = await import("@/core/design/DesignMode")
-	setDesignMode(false)
-	const taskId = await controller.initTask(prompt)
+	// Capture the rollback point BEFORE the agent touches anything. Ordered this
+	// way deliberately: an agent that starts editing the instant it receives the
+	// prompt must not race the snapshot.
+	const preSyncSnapshot = (await captureSyncSnapshot(cwd)) ?? undefined
 
-	// Capture a pre-edit checkpoint so a half-done sync can be rolled back (app +
-	// bookmark, since .caret/sync-state.json is inside the checkpoint snapshot).
-	let preSyncCheckpoint: string | undefined
-	try {
-		preSyncCheckpoint = await controller.task?.checkpointManager?.commit()
-	} catch (err) {
-		Logger.warn(`[sync] could not capture pre-sync checkpoint (rollback may be unavailable): ${err}`)
-	}
-
-	// Register the sync so the bookmark advances deterministically (in our code)
-	// when the user APPLIES it (plan→Act) — never via instructing the model to write
-	// the file. Persisted to disk so it survives an extension reload mid-sync.
 	await registerPendingSync(cwd, {
-		taskId,
+		syncId,
 		commit: targetCommit,
 		previousBookmark: lastSyncedCommit,
-		preSyncCheckpoint: typeof preSyncCheckpoint === "string" ? preSyncCheckpoint : undefined,
+		preSyncSnapshot,
 	})
+
+	try {
+		await bridgeFor(cwd).request({
+			kind: "sync",
+			prompt,
+			context: { syncId, changedFiles, targetCommit },
+		})
+	} catch (err) {
+		// The agent went away between the connected() check and the request.
+		// Drop the pending record so a stale sync can't be completed later.
+		await clearPendingSync(cwd)
+		const message = err instanceof Error ? err.message : String(err)
+		Logger.error(`[sync] agent refused the sync: ${message}`)
+		return { status: "no-agent", message }
+	}
 
 	Logger.info(`[sync] Started: ${changedFiles.length} changed design file(s), target ${targetCommit.slice(0, 8)}`)
 
-	const message =
-		changedFiles.length === 0
-			? "Syncing design → app (reconciling full design state)."
-			: `Syncing design → app: ${changedFiles.length} changed design file(s).`
-
 	return {
 		status: "started",
-		message,
+		syncId,
 		changedCount: changedFiles.length,
+		message:
+			changedFiles.length === 0
+				? "Syncing design → app (reconciling full design state)."
+				: `Syncing design → app: ${changedFiles.length} changed design file(s).`,
 	}
 }

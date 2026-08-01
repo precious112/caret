@@ -1,12 +1,55 @@
-export { initializeDesignMode, isInDesignMode, setDesignMode } from "./DesignMode"
+export {
+	type AgentBridge,
+	type AgentTask,
+	type AgentTaskKind,
+	NoAgentConnectedError,
+	NullBridge,
+} from "./agent/bridge"
+export { CARET_ID_RULES, INLINE_EDITING_RULES } from "./authoring/design-rules"
+export {
+	listFlows,
+	mutateFlowDefinition,
+	readFlowDefinition,
+	resolveFlowFile,
+	validateFlowDefinition,
+	writeFlowDefinition,
+} from "./flow-meta"
+export { type FontOption, searchGoogleFonts } from "./google-fonts"
+export { type DesignHost, type NotifyLevel, nullDesignHost } from "./host"
 export { listPages, readPageMeta, validatePageMeta, writePageMeta } from "./page-meta"
-export { getRenderingShellPort, startRenderingShell, stopRenderingShell } from "./rendering-shell"
-export { caretDirectoryExists, ensureCaretDirectoryExists } from "./scaffold"
+export { RenderingShell } from "./rendering-shell"
+export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-shell/messages"
+export { caretDirectoryExists, ensureCaretDirectoryExists, ensureCaretGitignore } from "./scaffold"
+export {
+	bridgeFor,
+	hostFor,
+	type ProjectServices,
+	registerProjectServices,
+	setProjectBridge,
+	unregisterProjectServices,
+} from "./services"
+export { DesignSession, type DesignSessionOptions } from "./session"
+export { createSyncWatcher, runSyncInteractive } from "./sync/SyncWatcher"
+export {
+	type CompleteSyncOutcome,
+	clearPendingSync,
+	completeSync,
+	detectSyncAddressed,
+	type PendingSync,
+	readPendingSync,
+	registerPendingSync,
+	rollbackSync,
+} from "./sync/sync-completion"
+export { runSync, type SyncOptions, type SyncResult, type SyncStatus } from "./sync/sync-orchestrator"
+export { readSyncState, writeSyncState } from "./sync/sync-state"
+export { generateTokenScale, type TokenScaleType } from "./token-scales"
 export { readComponentTokens, readFoundationTokens, validateFoundationTokens, writeFoundationTokens } from "./tokens"
 export type {
 	ColorScale,
 	ColorTokens,
 	DesignContext,
+	FlowDefinition,
+	FlowStep,
 	FoundationTokens,
 	PageMeta,
 	RadiusTokens,

@@ -1,0 +1,68 @@
+appId: com.caret.app
+productName: Caret
+copyright: Copyright © 2026 Caret contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# Ad-hoc signs the macOS bundle. See the file for why `identity: null` alone is
+# not enough — it means "skip", and an unsigned arm64 binary will not launch.
+afterPack: build/after-pack.cjs
+
+files:
+  - out/**/*
+  - package.json
+
+# `.caret/` dependencies are installed into the user's project at runtime, so
+# nothing about the design layer is bundled here.
+npmRebuild: false
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  target:
+    - target: zip
+      arch: [arm64, x64]
+  # Ad-hoc signing is mandatory on Apple Silicon and free: an unsigned arm64
+  # binary will not execute at all, and the failure surfaces as "the app is
+  # damaged", which reads as a corrupt download rather than a signing issue.
+  identity: null
+  # Hardened runtime and notarization need a paid Developer ID. The hooks are
+  # configured so adding the certificate later is a secrets change rather than a
+  # pipeline rebuild.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  extendInfo:
+    NSAppleEventsUsageDescription: Caret opens files in your editor.
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: portable
+      arch: [x64]
+  # SignPath Foundation provides free signing for OSS projects. Left unset so
+  # unsigned builds still produce artifacts.
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - AppImage
+    - deb
+    - rpm
+  maintainer: Caret contributors
+  desktop:
+    entry:
+      Name: Caret
+      Comment: A persistent design layer for your codebase
+
+publish: null

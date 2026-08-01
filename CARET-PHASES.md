@@ -223,79 +223,103 @@ holds the seam.
 
 ---
 
-## [ ] Phase 6: Standalone + agent-agnostic
+## [~] Phase 6: Standalone + agent-agnostic
 
-**Gate — decide before writing code:**
+**Gate — settled 2026-08-01:**
 
-- [ ] License for new code (recommendation: Apache-2.0 throughout; keeps SignPath eligibility)
-- [ ] Thin auth stub in v1 even while everything is free
-- [ ] One clean service-client seam so hosted features attach later without surgery
-- [ ] Public commitment: the direct-manipulation editor is local-forever, free-forever
-- [ ] MCP server security posture: per-project port + discovery file (multiple open projects
-      must not collide), bearer-token auth, Origin validation — an unauthenticated localhost
-      server that writes files is reachable by any local process and, via DNS rebinding, by a
-      web page
+- [x] License for new code: **Apache-2.0 throughout** (the repo already was; §11 requires an
+      OSI licence without commercial dual-licensing for SignPath eligibility)
+- [x] Thin auth stub — `desktop/main/services/`: a `CaretServices` interface whose only
+      implementation refuses with a reason, so the local-forever commitment is written once
+      rather than implied by absence
+- [x] One clean service-client seam — same file; hosted features attach by registering an
+      implementation
+- [x] Public commitment: the direct-manipulation editor is local-forever, free-forever
+      (stated in the README and in the refusal message itself)
+- [x] MCP server security posture: per-project OS-assigned port + `.caret/.mcp.json`
+      discovery file written 0600, bearer-token auth with constant-time comparison, and
+      **any** `Origin` header refused (a browser has no business here, so there is no
+      allowlist to get wrong). Verified by `verify:app` scenarios c and d.
 
 **Desktop shell (Electron — Tauri's system webview renders WebKit on macOS and Chromium on
 Windows, so the same design would look different per machine):**
 
-- [ ] App shell: windows, menus, native dialogs, preferences store (replaces `StateManager`)
-- [ ] App chrome renderer — project open/recents, the wizard, onboarding, preferences and
-      error surfaces need a host that is not generated code
-- [ ] Project open: pick folder, detect or scaffold `.caret/`, recents
-- [ ] De-vscode the design module — only 3 of 33 files couple to `vscode`
-- [ ] Canvas as a `WebContentsView` loading the Vite URL directly (no iframe shell around the
-      canvas; the generated canvas needs no porting)
-- [ ] postMessage relay → IPC; proto/gRPC plumbing retired
-- [ ] Replace VS Code diff/editor integration incl. the Phase 5.5 quiet-write path
-- [ ] Vite lifecycle, chokidar watch, git from the main process
-- [ ] Pre-sync snapshot + "Undo sync" re-implemented on plain git — the checkpoint shadow-git
-      dies with the task loop, and rollback must survive the migration
-- [ ] **Port `verify:design-shell` before any refactor lands** — it is the reliability floor
-- [ ] Ad-hoc codesign for Apple Silicon (free, but arm64 won't launch without it)
-- [ ] Unsigned builds: macOS `.zip`, Windows `.exe`, Linux AppImage/`.deb`/`.rpm`
+- [x] App shell: windows, menus, native dialogs, preferences store (`desktop/main/prefs.ts` —
+      atomic JSON in `userData`, same get/set shape as `StateManager`)
+- [x] App chrome renderer — the window's own `webContents`; project picker, wizard, agent
+      setup, notifications
+- [x] Project open: pick folder, scaffold `.caret/`, recents, restore-last-session, and
+      `caret <path>` from the terminal
+- [x] De-vscode the design module — the 3 coupled files are gone: `DesignMode.ts` →
+      `session.ts`, `preview-panel.ts` → `message-router.ts`, `SyncWatcher.ts` → chokidar.
+      Host and agent access became **per project** (`services.ts`) rather than singletons,
+      because two open projects would otherwise share one window's notifications.
+- [x] Canvas as a `WebContentsView` on the Vite URL — **zero canvas porting**, as predicted.
+      The generated canvas posts to `window.parent`, which is itself when top-level, so the
+      canvas preload catches those on the same window and forwards them over IPC.
+- [x] postMessage relay → IPC; proto/gRPC plumbing retired entirely
+- [x] Replace VS Code diff/editor integration — the quiet-write path is moot with no editor to
+      hijack; `openInEditor` reveals via `$EDITOR` or the OS
+- [x] Vite lifecycle (now per-project, not a module singleton), chokidar watch, git from main
+- [x] Pre-sync snapshot + "Undo sync" on plain git — `sync-snapshot.ts` writes a commit object
+      with a throwaway index, so it touches neither the user's index nor their worktree, and
+      restore is scoped to only the paths the sync actually changed
+- [x] **`verify:design-shell` held throughout** — 16/16 before the refactor and 16/16 after
+- [x] Ad-hoc codesign for Apple Silicon (`identity: null` in `electron-builder.yml`)
+- [x] Unsigned builds: macOS `.zip`, Windows `.exe` + portable, Linux AppImage/`.deb`/`.rpm`
 
 **Agent decoupling + MCP:**
 
-- [ ] `AgentBridge` boundary replacing every `controller.initTask()` call site
-- [ ] Local MCP server over HTTP, auto-starting on project open (per-project port + auth —
-      see the Gate)
-- [ ] Tools v1: read `.caret/` structure, pages, tokens, **flows and page states**, screenshots;
-      write pages and components; sync worklist
-- [ ] **Always-on foundational context via repo rules files — MCP cannot inject.** An MCP
-      server exposes tools/resources/prompts; the *client* decides what enters context, so no
-      server can force content into an agent it doesn't own. Caret generates and maintains
-      `AGENTS.md` / `CLAUDE.md` / `.cursor/rules` from `foundation.json` + the authoring rules,
-      regenerated on every token change; MCP tool results echo the foundational JSON as a
-      backstop. Pull-only `get_guide` remains a documented failure mode (it survives for the
-      prose-judgment half only).
-- [ ] **Structured (JSON) context for the machine; prose only where judgment is needed.**
-      `design_layer.ts` is currently all prose and must be split.
-- [ ] **Watch-and-heal write model.** External agents edit `.caret/` with their own file tools,
-      bypassing the MCP write tools, the mutation queue and atomic writes — treat that as the
-      primary path: chokidar triggers the caret-id codemod + validation on any external change
-      (the build-time codemod is pulled forward from Phase 8). The MCP write tools stay as the
-      *nicer* path (atomicity + validation for free), not the guarantee.
-- [ ] **Edit-provenance event log** — every `.caret/` change recorded with actor (inline edit /
-      agent / external), file, param path where known, old → new value. Cheap now, impossible
-      to retrofit; the substrate Phase 7's correction capture mines.
-- [ ] Sync completion fallbacks — `complete_sync` is honor-system for an external agent; back
-      it with hash-based detection that the worklist was addressed plus a manual "mark synced"
-      control (the V1 stuck-bookmark bug must not return)
-- [ ] **The no-agent state** — canvas fully usable with nothing connected
-- [ ] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM
-- [ ] Delete: `src/core/api` (84), `src/core/task` (86), `src/core/prompts` (115), most of
-      `src/core/controller` (~198), checkpoint manager, terminal, browser tool
+- [x] `AgentBridge` boundary replacing every `controller.initTask()` call site
+- [x] Local MCP server over HTTP, auto-starting on project open
+- [x] Tools v1: `get_project`, `get_page`, `get_tokens`, `get_flows`, `get_screenshot`,
+      `get_sync_worklist`, `get_guide`, `create_page`, `write_page`, `update_tokens`,
+      `write_flow`, `start_sync`, `complete_sync` (`get_params`/`set_param` land with Phase 8)
+- [x] **Always-on foundational context via repo rules files.** `AGENTS.md`, `CLAUDE.md` and
+      `.cursor/rules/caret-design-layer.mdc` generated from `foundation.json` + the authoring
+      rules, regenerated on every token change, spliced into a marked block so the user's own
+      content survives. Tool results echo the foundational JSON as a backstop.
+- [x] **Structured (JSON) context for the machine; prose only where judgment is needed** —
+      `rules/context.ts` splits the two
+- [x] **Watch-and-heal write model** — chokidar on `.caret/` runs the caret-id codemod +
+      validation on any change, whoever wrote it. Verified: an externally written page with no
+      caret-ids and an inline style is healed with no MCP tool involved, and a second pass
+      writes nothing.
+- [x] **Edit-provenance event log** — `.caret/.provenance.jsonl`, actor + action + file,
+      gitignored (local observation, and it would conflict on every branch)
+- [x] Sync completion fallbacks — `complete_sync` with the syncId, `detectSyncAddressed`
+      (coarse until Phase 9's manifest, and only ever used to *offer*), and a manual
+      "mark synced" control
+- [x] **The no-agent state** — every agent-requiring feature refuses with a per-feature
+      explanation rather than failing silently
+- [x] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM
+- [x] Deleted: `src/core/api`, `src/core/task`, `src/core/prompts`, `src/core/controller`,
+      `webview-ui`, `cli`, `standalone`, `evals`, `walkthrough`, `proto`, `src/generated`,
+      checkpoint manager, terminal, browser tool
 
 **Ship-readiness:**
 
-- [ ] First-run onboarding: scaffold, token wizard (the form; the interview upgrade is
-      Phase 6.5), connect an agent
-- [ ] Migration for existing `.caret/` projects
-- [ ] Docs site + landing page (also the SignPath prerequisite)
-- [ ] Crash and error surfaces without the VS Code notification host
-- [ ] Deprecation notice shipped **inside** the final Open VSX extension release
-- [ ] Install instructions using the macOS Sequoia flow, not the removed Control-click bypass
+- [x] First-run onboarding: launcher window → pick folder → scaffold → wizard (gated on
+      missing foundations) → connect an agent
+- [x] Migration for existing `.caret/` projects (`migrate.ts` — gitignore lines, stale
+      pending-sync records, regenerated shell)
+- [x] Crash and error surfaces without the VS Code notification host
+- [x] Install instructions using the macOS Sequoia flow, not the removed Control-click bypass
+      (`docs/install.md`)
+- [ ] Docs site + landing page (also the SignPath prerequisite) — the landing page lives in
+      `precious112/caret-landing-page`
+- [ ] Deprecation notice shipped **inside** the final Open VSX extension release — needs a
+      publish against the retired extension, whose source this branch no longer contains
+
+**New app-level reliability floor:** `npm run verify:app` — launches the real Electron binary
+and asserts on disk and over HTTP: launch, MCP discovery file permissions, unauthenticated and
+cross-origin refusal, rules generation, user content surviving regeneration, watch-and-heal,
+codemod idempotence, provenance attribution, and honest no-agent refusal. 11/11 pass.
+
+**Bugs this found by driving the real app, not by unit tests:** `require()` in an ESM main
+bundle (the app would not boot at all); a `BaseWindow` chrome that no automation tool and no
+OS recognises as a window; a first launch that opened a blocking native folder dialog instead
+of the project picker that already existed; and `caret <path>` being ignored on first launch.
 
 **Deliverable:** Caret runs standalone, works with any MCP agent, and the agent always has the
 project's design foundations in context rather than guessing at them.

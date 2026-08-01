@@ -57,11 +57,21 @@ const CARET_PACKAGE_JSON = {
 	},
 }
 
+/**
+ * `ensureCaretGitignore` appends any missing line, so adding one here fixes
+ * every existing project the next time it is opened.
+ *
+ * `.mcp.json` holds the MCP bearer token and must never be committed;
+ * `.provenance.jsonl` is local observation about how someone works, would
+ * conflict on every branch, and is not theirs to publish by accident.
+ */
 const CARET_GITIGNORE = `node_modules/
 vite.log
 thumbnails/
 canvas-layout.json
 .sync-pending.json
+.mcp.json
+.provenance.jsonl
 `
 
 /**
@@ -122,36 +132,6 @@ export async function ensureCaretGitignore(workspacePath: string): Promise<void>
 	if (missing.length > 0) {
 		await fs.writeFile(gitignorePath, `${existing.replace(/\n*$/, "")}\n${missing.join("\n")}\n`)
 	}
-}
-
-// Cached `.caret/` presence, kept fresh by DesignMode's watcher. Lives here (a
-// vscode-free module) so the controller can read it synchronously on the hot
-// state-post path without statically importing the vscode-coupled DesignMode.
-let hasCaretDirCache = false
-
-/** Cached `.caret/` presence — gates the chat "Sync now" button in webview state. */
-export function getHasCaretDir(): boolean {
-	return hasCaretDirCache
-}
-
-/** Updated by DesignMode on startup + `.caret/` create/delete. */
-export function setHasCaretDir(value: boolean): void {
-	hasCaretDirCache = value
-}
-
-// Mirror of DesignMode's active flag in a vscode-free module, so code in the
-// task layer (which also runs in standalone) can gate on design mode without
-// statically importing the vscode-coupled DesignMode.
-let designModeActiveCache = false
-
-/** Whether design mode is currently active (vscode-free read). */
-export function isDesignModeActive(): boolean {
-	return designModeActiveCache
-}
-
-/** Updated by DesignMode.setDesignMode. */
-export function setDesignModeActive(value: boolean): void {
-	designModeActiveCache = value
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

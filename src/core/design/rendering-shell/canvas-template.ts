@@ -946,7 +946,7 @@ function generateFocusedPageView(): string {
 		        return
 		      }
 
-		      if (e.data?.source === "caret-extension") {
+		      if (e.data?.source === "caret-host") {
 		        log("relay: parent->iframe type=" + e.data.type)
 		        iframe.contentWindow.postMessage(e.data, "*")
 		        return
@@ -1849,7 +1849,7 @@ function generateBridge(): string {
 		}
 
 		window.addEventListener("message", (e) => {
-		  if (e.data?.source !== "caret-extension") return
+		  if (e.data?.source !== "caret-host") return
 
 		  if (e.data.type === "edit-result") {
 		    const { success, error } = e.data.payload

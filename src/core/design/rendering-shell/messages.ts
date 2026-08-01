@@ -120,7 +120,8 @@ export function isValidDesignMessagePayload(type: string, payload: unknown): boo
 	return validator(payload as Record<string, unknown>)
 }
 
-export type DesignMessage =
+/** Canvas → host. Untrusted: the canvas runs generated and user-authored code. */
+export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "element-selected"; payload: ElementSelectedPayload }
 	| { source: "caret-vite"; type: "open-file"; payload: OpenFilePayload }
 	| { source: "caret-vite"; type: "inline-edit"; payload: InlineEditPayload }
@@ -132,5 +133,10 @@ export type DesignMessage =
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
-	| { source: "caret-extension"; type: "edit-result"; payload: EditResultPayload }
-	| { source: "caret-extension"; type: "precompute-result"; payload: PrecomputeResultPayload }
+
+/** Host → canvas. */
+export type DesignOutboundMessage =
+	| { source: "caret-host"; type: "edit-result"; payload: EditResultPayload }
+	| { source: "caret-host"; type: "precompute-result"; payload: PrecomputeResultPayload }
+
+export type DesignMessage = DesignInboundMessage | DesignOutboundMessage
