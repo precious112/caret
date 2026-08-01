@@ -45,7 +45,12 @@ export interface PresentedCandidate {
 	/** Google Fonts CSS URL, so the specimen renders in the real typeface. */
 	fontUrl: string
 	displayFamily: string
+	/** The pairing's own fallback stack. Hardcoding one misrepresents the face. */
+	displayFallback: string
 	bodyFamily: string
+	bodyFallback: string
+	/** Light or dark, per the palette recipe. */
+	surface: "light" | "dark"
 	brandColor: string
 	neutralCharacter: string
 	radius: number[]
@@ -100,4 +105,17 @@ export function cancelInterviewPrompts(): void {
 
 export function hasPendingPrompt(): boolean {
 	return pending.size > 0
+}
+
+/**
+ * The prompt currently waiting on the user, if any.
+ *
+ * `interview:prompt` is fire-and-forget, so a prompt sent while the user is
+ * looking at the canvas — or before the renderer has mounted the interview —
+ * would simply vanish, leaving the agent blocked forever on a question nobody
+ * ever saw. The renderer asks for this on mount to recover.
+ */
+export function currentPrompt(): InterviewPrompt | null {
+	for (const entry of pending.values()) return entry.prompt
+	return null
 }

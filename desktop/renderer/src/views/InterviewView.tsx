@@ -16,10 +16,18 @@ import type { InterviewPromptWire, PresentedCandidateWire } from "../../../share
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 
-export function InterviewView({ onDone }: { onDone(): void }) {
+export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswered?(): void }) {
 	const [prompt, setPrompt] = useState<InterviewPromptWire | null>(null)
 
 	useEffect(() => on("interview:prompt", (next) => setPrompt(next)), [])
+
+	// A prompt sent before this surface existed would otherwise be lost, leaving
+	// the agent blocked on a question nobody ever saw.
+	useEffect(() => {
+		void invoke("interview:pending").then((waiting) => {
+			if (waiting) setPrompt(waiting)
+		})
+	}, [])
 
 	// Specimens have to render in the real typeface or they are worthless as
 	// specimens. Loading here rather than per-card avoids a flash of the fallback
@@ -40,6 +48,7 @@ export function InterviewView({ onDone }: { onDone(): void }) {
 		if (!prompt) return
 		void invoke("interview:respond", prompt.id, answer)
 		setPrompt(null)
+		onAnswered?.()
 	}
 
 	if (!prompt) {
@@ -94,7 +103,7 @@ function QuestionScreen({
 	onAnswer(answer: string): void
 }) {
 	return (
-		<div className="fade-in">
+		<div className="fade-in" data-testid="interview-question">
 			<h1 className="text-xl font-medium">{prompt.question}</h1>
 			{prompt.hint && <p className="mt-1.5 text-shell-muted">{prompt.hint}</p>}
 
@@ -102,6 +111,7 @@ function QuestionScreen({
 				{prompt.choices.map((choice) => (
 					<button
 						className="rounded-xl border border-shell-border bg-shell-panel px-4 py-3 text-left transition-colors hover:border-caret-accent/50 hover:bg-white/5"
+						data-testid="interview-choice"
 						key={choice}
 						onClick={() => onAnswer(choice)}
 						type="button">
@@ -121,7 +131,7 @@ function OptionsScreen({
 	onPick(id: string): void
 }) {
 	return (
-		<div className="fade-in">
+		<div className="fade-in" data-testid="interview-options">
 			<h1 className="text-xl font-medium">{prompt.title}</h1>
 			{prompt.subtitle && <p className="mt-1.5 text-shell-muted">{prompt.subtitle}</p>}
 
@@ -143,32 +153,37 @@ function OptionsScreen({
  * colours.
  */
 function Specimen({ candidate, onPick }: { candidate: PresentedCandidateWire; onPick(): void }) {
-	const surface = SURFACES[candidate.neutralCharacter] ?? SURFACES.cool
+	const surface = surfaceFor(candidate)
 	const cardRadius = candidate.radius[3] ?? 8
 	const buttonRadius = candidate.radius[candidate.radius.length - 1] === 9999 ? cardRadius : cardRadius
 
 	return (
 		<button
 			className="group flex flex-col overflow-hidden rounded-xl border border-shell-border text-left transition-colors hover:border-caret-accent"
+			data-testid="interview-candidate"
 			onClick={onPick}
 			type="button">
 			<div className="flex-1 p-6" style={{ background: surface.bg, color: surface.text }}>
 				<p
 					className="text-[26px] leading-tight"
-					style={{ fontFamily: `"${candidate.displayFamily}", serif`, fontWeight: 500 }}>
+					style={{ fontFamily: `"${candidate.displayFamily}", ${candidate.displayFallback}`, fontWeight: 500 }}>
 					Built for the way you work
 				</p>
 				<p
 					className="mt-3 opacity-70"
-					style={{ fontFamily: `"${candidate.bodyFamily}", system-ui`, fontSize: candidate.baseSize }}>
+					style={{ fontFamily: `"${candidate.bodyFamily}", ${candidate.bodyFallback}`, fontSize: candidate.baseSize }}>
 					A short paragraph, so you can see how it reads at the size it will actually be used.
 				</p>
 				<span
-					className="mt-5 inline-block px-4 py-2 text-white"
+					className="mt-5 inline-block px-4 py-2"
 					style={{
 						background: candidate.brandColor,
+						// A saturated accent needs dark text, not white — white on cyan is
+						// unreadable, and a specimen that ships an unreadable button is
+						// advertising the wrong thing.
+						color: readableOn(candidate.brandColor),
 						borderRadius: buttonRadius,
-						fontFamily: `"${candidate.bodyFamily}", system-ui`,
+						fontFamily: `"${candidate.bodyFamily}", ${candidate.bodyFallback}`,
 						fontSize: candidate.baseSize - 2,
 					}}>
 					Get started
@@ -189,11 +204,37 @@ function Specimen({ candidate, onPick }: { candidate: PresentedCandidateWire; on
  * None of them are pure white or pure black — that is the difference the eye
  * reads as considered, and showing it in the specimen is the point.
  */
-const SURFACES: Record<string, { bg: string; text: string }> = {
+const LIGHT_SURFACES: Record<string, { bg: string; text: string }> = {
 	warm: { bg: "#faf7f2", text: "#2a2520" },
 	cool: { bg: "#f7f8fa", text: "#1a1d24" },
 	true: { bg: "#f8f8f8", text: "#1c1c1c" },
 	"slight-tint": { bg: "#f6f7f9", text: "#20242b" },
+}
+
+const DARK_SURFACES: Record<string, { bg: string; text: string }> = {
+	warm: { bg: "#191512", text: "#f0ebe4" },
+	cool: { bg: "#0e1116", text: "#e6e9ef" },
+	true: { bg: "#111111", text: "#ededed" },
+	"slight-tint": { bg: "#101319", text: "#e8ebf1" },
+}
+
+function surfaceFor(candidate: PresentedCandidateWire): { bg: string; text: string } {
+	const table = candidate.surface === "dark" ? DARK_SURFACES : LIGHT_SURFACES
+	return table[candidate.neutralCharacter] ?? table.cool
+}
+
+/**
+ * Black or white text on a given background, by relative luminance.
+ *
+ * A bright accent like cyan takes dark text; a deep blue takes white. Picking
+ * one and using it everywhere leaves half the specimens illegible.
+ */
+function readableOn(hex: string): string {
+	const value = hex.replace("#", "")
+	const channels = [0, 2, 4].map((i) => Number.parseInt(value.slice(i, i + 2), 16) / 255)
+	const [r, g, b] = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+	const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+	return luminance > 0.45 ? "#111111" : "#ffffff"
 }
 
 export const _cn = cn

@@ -26,6 +26,12 @@ export interface PaletteRecipe {
 	seed: string
 	/** Warm, cool or true neutrals — the decision that does most of the work. */
 	neutral: ColorTokens["neutral"]["character"]
+	/**
+	 * The surface this recipe is designed for. A dark-surface recipe previewed on
+	 * a light card is not a preview of that recipe — it misstates it, and the user
+	 * is choosing on the basis of the picture.
+	 */
+	surface: "light" | "dark"
 	semantic: ColorTokens["semantic"]
 	/** The restraint rule, carried into the generated rules files. */
 	rule: string
@@ -35,6 +41,7 @@ export interface PaletteRecipe {
 export const PALETTE_RECIPES: PaletteRecipe[] = [
 	{
 		id: "mono-accent",
+		surface: "light",
 		name: "Almost monochrome",
 		feel: "Nearly black and white, with one colour used sparingly.",
 		tags: ["premium", "editorial", "calm", "minimal", "considered", "serious"],
@@ -47,6 +54,7 @@ export const PALETTE_RECIPES: PaletteRecipe[] = [
 	},
 	{
 		id: "warm-earth",
+		surface: "light",
 		name: "Warm and earthy",
 		feel: "Sand, clay and ink. Nothing is pure white or pure black.",
 		tags: ["warm", "human", "craft", "wellness", "friendly", "consumer", "organic"],
@@ -59,6 +67,7 @@ export const PALETTE_RECIPES: PaletteRecipe[] = [
 	},
 	{
 		id: "deep-technical",
+		surface: "dark",
 		name: "Deep and technical",
 		feel: "Dark surfaces, one bright colour, sharp contrast.",
 		tags: ["technical", "developer", "dashboard", "data", "modern", "saas", "dark"],
@@ -71,6 +80,7 @@ export const PALETTE_RECIPES: PaletteRecipe[] = [
 	},
 	{
 		id: "quiet-institutional",
+		surface: "light",
 		name: "Quiet and institutional",
 		feel: "Restrained, low saturation, easy to trust.",
 		tags: ["serious", "enterprise", "fintech", "healthcare", "government", "trustworthy", "dense"],
@@ -83,6 +93,7 @@ export const PALETTE_RECIPES: PaletteRecipe[] = [
 	},
 	{
 		id: "single-bold",
+		surface: "light",
 		name: "One bold colour",
 		feel: "One strong colour used confidently and often.",
 		tags: ["bold", "loud", "creative", "agency", "launch", "expressive", "consumer"],

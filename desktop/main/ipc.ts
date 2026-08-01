@@ -23,7 +23,7 @@ import {
 import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
-import { answerInterviewPrompt } from "./interview"
+import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import type { DesignInboundMessage } from "./types"
@@ -155,4 +155,6 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	})
 
 	ipcMain.handle("interview:library", () => fullLibrary())
+
+	ipcMain.handle("interview:pending", () => currentPrompt())
 }

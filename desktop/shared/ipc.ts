@@ -106,7 +106,10 @@ export interface PresentedCandidateWire {
 	summary: string
 	fontUrl: string
 	displayFamily: string
+	displayFallback: string
 	bodyFamily: string
+	bodyFallback: string
+	surface: "light" | "dark"
 	brandColor: string
 	neutralCharacter: string
 	radius: number[]
@@ -182,6 +185,8 @@ export interface IpcRequests {
 	"interview:respond": (id: string, answer: string | null) => void
 	/** The full curated library, for the no-agent path. */
 	"interview:library": () => unknown
+	/** Whatever prompt is waiting, so a late-mounting renderer can recover it. */
+	"interview:pending": () => InterviewPromptWire | null
 }
 
 /** Main → renderer. Each entry is an `ipcRenderer.on` channel. */

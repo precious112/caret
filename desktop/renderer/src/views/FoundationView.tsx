@@ -16,13 +16,22 @@ import { useEffect, useState } from "react"
 
 import type { ProjectState } from "../../../shared/ipc"
 import { TokenWizard } from "../components/design-wizard/TokenWizard"
+import { on } from "../ipc"
 import { cn } from "../lib/utils"
 import { setActiveProject } from "../services/design-client"
 import { InterviewView } from "./InterviewView"
 
 type Mode = "interview" | "manual"
 
-export function FoundationView({ project, onDone }: { project: ProjectState; onDone(): void }) {
+export function FoundationView({
+	project,
+	onDone,
+	onInterviewAnswered,
+}: {
+	project: ProjectState
+	onDone(): void
+	onInterviewAnswered?(): void
+}) {
 	// Without an agent there is nobody to run the interview, so the editor is the
 	// only honest default.
 	const [mode, setMode] = useState<Mode>(project.agentConnected ? "interview" : "manual")
@@ -33,6 +42,10 @@ export function FoundationView({ project, onDone }: { project: ProjectState; onD
 	useEffect(() => {
 		if (!project.agentConnected) setMode("manual")
 	}, [project.agentConnected])
+
+	// A question arriving while the token editor is open has to win — the agent
+	// is blocked on it.
+	useEffect(() => on("interview:prompt", () => setMode("interview")), [])
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden bg-shell-bg">
@@ -56,7 +69,11 @@ export function FoundationView({ project, onDone }: { project: ProjectState; onD
 				<ModeTab active={mode === "manual"} label="Set them by hand" onClick={() => setMode("manual")} />
 			</div>
 
-			{mode === "interview" ? <InterviewView onDone={() => setMode("manual")} /> : <TokenWizard onDone={onDone} />}
+			{mode === "interview" ? (
+				<InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode("manual")} />
+			) : (
+				<TokenWizard onDone={onDone} />
+			)}
 		</div>
 	)
 }
@@ -81,6 +98,7 @@ function ModeTab({
 				active ? "bg-caret-accent/15 text-caret-accent" : "text-shell-muted hover:bg-white/5",
 				disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
 			)}
+			data-testid={`foundation-tab-${label.includes("questions") ? "interview" : "manual"}`}
 			disabled={disabled}
 			onClick={onClick}
 			title={title}

@@ -26,7 +26,7 @@ export function ProjectPicker({ onOpen }: { onOpen(projectPath: string): void })
 	}
 
 	return (
-		<div className="titlebar-drag flex h-full flex-col items-center justify-center gap-8 px-8">
+		<div className="titlebar-drag flex h-full flex-col items-center justify-center gap-8 px-8" data-testid="project-picker">
 			<div className="text-center">
 				<h1 className="text-2xl font-medium tracking-tight">Caret</h1>
 				<p className="mt-1 text-shell-muted">A design layer that lives in your repo.</p>

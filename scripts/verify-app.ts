@@ -18,11 +18,12 @@ import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
 
-import { type ElectronApplication, _electron as electron } from "playwright"
+import { type ElectronApplication, _electron as electron, type Page } from "playwright"
 
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
 
 const KEEP = process.argv.includes("--keep")
+const SHOTS = path.resolve("release/verify-shots")
 
 interface ScenarioResult {
 	name: string
@@ -48,6 +49,17 @@ async function scenario(name: string, run: () => Promise<string>): Promise<void>
 		results.push({ name, passed: false, detail })
 		log(`FAIL ${name} — ${detail}`)
 	}
+}
+
+/**
+ * Captures a surface so the run produces something a human can look at.
+ *
+ * Automated assertions cover behaviour; they say nothing about whether a screen
+ * is legible or laid out sanely. These are for the eyes.
+ */
+async function shot(page: Page, name: string): Promise<void> {
+	await fs.mkdir(SHOTS, { recursive: true })
+	await page.screenshot({ path: path.join(SHOTS, `${name}.png`) })
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -416,6 +428,212 @@ async function main(): Promise<void> {
 		assert(rules.includes("Inter"), "the committed typeface did not reach the rules files")
 
 		return `committed "Editorial · Almost monochrome"; invented ids refused; rules regenerated`
+	})
+
+	// ── UI ────────────────────────────────────────────────────────────────────
+	// Everything above asserts on files and HTTP. None of it renders a single
+	// pixel, so none of it would notice the renderer throwing on mount. These do.
+
+	const chrome = await app.firstWindow()
+
+	await scenario("n. the chrome renders and shows the project", async () => {
+		// A renderer that threw during mount leaves an empty #root and every later
+		// scenario times out with a confusing message, so check that first.
+		const failures: string[] = []
+		chrome.on("pageerror", (err) => failures.push(err.message))
+
+		await chrome.waitForSelector('[data-testid="top-bar"]', { timeout: 60_000 })
+		await shot(chrome, "01-chrome")
+
+		assert(failures.length === 0, `renderer threw during mount: ${failures.join("; ")}`)
+		const barText = await chrome.textContent('[data-testid="top-bar"]')
+		assert(barText?.includes(path.basename(fixture)), `top bar does not name the project: ${barText}`)
+		return `top bar rendered: ${barText?.trim().slice(0, 60)}`
+	})
+
+	await scenario("o. the token editor renders and writes what you set", async () => {
+		// The wizard came across from the VS Code webview with its data layer
+		// rewired from gRPC to IPC. Nothing else in this suite would notice if it
+		// threw on mount or if the IPC shim returned the wrong shape.
+		await chrome.click('[data-testid="top-bar"] >> text=Foundation')
+		await chrome.waitForSelector('[data-testid="foundation-tab-manual"]', { timeout: 20_000 })
+		await chrome.click('[data-testid="foundation-tab-manual"]')
+
+		// The wizard's first step is the vibe description.
+		const textarea = chrome.locator("textarea").first()
+		await textarea.waitFor({ timeout: 20_000 })
+		await textarea.fill("Certification run — set by the token editor")
+		await shot(chrome, "02-token-editor")
+
+		// Walk to the review step and save. The step count is the wizard's, so
+		// clicking Next until Save appears is more durable than a fixed number.
+		for (let i = 0; i < 8; i++) {
+			const save = chrome.locator("button", { hasText: /^Save/ })
+			if (await save.count()) break
+			const next = chrome.locator("button", { hasText: /^(Next|Continue)/ }).first()
+			if (!(await next.count())) break
+			await next.click()
+			await chrome.waitForTimeout(150)
+		}
+
+		await shot(chrome, "03-token-editor-review")
+		const save = chrome.locator("button", { hasText: /^Save/ })
+		assert(await save.count(), "the wizard never reached a Save step")
+		await save.first().click()
+
+		const tokens = await waitFor(
+			"the tokens the editor saved",
+			async () => {
+				const parsed = JSON.parse(await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8"))
+				return parsed.vibe?.description?.includes("Certification run") ? parsed : null
+			},
+			30_000,
+		)
+		return `editor wrote vibe: "${tokens.vibe.description.slice(0, 40)}…"`
+	})
+
+	await scenario("p. an agent's question is answerable in the UI and reaches the tool call", async () => {
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		// present_question blocks until a human answers, so the call is fired
+		// WITHOUT awaiting, answered through the real UI, and only then awaited.
+		// This is the one scenario that exercises the whole loop: agent → main →
+		// renderer → user → back to the still-open tool call.
+		const pending = callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 10,
+			method: "tools/call",
+			params: {
+				name: "present_question",
+				arguments: {
+					question: "What are you building?",
+					choices: ["A tool people work in all day", "Something people read"],
+					step: 1,
+					total: 2,
+				},
+			},
+		})
+
+		// Deliberately NOT navigating to the interview first. An agent's question
+		// has to reach the user wherever they are; if this needed a manual click,
+		// a question asked while they were on the canvas would go unanswered.
+		await chrome.waitForSelector('[data-testid="interview-question"]', { timeout: 30_000 })
+		await shot(chrome, "04-interview-question")
+
+		const questionText = await chrome.textContent('[data-testid="interview-question"]')
+		assert(questionText?.includes("What are you building?"), `question not rendered: ${questionText}`)
+
+		await chrome.locator('[data-testid="interview-choice"]', { hasText: "Something people read" }).click()
+
+		const answered = await pending.then((r) => r.text())
+		assert(answered.includes("Something people read"), `the answer never reached the agent: ${answered.slice(0, 300)}`)
+		return "question rendered, clicked, and the answer reached the waiting tool call"
+	})
+
+	await scenario("q. specimens render and picking one returns a candidate id", async () => {
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const pending = callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 11,
+			method: "tools/call",
+			params: { name: "present_options", arguments: { tags: ["editorial", "calm"], count: 3 } },
+		})
+
+		await chrome.waitForSelector('[data-testid="interview-options"]', { timeout: 30_000 })
+		const cards = chrome.locator('[data-testid="interview-candidate"]')
+		await cards.first().waitFor({ timeout: 20_000 })
+
+		// Fonts are fetched from Google Fonts; give them a beat so the screenshot
+		// shows real specimens rather than the fallback face.
+		await chrome.waitForTimeout(1500)
+		await shot(chrome, "05-interview-specimens")
+
+		const count = await cards.count()
+		if (count !== 3) {
+			const dump = await chrome.evaluate(() => {
+				const node = document.querySelector('[data-testid="interview-options"]')
+				return {
+					optionsPresent: Boolean(node),
+					optionsHtml: node ? node.outerHTML.slice(0, 600) : null,
+					bodyText: document.body.innerText.slice(0, 400),
+				}
+			})
+			throw new Error(`expected 3 specimens, got ${count}. DOM: ${JSON.stringify(dump)}`)
+		}
+
+		// A specimen has to actually render the typeface it is offering — a card
+		// showing the fallback is worse than useless, because the user picks on it.
+		const family = await cards
+			.first()
+			.locator("p")
+			.first()
+			.evaluate((el) => getComputedStyle(el).fontFamily)
+		assert(!/^(ui-|system-ui|-apple)/.test(family), `specimen fell back to a system face: ${family}`)
+
+		await cards.first().click()
+		const picked = await pending.then((r) => r.text())
+		assert(picked.includes("candidateId"), `no candidate id came back: ${picked.slice(0, 300)}`)
+		return `3 specimens rendered in ${family.split(",")[0]}; pick returned a candidate id`
+	})
+
+	await scenario("r. the canvas mounts in the window and renders the design pages", async () => {
+		// The canvas is a WebContentsView, not a Playwright page, so it is reached
+		// through the main process. This is the first thing in the suite that
+		// proves the canvas actually runs inside the app rather than in a browser.
+		const result = await waitFor(
+			"the canvas to render pages",
+			async () =>
+				app!.evaluate(async ({ BrowserWindow }) => {
+					const win = BrowserWindow.getAllWindows()[0]
+					const views = (win?.contentView?.children ?? []) as any[]
+					const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+					if (!canvas) return null
+					const url = canvas.webContents.getURL()
+					if (!url.startsWith("http://localhost")) return null
+					const frames = await canvas.webContents
+						.executeJavaScript("document.querySelectorAll('iframe').length")
+						.catch(() => 0)
+					return frames > 0 ? { url, frames } : null
+				}),
+			120_000,
+		)
+		await shot(chrome, "06-canvas")
+		return `canvas at ${result.url} rendering ${result.frames} page frame(s)`
+	})
+
+	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
+		// The preload bridge replaced the VS Code postMessage relay and is written
+		// from scratch. Nothing else here exercises it end to end. Post a message
+		// the way the canvas does and assert the host acted on it — precompute
+		// answers with a precompute-result, which only the host can produce.
+		const replied = await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return "no canvas view"
+
+			return canvas.webContents.executeJavaScript(`
+				new Promise((resolve) => {
+					const timer = setTimeout(() => resolve("timeout"), 15000)
+					window.addEventListener("message", (e) => {
+						if (e.data?.source === "caret-host" && e.data?.type === "precompute-result") {
+							clearTimeout(timer)
+							resolve("precompute-result")
+						}
+					})
+					window.parent.postMessage(
+						{ source: "caret-vite", type: "page-focused", payload: { filePath: "pages/home/index.tsx" } },
+						"*",
+					)
+				})
+			`)
+		})
+
+		assert(replied === "precompute-result", `the host did not answer through the bridge: ${replied}`)
+		return "canvas → preload → IPC → host → back to the canvas, round-trip confirmed"
 	})
 
 	await scenario("k. sync refuses honestly with no agent connected", async () => {

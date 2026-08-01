@@ -38,6 +38,7 @@ const REQUEST_CHANNELS: readonly IpcRequestChannel[] = [
 	"notification:respond",
 	"interview:respond",
 	"interview:library",
+	"interview:pending",
 ]
 
 const EVENT_CHANNELS: readonly IpcEventChannel[] = [

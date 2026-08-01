@@ -30,6 +30,7 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar({ 
 				// under `titleBarStyle: hiddenInset`.
 				platform === "darwin" && "pl-20",
 			)}
+			data-testid="top-bar"
 			ref={ref}>
 			<span className="truncate text-[13px] font-medium">{project.name}</span>
 
