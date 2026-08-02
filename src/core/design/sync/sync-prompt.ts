@@ -1,4 +1,5 @@
 import type { DesignChangedFile, DesignChangeStatus } from "@/utils/git"
+import { readAssetIndex } from "../assets"
 import { listFlows } from "../flow-meta"
 import { listPages } from "../page-meta"
 import { readFoundationTokens } from "../tokens"
@@ -19,10 +20,11 @@ export interface SyncPromptInput {
  * The AI reads the specific page `index.tsx` files it needs on demand.
  */
 async function buildInventory(workspacePath: string): Promise<string> {
-	const [pages, flows, tokens] = await Promise.all([
+	const [pages, flows, tokens, assets] = await Promise.all([
 		listPages(workspacePath),
 		listFlows(workspacePath),
 		readFoundationTokens(workspacePath),
+		readAssetIndex(workspacePath).catch(() => ({ version: 1 as const, assets: [] })),
 	])
 
 	// All of this is AI-generated/edited and may be missing fields — stay defensive
@@ -55,6 +57,17 @@ async function buildInventory(workspacePath: string): Promise<string> {
 			` (read .caret/tokens/foundation.json for full scales)`
 		: "(no foundation tokens configured)"
 
+	// Assets are the one part of the design layer that does not translate as code.
+	// A page referencing /caret-assets/x.png syncs into an app that has no such
+	// path, and the result is a broken image rather than a compile error — so the
+	// copy has to be spelled out rather than left implied by the page source.
+	const assetLines =
+		assets.assets.length === 0
+			? "(none)"
+			: assets.assets
+					.map((a) => ` ${a.file} → referenced as /caret-assets/${a.file}${a.alt ? ` · alt: "${a.alt}"` : ""}`)
+					.join("\n")
+
 	return [
 		"DESIGN INVENTORY (metadata only — read page sources on demand)",
 		`PAGES (${pages.length}):`,
@@ -62,7 +75,14 @@ async function buildInventory(workspacePath: string): Promise<string> {
 		`FLOWS (${flows.length}):`,
 		flowLines,
 		`TOKENS: ${tokenLine}`,
-	].join("\n")
+		`ASSETS (${assets.assets.length}) — in .caret/assets/:`,
+		assetLines,
+		assets.assets.length > 0
+			? "Copy every asset a synced page uses into the app's own static/public directory and rewrite the path to match. Carry the alt text across. Do not hotlink /caret-assets/ — that path only exists inside Caret's preview."
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n")
 }
 
 /** Derive a page id from a `.caret/pages/<id>/...` path, or null if not a page file. */

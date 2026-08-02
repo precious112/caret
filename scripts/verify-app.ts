@@ -20,6 +20,8 @@ import * as path from "path"
 
 import { type ElectronApplication, _electron as electron, type Page } from "playwright"
 
+import * as zlib from "zlib"
+
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
 
 const KEEP = process.argv.includes("--keep")
@@ -100,6 +102,65 @@ const UNHEALED_SOURCE = `export default function About() {
   )
 }
 `
+
+/**
+ * A genuinely valid solid-colour PNG.
+ *
+ * Not a header stub: the asset path ends with these bytes being served to a
+ * browser and handed to a model, and a file that only satisfies the dimension
+ * probe would pass the indexing assertions while being undecodable everywhere it
+ * actually matters.
+ */
+function solidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
+	const raw = Buffer.alloc(height * (width * 3 + 1))
+	for (let y = 0; y < height; y++) {
+		const rowStart = y * (width * 3 + 1)
+		raw[rowStart] = 0 // filter: none
+		for (let x = 0; x < width; x++) {
+			raw[rowStart + 1 + x * 3] = rgb[0]
+			raw[rowStart + 2 + x * 3] = rgb[1]
+			raw[rowStart + 3 + x * 3] = rgb[2]
+		}
+	}
+
+	const ihdr = Buffer.alloc(13)
+	ihdr.writeUInt32BE(width, 0)
+	ihdr.writeUInt32BE(height, 4)
+	ihdr[8] = 8 // bit depth
+	ihdr[9] = 2 // truecolour
+
+	return Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		pngChunk("IHDR", ihdr),
+		pngChunk("IDAT", zlib.deflateSync(raw)),
+		pngChunk("IEND", Buffer.alloc(0)),
+	])
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+	const length = Buffer.alloc(4)
+	length.writeUInt32BE(data.length, 0)
+	const body = Buffer.concat([Buffer.from(type, "ascii"), data])
+	const crc = Buffer.alloc(4)
+	crc.writeUInt32BE(crc32(body), 0)
+	return Buffer.concat([length, body, crc])
+}
+
+const CRC_TABLE = (() => {
+	const table = new Uint32Array(256)
+	for (let n = 0; n < 256; n++) {
+		let c = n
+		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+		table[n] = c >>> 0
+	}
+	return table
+})()
+
+function crc32(buffer: Buffer): number {
+	let c = 0xffffffff
+	for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8)
+	return (c ^ 0xffffffff) >>> 0
+}
 
 async function buildFixture(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-app-"))
@@ -674,6 +735,126 @@ async function main(): Promise<void> {
 		assert(text.includes("no-such-page"), `the refusal does not name the page: ${text.slice(0, 300)}`)
 		assert(!/is the canvas running/i.test(text), "the refusal still blames the canvas for an unrelated cause")
 		return "names the page and the actual cause"
+	})
+
+	await scenario("v. an asset dropped into .caret/assets is indexed with no tool involved", async () => {
+		// Dragging a file into the folder has to work as well as using the UI, for
+		// the same reason an agent's own Edit tool has to work on pages: the
+		// reliable path cannot be the one that depends on everyone choosing it.
+		await fs.writeFile(path.join(fixture, ".caret", "assets", "Hero Shot@2x.png"), solidPng(240, 135, [20, 24, 33]))
+
+		const entry = await waitFor(
+			"the asset index",
+			async () => {
+				try {
+					const raw = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8")
+					const index = JSON.parse(raw)
+					return index.assets?.find((a: any) => a.tag === "hero-shot-2x") ?? null
+				} catch {
+					return null
+				}
+			},
+			60_000,
+		)
+
+		assert(entry.width === 240 && entry.height === 135, `dimensions were not probed: ${entry.width}x${entry.height}`)
+		assert(entry.kind === "image", `wrong kind: ${entry.kind}`)
+		assert(entry.origin?.type === "discovered", `wrong origin: ${JSON.stringify(entry.origin)}`)
+		return `tag "${entry.tag}" derived from the filename, ${entry.width}x${entry.height} probed from the header`
+	})
+
+	await scenario("w. the asset index reaches the always-on rules files", async () => {
+		// Behind a tool it would be ignored — an agent that must choose to
+		// enumerate assets emits a placeholder instead. This is the delivery
+		// mechanism, so it is the thing worth asserting.
+		const rules = await waitFor(
+			"AGENTS.md to carry the asset",
+			async () => {
+				const text = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
+				return text.includes("@hero-shot-2x") ? text : null
+			},
+			60_000,
+		)
+		assert(rules.includes("/caret-assets/"), "the rules file names the asset but not how to reference it")
+		return "AGENTS.md carries the tag, the path and the size"
+	})
+
+	await scenario("x. an agent can list assets and receive the actual pixels", async () => {
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const listed = await (
+			await callMcp(discovery.url, discovery.token, {
+				jsonrpc: "2.0",
+				id: 30,
+				method: "tools/call",
+				params: { name: "list_assets", arguments: {} },
+			})
+		).text()
+		assert(listed.includes("hero-shot-2x"), `list_assets did not report the asset: ${listed.slice(0, 300)}`)
+
+		const fetched = await (
+			await callMcp(discovery.url, discovery.token, {
+				jsonrpc: "2.0",
+				id: 31,
+				method: "tools/call",
+				params: { name: "get_asset", arguments: { tag: "@hero-shot-2x" } },
+			})
+		).text()
+
+		assert(fetched.includes('"type":"image"'), `get_asset returned no image content: ${fetched.slice(0, 300)}`)
+		const data = /"data":"([^"]+)"/.exec(fetched)?.[1] ?? ""
+		const decoded = Buffer.from(data, "base64")
+		assert(decoded.subarray(1, 4).toString() === "PNG", "get_asset returned something that is not the PNG")
+		assert(decoded.readUInt32BE(16) === 240, `wrong image returned: width ${decoded.readUInt32BE(16)}`)
+		return "the leading @ is tolerated, and the bytes returned are the file on disk"
+	})
+
+	await scenario("y. get_asset refuses an unknown tag and names what does exist", async () => {
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const response = await (
+			await callMcp(discovery.url, discovery.token, {
+				jsonrpc: "2.0",
+				id: 32,
+				method: "tools/call",
+				params: { name: "get_asset", arguments: { tag: "hero-shoot" } },
+			})
+		).text()
+
+		assert(response.includes("hero-shoot"), `the refusal does not name the tag asked for: ${response.slice(0, 300)}`)
+		assert(response.includes("hero-shot-2x"), "the refusal does not name the assets that do exist")
+		return "a typo gets the list of real tags rather than a bare failure"
+	})
+
+	await scenario("z. assets are served to the canvas, and traversal is refused", async () => {
+		// The index can be perfect and the page still show a broken image if the
+		// URL it records does not resolve. This is the leg between the two.
+		const base = await waitFor(
+			"the design server's URL",
+			async () =>
+				app!.evaluate(({ BrowserWindow }) => {
+					const win = BrowserWindow.getAllWindows()[0]
+					const views = (win?.contentView?.children ?? []) as any[]
+					const url = views.find((v) => v.webContents && !v.webContents.isDestroyed())?.webContents.getURL() ?? ""
+					return url.startsWith("http://localhost") ? new URL(url).origin : null
+				}),
+			60_000,
+		)
+
+		const served = await fetch(`${base}/caret-assets/${encodeURIComponent("Hero Shot@2x.png")}`)
+		assert(served.ok, `serving the asset failed with ${served.status}`)
+		assert(served.headers.get("content-type") === "image/png", `wrong content type: ${served.headers.get("content-type")}`)
+		const bytes = Buffer.from(await served.arrayBuffer())
+		assert(bytes.subarray(1, 4).toString() === "PNG" && bytes.readUInt32BE(16) === 240, "served the wrong bytes")
+
+		// `.caret/assets/` is a directory anything can write to and the middleware
+		// takes a path from the URL, so the confinement check is load-bearing —
+		// and it has to survive encoding, since %2e%2e is still traversal.
+		const escaped = await fetch(`${base}/caret-assets/%2e%2e%2f%2e%2e%2fpackage.json`)
+		assert(escaped.status === 403 || escaped.status === 404, `traversal was not refused: ${escaped.status}`)
+		return `${bytes.length} bytes served as image/png; encoded traversal → ${escaped.status}`
 	})
 
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {

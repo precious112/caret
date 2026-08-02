@@ -20,6 +20,7 @@
 import chokidar, { type FSWatcher } from "chokidar"
 import * as path from "path"
 
+import { assetIndexPath, reindexAssets } from "../../src/core/design"
 import { precomputeAndApply } from "../../src/core/design/visual-editing/post-generation-hook"
 import { Logger } from "../../src/shared/services/Logger"
 import { recordEdit } from "./provenance"
@@ -50,6 +51,8 @@ export interface WatchAndHealOptions {
 	onHealed?(filePath: string): void
 	/** Called when foundation tokens change, after the rules files are rewritten. */
 	onTokensChanged?(): void
+	/** Called after the asset index changed, so the library surface can refresh. */
+	onAssetsChanged?(): void
 }
 
 export class WatchAndHeal {
@@ -117,6 +120,11 @@ export class WatchAndHeal {
 			return
 		}
 
+		if (isAssetFile(filePath)) {
+			await this.onAssetsChanged(filePath, action, wasSelfWrite)
+			return
+		}
+
 		if (!isHealable(filePath)) {
 			if (!wasSelfWrite && isDesignContent(filePath)) {
 				await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
@@ -151,6 +159,49 @@ export class WatchAndHeal {
 		}
 	}
 
+	/**
+	 * Indexes an asset that appeared in `.caret/assets/`, whoever put it there.
+	 *
+	 * Dragging a file into the folder in Finder has to work as well as using the
+	 * UI, for the same reason an agent's own `Edit` tool has to work on pages: the
+	 * reliable path cannot be the one that depends on everybody choosing it.
+	 *
+	 * The index write comes back through this watcher, so it is marked as a
+	 * self-write first. `reindexAssets` is also a no-op when nothing changed,
+	 * which closes the loop from the other side.
+	 */
+	private async onAssetsChanged(filePath: string, action: "create" | "write", wasSelfWrite: boolean): Promise<void> {
+		if (!wasSelfWrite) {
+			await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
+		}
+
+		try {
+			this.markSelfWrite(path.resolve(assetIndexPath(this.options.projectPath)))
+			const result = await reindexAssets(this.options.projectPath)
+
+			for (const { file, reason } of result.skipped) {
+				Logger.info(`[heal] not indexing ${file}: ${reason}`)
+			}
+			if (result.added.length || result.removed.length || result.updated.length) {
+				await recordEdit(this.options.projectPath, {
+					actor: "caret",
+					action: "write",
+					file: assetIndexPath(this.options.projectPath),
+					note: `indexed assets (+${result.added.length} -${result.removed.length} ~${result.updated.length})`,
+				})
+				// The asset list is always-on context, so a stale rules file would
+				// have an agent reaching for an asset that is gone or missing one
+				// that just arrived.
+				await regenerateRulesFiles(this.options.projectPath).catch((err) =>
+					Logger.warn(`[heal] could not regenerate rules files: ${err}`),
+				)
+			}
+			this.options.onAssetsChanged?.()
+		} catch (err) {
+			Logger.warn(`[heal] could not reindex assets: ${err}`)
+		}
+	}
+
 	private async onTokensChanged(filePath: string, action: "create" | "write", wasSelfWrite: boolean): Promise<void> {
 		if (!wasSelfWrite) {
 			await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
@@ -177,6 +228,18 @@ function isHealable(filePath: string): boolean {
 
 function isFoundationTokens(filePath: string): boolean {
 	return filePath.split(path.sep).join("/").endsWith("/.caret/tokens/foundation.json")
+}
+
+/**
+ * Anything in `.caret/assets/` except the index itself.
+ *
+ * Excluding the index matters: reindexing writes it, and treating that write as
+ * a reason to reindex again is a loop that only stops because the self-write set
+ * happens to catch it.
+ */
+function isAssetFile(filePath: string): boolean {
+	const normalised = filePath.split(path.sep).join("/")
+	return normalised.includes("/.caret/assets/") && !normalised.endsWith("/.caret/assets/index.json")
 }
 
 /** Design *content* as opposed to Caret's own machinery — worth recording. */

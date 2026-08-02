@@ -5,6 +5,33 @@ export {
 	NoAgentConnectedError,
 	NullBridge,
 } from "./agent/bridge"
+export {
+	ASSET_TYPES,
+	ASSETS_DIR,
+	type AssetEntry,
+	type AssetIndex,
+	type AssetKind,
+	type AssetOrigin,
+	assetIndexPath,
+	assetsDirectory,
+	assetUrl,
+	describeAsset,
+	describeInline,
+	type ExpansionResult,
+	expandReferences,
+	findAsset,
+	findTagReferences,
+	fitWarning,
+	isViewable,
+	LARGE_ASSET_BYTES,
+	type ReindexResult,
+	readAssetIndex,
+	reindexAssets,
+	retagAsset,
+	summariseForRules,
+	validateTag,
+	writeAssetIndex,
+} from "./assets"
 export { CARET_ID_RULES, INLINE_EDITING_RULES } from "./authoring/design-rules"
 export {
 	listFlows,

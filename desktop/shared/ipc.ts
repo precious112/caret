@@ -144,6 +144,33 @@ export interface FontOptionWire {
 	variants: string[]
 }
 
+/**
+ * An asset as the renderer sees it.
+ *
+ * A structural mirror rather than the core type, like every other `*Wire` here,
+ * so a renderer import of main-process code stays a compile error.
+ */
+export interface AssetEntryWire {
+	tag: string
+	file: string
+	url: string
+	kind: "image" | "vector" | "video" | "model"
+	mime: string
+	width: number | null
+	height: number | null
+	bytes: number
+	alt: string
+	description: string
+	origin: string
+	addedAt: string
+}
+
+export interface AssetAddResult {
+	added: string[]
+	/** Files that could not be added, each with a reason the user can act on. */
+	rejected: Array<{ file: string; reason: string }>
+}
+
 /** Renderer → main. Each entry is an `ipcRenderer.invoke` channel. */
 export interface IpcRequests {
 	"project:pickFolder": () => string | null
@@ -163,6 +190,18 @@ export interface IpcRequests {
 	"fonts:search": (query: string) => FontOptionWire[]
 
 	"pages:list": (projectPath: string) => PageMetaWire[]
+
+	"assets:list": (projectPath: string) => AssetEntryWire[]
+	/**
+	 * Copies files into `.caret/assets/`. Paths come from a drop or a native
+	 * dialog, so main does the copying — the renderer never touches the disk.
+	 */
+	"assets:add": (projectPath: string, sourcePaths: string[]) => AssetAddResult
+	"assets:retag": (projectPath: string, from: string, to: string) => WriteResult
+	"assets:describe": (projectPath: string, tag: string, fields: { alt?: string; description?: string }) => WriteResult
+	"assets:remove": (projectPath: string, tag: string) => WriteResult
+	/** Opens a native file picker filtered to supported asset types. */
+	"assets:pickFiles": () => string[]
 
 	"sync:now": (projectPath: string) => SyncOutcome
 	"sync:rollback": (projectPath: string) => SyncOutcome
@@ -196,6 +235,8 @@ export interface IpcEvents {
 	"notification:show": (request: NotificationRequest) => void
 	"agent:task": (task: { kind: string; prompt: string }) => void
 	"interview:prompt": (prompt: InterviewPromptWire) => void
+	/** The asset index changed — by the UI, an agent, or a file dropped in Finder. */
+	"assets:changed": (projectPath: string) => void
 	log: (line: string) => void
 }
 

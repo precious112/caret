@@ -19,7 +19,9 @@ import {
 	INLINE_EDITING_RULES,
 	listFlows,
 	listPages,
+	readAssetIndex,
 	readFoundationTokens,
+	summariseForRules,
 } from "../../../src/core/design"
 
 export interface FoundationContext {
@@ -28,13 +30,22 @@ export interface FoundationContext {
 	/** Page ids with their states, so an agent can see what already exists. */
 	pages: Array<{ id: string; title: string; tags: string[]; states: string[] }>
 	flows: Array<{ id: string; name: string; pages: string[] }>
+	/**
+	 * One line per asset — tag, kind, size, path, character.
+	 *
+	 * Always-on rather than behind `list_assets`, for the same reason the tokens
+	 * are: an agent that must *choose* to enumerate the project's assets will not,
+	 * and will emit a placeholder rectangle instead. The pixels stay pull-only.
+	 */
+	assets: string[]
 }
 
 export async function buildFoundationContext(projectPath: string): Promise<FoundationContext> {
-	const [tokens, pages, flows] = await Promise.all([
+	const [tokens, pages, flows, assets] = await Promise.all([
 		readFoundationTokens(projectPath).catch(() => null),
 		listPages(projectPath).catch(() => []),
 		listFlows(projectPath).catch(() => []),
+		readAssetIndex(projectPath).catch(() => ({ version: 1 as const, assets: [] })),
 	])
 
 	return {
@@ -48,6 +59,7 @@ export async function buildFoundationContext(projectPath: string): Promise<Found
 				name: f.name ?? f.id,
 				pages: (f.steps ?? []).map((s) => s.page).filter(Boolean),
 			})),
+		assets: assets.assets.map(summariseForRules),
 	}
 }
 
@@ -148,6 +160,23 @@ ${
 	context.pages.length === 0
 		? "No pages yet."
 		: context.pages.map((p) => `- \`${p.id}\` — ${p.title}${p.tags.length ? ` [${p.tags.join(", ")}]` : ""}`).join("\n")
+}
+
+## Assets
+
+${
+	context.assets.length === 0
+		? `No assets yet. **Never invent an image URL and never leave a grey placeholder box.** If a
+design needs a photograph, an icon or a logo you do not have, say so and ask — the user can add
+one, or Caret can generate it.`
+		: `Reference these by path. They are served from \`/caret-assets/\` and already work in the canvas.
+
+${context.assets.map((line) => `- ${line}`).join("\n")}
+
+When the user writes \`@tag\`, they mean one of these. Use \`get_asset\` to see the actual image
+before placing it somewhere the composition matters. Respect the intrinsic size: an asset
+placed into a box much larger than itself will look soft, and one whose aspect ratio is far from
+its box will lose most of the picture to cropping. Say so rather than doing it.`
 }
 
 ## Do not run the dev server

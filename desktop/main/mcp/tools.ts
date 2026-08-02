@@ -20,12 +20,19 @@ import * as path from "path"
 import { z } from "zod"
 
 import {
+	ASSETS_DIR,
+	assetsDirectory,
+	assetUrl,
 	caretDirectoryExists,
 	completeSync,
+	describeAsset,
 	type FlowDefinition,
+	findAsset,
+	isViewable,
 	listFlows,
 	listPages,
 	type PageMeta,
+	readAssetIndex,
 	readFoundationTokens,
 	readPageMeta,
 	readSyncState,
@@ -187,7 +194,116 @@ export const TOOLS: ToolDefinition[] = [
 
 			const [, mimeType = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/.exec(result.dataUrl) ?? []
 			if (!data) return fail(`page "${pageId}" was captured but the image could not be encoded`)
-			return { content: [{ type: "image", data, mimeType }] }
+
+			// A text sibling, so a client that drops image content degrades
+			// honestly. There is no capability negotiation for content types, so
+			// Caret cannot ask whether images will be honoured and gets no signal
+			// when they are not — without this the agent receives an empty result
+			// and answers plausibly from context instead of saying it saw nothing.
+			return {
+				content: [
+					{ type: "text", text: `Screenshot of page "${pageId}", captured just now at 1440x900 CSS pixels.` },
+					{ type: "image", data, mimeType },
+				],
+			}
+		},
+	},
+
+	{
+		name: "list_assets",
+		title: "List this project's assets",
+		description:
+			"Every image, vector, video and 3D model the user has added, with its tag, size and description. The same list is in your always-on context; call this when you need it fresh after an upload.",
+		inputSchema: {},
+		async handler(ctx) {
+			const index = await readAssetIndex(ctx.projectPath)
+			return reply(ctx, {
+				assets: index.assets.map((asset) => ({
+					tag: asset.tag,
+					url: assetUrl(asset),
+					kind: asset.kind,
+					width: asset.width,
+					height: asset.height,
+					alt: asset.alt,
+					description: asset.description,
+					origin: asset.origin.type,
+				})),
+			})
+		},
+	},
+
+	{
+		name: "get_asset",
+		title: "Look at an asset",
+		description:
+			"The actual pixels of an asset, plus its metadata. Use this before placing an asset somewhere the composition matters — the description tells you the size, but only the image tells you whether a headline can sit on it.",
+		inputSchema: { tag: z.string().describe("The asset's tag, without the leading @") },
+		async handler(ctx, { tag }: { tag: string }) {
+			const index = await readAssetIndex(ctx.projectPath)
+			const entry = findAsset(index, tag.replace(/^@/, ""))
+			if (!entry) {
+				const available = index.assets.map((a) => `@${a.tag}`).join(", ")
+				return fail(`No asset tagged "${tag}". Available: ${available || "none — this project has no assets yet"}.`)
+			}
+
+			const summary = {
+				tag: entry.tag,
+				url: assetUrl(entry),
+				kind: entry.kind,
+				mime: entry.mime,
+				width: entry.width,
+				height: entry.height,
+				bytes: entry.bytes,
+				alt: entry.alt,
+				description: entry.description,
+				origin: entry.origin,
+			}
+
+			// Video and 3D cannot be handed over as pixels, and a client that
+			// received an unreadable blob would be worse off than one told plainly
+			// that it has metadata only.
+			if (!isViewable(entry.kind)) {
+				return reply(ctx, { ...summary, note: `${entry.kind} assets cannot be shown directly; use the description.` })
+			}
+
+			try {
+				const bytes = await fs.readFile(path.join(assetsDirectory(ctx.projectPath), entry.file))
+				return {
+					content: [
+						{ type: "text" as const, text: JSON.stringify(summary, null, 2) },
+						{ type: "image" as const, data: bytes.toString("base64"), mimeType: entry.mime },
+					],
+				}
+			} catch (err) {
+				return fail(`"${tag}" is indexed but its file could not be read: ${err instanceof Error ? err.message : err}`)
+			}
+		},
+	},
+
+	{
+		name: "describe_asset",
+		title: "Describe an asset",
+		description:
+			"Writes the alt text and the plain-language description of what an asset looks like. Do this after looking at a new asset: the description is what every later session reads instead of the pixels, so 'wide, dark, empty space top-left' is worth more than 'a photo'.",
+		inputSchema: {
+			tag: z.string(),
+			alt: z.string().optional().describe("Alt text for screen readers"),
+			description: z.string().optional().describe("What it looks like — composition, tone, where the empty space is"),
+		},
+		async handler(ctx, args: { tag: string; alt?: string; description?: string }) {
+			const result = await describeAsset(ctx.projectPath, args.tag.replace(/^@/, ""), {
+				alt: args.alt,
+				description: args.description,
+			})
+			if (!result.ok) return fail(result.reason)
+
+			await recordEdit(ctx.projectPath, {
+				actor: "agent",
+				action: "write",
+				file: path.join(ASSETS_DIR, "index.json"),
+				note: `described @${result.entry.tag}`,
+			})
+			return reply(ctx, { tag: result.entry.tag, alt: result.entry.alt, description: result.entry.description })
 		},
 	},
 

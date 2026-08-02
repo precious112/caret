@@ -386,8 +386,56 @@ function caretSourceCapturePlugin() {
   }
 }
 
+// Serves .caret/assets/ at /caret-assets/, so a page can reference an asset by a
+// stable path with no build step and no import. Vite's own publicDir is already
+// spoken for by the shell, and this keeps assets addressable by the same URL the
+// index records — which is what makes an @tag expansion mean one thing to the
+// canvas, the agent and the synced app alike.
+function caretAssetsPlugin() {
+  const PREFIX = "/caret-assets/"
+  const MIME: Record<string, string> = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".avif": "image/avif", ".svg": "image/svg+xml",
+    ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
+  }
+
+  return {
+    name: "caret-assets",
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        const url = (req.url || "").split("?")[0]
+        if (!url.startsWith(PREFIX)) return next()
+
+        // Decoded first, then confined to the assets directory — "%2e%2e%2f" is
+        // still traversal after decoding, and the check has to happen after.
+        const name = decodeURIComponent(url.slice(PREFIX.length))
+        const root = resolve(__dirname, "assets")
+        const file = resolve(root, name)
+        if (file !== root && !file.startsWith(root + "/")) {
+          res.statusCode = 403
+          return res.end("forbidden")
+        }
+
+        try {
+          const body = readFileSync(file)
+          const extension = name.slice(name.lastIndexOf(".")).toLowerCase()
+          res.setHeader("Content-Type", MIME[extension] || "application/octet-stream")
+          // No caching: an asset replaced in place must show the new bytes on the
+          // next reload, or the canvas lies about what the project contains.
+          res.setHeader("Cache-Control", "no-store")
+          return res.end(body)
+        } catch {
+          res.statusCode = 404
+          return res.end("not found")
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTokensPlugin(), caretFlowsPlugin(), caretApiPlugin()],
+  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTokensPlugin(), caretFlowsPlugin(), caretApiPlugin(), caretAssetsPlugin()],
   server: {
     host: "localhost",
     strictPort: false,
