@@ -18,6 +18,7 @@ import type { AddressInfo } from "net"
 import { type AgentBridge, type AgentTask, NullBridge, setProjectBridge } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
+import type { ScreenshotResult } from "../types"
 import { authorize, generateToken } from "./auth"
 import { clearDiscovery, writeDiscovery } from "./discovery"
 import { buildInterviewTools, INTERVIEW_PROMPT } from "./interview-tools"
@@ -32,8 +33,8 @@ export interface CaretMcpServerOptions {
 	projectPath: string
 	/** Fired when an agent connects or disconnects, so the UI can reflect it. */
 	onAgentConnectionChanged?(connected: boolean): void
-	/** Captures a page screenshot from the running canvas. */
-	screenshot?(pageId: string): Promise<string | null>
+	/** Renders one page and captures it, or says why it could not. */
+	screenshot?(pageId: string): Promise<ScreenshotResult>
 	/** Surfaces an outbound agent task (sync, visual edit) to the user. */
 	onAgentTask?(task: AgentTask): void
 	/** Sends an interview question or option set to the chrome renderer. */
@@ -134,7 +135,9 @@ export class CaretMcpServer {
 	private registerTools(mcp: McpServer): void {
 		const ctx: ToolContext = {
 			projectPath: this.options.projectPath,
-			screenshot: (pageId) => this.options.screenshot?.(pageId) ?? Promise.resolve(null),
+			screenshot: (pageId) =>
+				this.options.screenshot?.(pageId) ??
+				Promise.resolve({ ok: false as const, reason: "this project has no window to render pages in" }),
 		}
 
 		const tools = [...TOOLS, ...buildInterviewTools({ send: (prompt) => this.options.onInterviewPrompt?.(prompt) })]

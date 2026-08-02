@@ -32,7 +32,7 @@ import { CaretMcpServer } from "./mcp/server"
 import { migrateProject } from "./migrate"
 import { recordRecentProject } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
-import type { DesignInboundMessage, DesignOutboundMessage, ProjectState } from "./types"
+import type { DesignInboundMessage, DesignOutboundMessage, ProjectState, ScreenshotResult } from "./types"
 import { WatchAndHeal } from "./watch-and-heal"
 
 /** Fallback top-bar height, used until the chrome reports its real layout. */
@@ -253,31 +253,81 @@ export class ProjectWindow {
 	}
 
 	/**
-	 * Screenshots one design page by loading it in an offscreen view rather than
+	 * Screenshots one design page by loading it in a hidden window rather than
 	 * capturing the canvas, which would return whatever the user happens to be
 	 * looking at — possibly zoomed out, scrolled, or showing a different page.
+	 *
+	 * A hidden `BrowserWindow`, not a detached `WebContentsView`: `capturePage`
+	 * needs a real compositor surface, and a view that was never added to a window
+	 * has none, so it returns an empty image no matter how long you wait.
+	 * `paintWhenInitiallyHidden` keeps that surface alive while the window stays
+	 * off-screen.
+	 *
+	 * Failures return a reason rather than null. Every caller is an agent, and
+	 * "could not screenshot" with no cause is a dead end for it and for us.
 	 */
-	private async screenshotPage(pageId: string): Promise<string | null> {
+	private async screenshotPage(pageId: string): Promise<ScreenshotResult> {
 		const base = this.session.getUrl()
-		if (!base) return null
-
-		const view = new WebContentsView({
-			webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false },
-		})
-		try {
-			view.setBounds({ x: 0, y: 0, width: 1440, height: 900 })
-			await view.webContents.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
-			// Give fonts and first paint a moment; the alternative is capturing a
-			// blank frame, which reads as "the page is broken".
-			await new Promise((resolve) => setTimeout(resolve, 600))
-			const image = await view.webContents.capturePage()
-			return image.isEmpty() ? null : image.toDataURL()
-		} catch (err) {
-			Logger.error(`[window] screenshot of "${pageId}" failed:`, err)
-			return null
-		} finally {
-			view.webContents.close()
+		if (!base) {
+			return { ok: false, reason: "the design preview is still starting up — try again in a few seconds" }
 		}
+
+		const capture = new BrowserWindow({
+			show: false,
+			width: 1440,
+			height: 900,
+			paintWhenInitiallyHidden: true,
+			webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: false },
+		})
+
+		try {
+			await capture.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
+			await this.settle(capture)
+
+			const image = await capture.webContents.capturePage()
+			if (image.isEmpty()) {
+				return { ok: false, reason: `page "${pageId}" rendered nothing — does it exist, and does it render at 1440x900?` }
+			}
+			return { ok: true, dataUrl: image.toDataURL() }
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err)
+			Logger.error(`[window] screenshot of "${pageId}" failed:`, err)
+			return { ok: false, reason: `loading page "${pageId}" failed: ${detail}` }
+		} finally {
+			if (!capture.isDestroyed()) capture.destroy()
+		}
+	}
+
+	/**
+	 * Waits for the page to stop changing before capturing it.
+	 *
+	 * `did-finish-load` fires well before a page *looks* finished: webfonts are
+	 * still swapping and images are still decoding, and a capture taken then shows
+	 * fallback type and empty boxes. That reads to an agent as "the page is
+	 * broken" — the most expensive possible false signal in a loop whose whole
+	 * point is the agent judging its own work.
+	 *
+	 * Capped, because a page with an infinite animation or a never-resolving image
+	 * would otherwise block forever. A late capture beats no capture.
+	 */
+	private async settle(capture: BrowserWindow): Promise<void> {
+		await capture.webContents
+			.executeJavaScript(
+				`(async () => {
+					const deadline = new Promise((r) => setTimeout(r, 4000))
+					const ready = (async () => {
+						await document.fonts.ready
+						await Promise.all(
+							[...document.images].map((img) =>
+								img.complete ? null : new Promise((r) => { img.onload = r; img.onerror = r }),
+							),
+						)
+						await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+					})()
+					await Promise.race([ready, deadline])
+				})()`,
+			)
+			.catch(() => {})
 	}
 
 	private layout(): void {

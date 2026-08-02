@@ -43,7 +43,14 @@ function log(message: string): void {
 	console.log(`[verify-mcp] ${message}`)
 }
 
+/** `--only=7` or `--only=5,7` runs a subset. Every scenario costs real inference. */
+const ONLY = (process.argv.find((a) => a.startsWith("--only=")) ?? "").slice(7).split(",").filter(Boolean)
+
 async function scenario(name: string, run: () => Promise<string>): Promise<void> {
+	if (ONLY.length > 0 && !ONLY.some((n) => name.startsWith(`${n}.`))) {
+		log(`SKIP ${name}`)
+		return
+	}
 	try {
 		const detail = await run()
 		results.push({ name, passed: true, detail })
@@ -79,9 +86,37 @@ const PAGE_SOURCE = `export default function Pricing() {
 }
 `
 
+/**
+ * A word that exists in the fixture ONLY as character codes, so it is not
+ * present as a string anywhere on disk. Random per run, so it cannot be
+ * memorised or guessed. An agent that reports it back has read pixels.
+ */
+const VISION_WORD = `ZEPHYR${Math.floor(Math.random() * 9000 + 1000)}`
+
+function visionPageSource(word: string): string {
+	const codes = [...word].map((c) => c.charCodeAt(0)).join(",")
+	return `export default function Vision() {
+  const word = [${codes}].map((c) => String.fromCharCode(c)).join("")
+  return (
+    <div data-caret-id="vision-root" className="min-h-screen bg-white p-24">
+      <h1 data-caret-id="vision-word" className="text-7xl font-bold text-black">{word}</h1>
+    </div>
+  )
+}
+`
+}
+
 async function buildFixture(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-mcpclient-"))
 	await ensureCaretDirectoryExists(dir)
+
+	const visionDir = path.join(dir, ".caret", "pages", "vision")
+	await fs.mkdir(visionDir, { recursive: true })
+	await fs.writeFile(path.join(visionDir, "index.tsx"), visionPageSource(VISION_WORD))
+	await fs.writeFile(
+		path.join(visionDir, "meta.json"),
+		JSON.stringify({ id: "vision", title: "Vision", type: "page", states: ["default"], tags: [] }, null, 2),
+	)
 
 	// One page with a distinctive id, so the agent reporting it back is evidence
 	// it actually read this project rather than answering plausibly.
@@ -109,6 +144,31 @@ async function readDiscovery(): Promise<{ url: string; token: string } | null> {
 	} catch {
 		return null
 	}
+}
+
+/**
+ * A raw JSON-RPC call, used only to establish preconditions. Everything being
+ * *certified* here goes through the real client; this is for asking the server
+ * "are you ready yet" without spending inference on the answer.
+ */
+async function rawCall(discovery: { url: string; token: string }, body: unknown): Promise<string> {
+	const response = await fetch(discovery.url, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			accept: "application/json, text/event-stream",
+			authorization: `Bearer ${discovery.token}`,
+		},
+		body: JSON.stringify(body),
+	})
+	return response.text()
+}
+
+const RAW_INIT = {
+	jsonrpc: "2.0",
+	id: 1,
+	method: "initialize",
+	params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "caret-verify", version: "0" } },
 }
 
 async function waitFor<T>(label: string, check: () => Promise<T | null>, timeoutMs = 120_000): Promise<T> {
@@ -290,6 +350,54 @@ async function main(): Promise<void> {
 		assert(rules.includes(tokens.typography.fontFamily), "the committed typeface never reached the rules files")
 
 		return `${questions} question(s), ${picks} pick(s) → ${tokens.typography.fontFamily} @ ${tokens.typography.baseSize}px, seed ${tokens.color.brand.seed}`
+	})
+
+	await scenario("7. the connected agent can actually SEE a rendered page", async () => {
+		// Caret returns MCP `image` content from get_screenshot, but a server
+		// emitting image blocks proves nothing on its own: the CLIENT decides what
+		// reaches the model, and a client that drops or stringifies the block would
+		// look identical from here. Everything visual — the overlay editor,
+		// judging a generated asset, checking its own work — rests on this being
+		// true, so it is asserted against a real client rather than assumed.
+		//
+		// The controls: the word is on the page only as character codes, it is
+		// random per run, and the agent is allowed no tool but get_screenshot, so
+		// it cannot read the file. Reporting it back means it read pixels.
+		//
+		// Screenshots load offscreen from the design session's URL, so Vite has to
+		// be up first — without this wait the tool refuses and the scenario fails
+		// for a reason that has nothing to do with vision.
+		const chrome = await app!.firstWindow()
+		await chrome.waitForSelector('[data-testid="top-bar"]', { timeout: 60_000 })
+		await waitFor(
+			"the design session to be able to screenshot",
+			async () => {
+				await rawCall(discovery, RAW_INIT)
+				await rawCall(discovery, { jsonrpc: "2.0", method: "notifications/initialized" })
+				const body = await rawCall(discovery, {
+					jsonrpc: "2.0",
+					id: 2,
+					method: "tools/call",
+					params: { name: "get_screenshot", arguments: { pageId: "vision" } },
+				})
+				if (body.includes('"type":"image"')) return true
+				log(`  canvas not ready yet: ${body.replace(/\s+/g, " ").slice(-120)}`)
+				return null
+			},
+			600_000,
+		)
+
+		const output = await claude(
+			`-p "Call the caret MCP server's get_screenshot tool with pageId 'vision'. Then tell me the single word printed in large text on that page, and the background colour. If you cannot see the image, say NO_IMAGE." ` +
+				`--allowed-tools "mcp__caret__get_screenshot"`,
+			300_000,
+		)
+		assert(!/NO_IMAGE/.test(output), `the client did not deliver the image to the model: ${output.slice(0, 600)}`)
+		assert(
+			output.toUpperCase().includes(VISION_WORD),
+			`the agent could not read the rendered word "${VISION_WORD}": ${output.slice(0, 600)}`,
+		)
+		return `agent read "${VISION_WORD}" off the rendered pixels — vision works end to end`
 	})
 }
 

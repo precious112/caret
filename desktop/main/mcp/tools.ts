@@ -41,11 +41,12 @@ import { Logger } from "../../../src/shared/services/Logger"
 import { getDesignLayerChangedFiles } from "../../../src/utils/git"
 import { recordEdit } from "../provenance"
 import { buildFoundationContext, buildGuide } from "../rules/context"
+import type { ScreenshotResult } from "../types"
 
 export interface ToolContext {
 	projectPath: string
-	/** Captures a screenshot of a page from the running canvas, as a data URL. */
-	screenshot(pageId: string): Promise<string | null>
+	/** Renders one page and captures it, or says why it could not. */
+	screenshot(pageId: string): Promise<ScreenshotResult>
 }
 
 export interface ToolResult {
@@ -167,12 +168,25 @@ export const TOOLS: ToolDefinition[] = [
 	{
 		name: "get_screenshot",
 		title: "Screenshot a page",
-		description: "A rendered screenshot of a design page, as it currently looks in the canvas.",
-		inputSchema: { pageId: z.string() },
+		description:
+			"A rendered screenshot of a design page, captured fresh at 1440x900. Use this to look at your own work: after writing a page, screenshot it and check it renders the way you intended.",
+		inputSchema: { pageId: z.string().describe("Page id, matching the directory under .caret/pages/") },
 		async handler(ctx, { pageId }: { pageId: string }) {
-			const dataUrl = await ctx.screenshot(pageId)
-			if (!dataUrl) return fail(`Could not screenshot "${pageId}" — is the canvas running?`)
-			const [, mimeType = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/.exec(dataUrl) ?? []
+			// Checked before rendering, because an unknown id does not error — the
+			// shell serves an empty document and the capture succeeds. Handing an
+			// agent a blank white image is worse than refusing: it looks like
+			// evidence that the page is broken.
+			const dir = resolveInCaret(ctx.projectPath, path.join("pages", pageId))
+			if (!dir || !(await exists(path.join(dir, "index.tsx")))) {
+				const available = await listPageIds(ctx.projectPath)
+				return fail(`No page "${pageId}" in this design layer. Available pages: ${available.join(", ") || "none"}.`)
+			}
+
+			const result = await ctx.screenshot(pageId)
+			if (!result.ok) return fail(result.reason)
+
+			const [, mimeType = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/.exec(result.dataUrl) ?? []
+			if (!data) return fail(`page "${pageId}" was captured but the image could not be encoded`)
 			return { content: [{ type: "image", data, mimeType }] }
 		},
 	},
@@ -358,6 +372,18 @@ async function exists(target: string): Promise<boolean> {
 		return true
 	} catch {
 		return false
+	}
+}
+
+/** Page ids in this design layer, for naming the alternatives in a refusal. */
+async function listPageIds(projectPath: string): Promise<string[]> {
+	const dir = resolveInCaret(projectPath, "pages")
+	if (!dir) return []
+	try {
+		const entries = await fs.readdir(dir, { withFileTypes: true })
+		return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+	} catch {
+		return []
 	}
 }
 

@@ -621,6 +621,61 @@ async function main(): Promise<void> {
 		return `canvas at ${result.url} rendering ${result.frames} page frame(s)`
 	})
 
+	await scenario("t. get_screenshot returns real pixels of a real page", async () => {
+		// This tool had no coverage anywhere and did not work: it captured through a
+		// WebContentsView that was never attached to a window, so it had no
+		// compositor surface and always returned an empty image.
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const raw = await waitFor(
+			"get_screenshot to return an image",
+			async () => {
+				const response = await callMcp(discovery!.url, discovery!.token, {
+					jsonrpc: "2.0",
+					id: 20,
+					method: "tools/call",
+					params: { name: "get_screenshot", arguments: { pageId: "home" } },
+				})
+				const text = await response.text()
+				return text.includes('"type":"image"') ? text : null
+			},
+			120_000,
+		)
+
+		// A base64 blob that decodes to a PNG of the right size, not merely a
+		// non-empty string — an all-white 1x1 would satisfy a laxer assertion.
+		const data = /"data":"([^"]+)"/.exec(raw)?.[1] ?? ""
+		const buffer = Buffer.from(data, "base64")
+		assert(buffer.length > 5000, `screenshot is too small to be a rendered page: ${buffer.length} bytes`)
+		assert(buffer.subarray(1, 4).toString() === "PNG", "screenshot is not a PNG")
+		const width = buffer.readUInt32BE(16)
+		const height = buffer.readUInt32BE(20)
+		assert(width >= 1440 && height >= 900, `captured at ${width}x${height}, expected at least 1440x900`)
+
+		await fs.writeFile(path.join(SHOTS, "07-get-screenshot.png"), buffer)
+		return `${width}x${height} PNG, ${Math.round(buffer.length / 1024)}KB`
+	})
+
+	await scenario("u. get_screenshot refuses a missing page with a usable reason", async () => {
+		// The old failure message named the canvas for every possible cause, which
+		// is how a broken capture read as "the canvas is not running" while Vite was
+		// demonstrably serving. A refusal an agent cannot act on is a dead end.
+		assert(discovery, "no discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const response = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 21,
+			method: "tools/call",
+			params: { name: "get_screenshot", arguments: { pageId: "no-such-page" } },
+		})
+		const text = await response.text()
+		assert(text.includes("no-such-page"), `the refusal does not name the page: ${text.slice(0, 300)}`)
+		assert(!/is the canvas running/i.test(text), "the refusal still blames the canvas for an unrelated cause")
+		return "names the page and the actual cause"
+	})
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message

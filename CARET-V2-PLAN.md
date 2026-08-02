@@ -164,6 +164,8 @@ reframe and still use them. Map to the phases in
 | §3 | A · Desktop shell | **6** | Claude end-to-end. Surface decisions only. |
 | §4 | B · Agent decoupling + MCP | **6** | Claude end-to-end. Surface decisions only. |
 | §4.5 | *(new)* Foundation interview | **6.5** | Claude end-to-end; the curated library is chosen with the user. |
+| §4.6 | *(new)* Assets, tags, `@` refs | **6.6** | Claude end-to-end. Plumbing, not taste. |
+| §4.7 | *(new)* Generated assets | **6.7** | Claude builds; **the user reviews the recipe library and rates real output.** Taste-rated, per exception 2 below. |
 | — | *(new)* Make corrections stick | **7** | **Designed together.** Not yet specified — the differentiator; see §0.5. |
 | §5.5 | *(new)* Component supply | **7.5** | Claude researches and proposes; **the user picks what ships.** |
 | §5 | C · Parameter model | **8** | **Designed together before code.** Token binding moves to Phase 7. |
@@ -476,6 +478,230 @@ The no-agent state stays fully usable; the interview is an enhancement, not a de
 
 **Re-running.** On an existing project, a re-interview produces a token-change *proposal* with
 blast radius shown (Phase 7 machinery), never a silent reset.
+
+---
+
+## 4.6 Assets — supply, tagging, and `@` references (Phase 6.6)
+
+**Decided 2026-08-02.** The design layer describes *how things look* and says nothing about
+*what is in them*. Ask any connected agent for a landing page and it emits a grey placeholder
+box or a stock URL, because those are the only options it has. Meanwhile the user's own
+photographs, logos and icons cannot enter the design layer at all.
+
+**Why this comes before Phase 7.** Phase 7 exists so a correction made once is respected
+afterwards. If the correction the user keeps making is *"that grey box should be my product
+shot"*, there is nothing to make stick — the asset has no identity to persist. Assets are a
+prerequisite for the thing Phase 7 is about, not a nice-to-have alongside it.
+
+### Storage
+
+`.caret/assets/<file>` plus `.caret/assets/index.json`, under git like the rest of the layer.
+
+```json
+{
+  "tag": "hero-shot",
+  "file": "hero-shot.png",
+  "kind": "image",
+  "mime": "image/png",
+  "width": 2400,
+  "height": 1350,
+  "bytes": 412889,
+  "hash": "sha256:…",
+  "alt": "Two people at a workbench, shot from above",
+  "description": "wide, dark, empty space top-left",
+  "origin": { "type": "uploaded" },
+  "addedAt": "2026-08-02T09:14:22Z"
+}
+```
+
+`tag` is the `@` name: unique, kebab-case, validated on write. `hash` gives dedupe and lets the
+Phase 9 mapping detect a changed asset without re-reading pixels.
+
+**`description` is the field that makes the feature work.** `2400×1350` does not tell an agent
+that the image is dark and has room for a headline top-left, which is the only fact that
+decides whether text can sit on it. The user can type it; the agent can propose it from the
+pixels; either way it is *stored*, so it is not re-derived every session.
+
+**Large binaries in git** is the obvious objection. The position: assets are design decisions
+and belong with the design, the same argument as everything else in `.caret/`. Caret warns
+above a size threshold and points at Git LFS rather than inventing its own store.
+
+### Delivery — the always-on rule, third application
+
+The index (tag · kind · dimensions · description, one line each) goes into the generated rules
+block next to the foundation tokens. Pixels and full metadata stay pull-only behind
+`get_asset`. This is the same reasoning as §4 B3 and §5.5 Retrieval: an agent that must
+*choose* to enumerate assets will not bother and will emit a placeholder, confidently.
+
+### The `@` reference
+
+`@` in the AI-edit box and the overlay editor opens a thumbnail picker. **What travels to the
+agent is the resolved entry, expanded inline** — path, dimensions, description — not the token
+`@hero-shot`. Sending a token and trusting the agent to resolve it is the pull-tool failure
+mode with extra steps, and it fails silently: the agent invents an asset that fits the name.
+
+**Fit is the agent's judgment.** It has the intrinsic aspect ratio and the target box geometry
+from the selection payload, so cover/contain/focal-point is a decision it is equipped to make.
+The part Caret must supply is the ability to **refuse**: a 400×400 asset dropped into a 2400px
+hero should produce a stated reason, not a silent upscale. Refusal is a feature here for the
+same reason `NoAgentConnectedError` is.
+
+### Serving and sync
+
+Vite serves `.caret/assets` at `/caret-assets/`, so a page written by any author renders in the
+canvas with no build step. Sync copies each referenced asset into the app's public directory,
+rewrites the path, and records the copy in the mapping — without that record, Phase 9 reverse
+sync sees an unexplained binary and reports drift forever.
+
+### MCP surface
+
+`list_assets`, `get_asset(tag)` → image content plus metadata, `add_asset`, `describe_asset`.
+Watch-and-heal indexes anything written into `.caret/assets/` directly, probing dimensions and
+deriving a tag from the filename — direct write stays a first-class path, as it is for pages.
+
+### Kinds
+
+Raster, SVG, video and 3D (`glb`/`gltf`) are all assets on identical terms: stored, tagged,
+served, `@`-referenceable, synced. How a page *uses* one is the page's own code, rendered in the
+canvas iframe like any other markup — Caret has no per-kind rendering path to build.
+
+Only two things vary by kind. The **library thumbnail**: a poster frame for video, a rendered
+still for a model. And what an agent receives from `get_asset`: pixels for raster and SVG, the
+poster for video and 3D, plus metadata in every case.
+
+### Agent vision is a prerequisite, and is certified
+
+The overlay editor, an agent judging a generated asset, and an agent describing an upload all
+require the connected agent to receive real pixels. Emitting MCP `image` content is not
+sufficient evidence — the client decides what reaches the model — so this is certified against
+a real client rather than assumed: `verify:mcp-client` asserts an agent reads a word off a
+rendered page, where the word exists in the fixture only as character codes, is random per run,
+and the agent is allowed no tool but `get_screenshot`.
+
+---
+
+## 4.7 Generated assets — guided generation, never a prompt box (Phase 6.7)
+
+**Decided 2026-08-02.** §4.6 solves *the user has an asset*. This solves *the user has none*,
+which is the common case for the pinned persona and the reason landing pages built by
+developers look the way they do.
+
+### The rule
+
+**The user never gets a prompt box.** They answer questions about what the asset is for; Caret
+composes the request from a curated recipe library; N variants come back; the user points at
+one. This is Phase 6.5's mechanism transplanted, and the justification transplants with it: a
+prompt box returns the taste problem to the person who does not have it, and the resulting
+`cinematic, 8k, hyperdetailed, trending on artstation` is exactly the artefact that makes
+generated imagery legible as generated.
+
+### The recipe library
+
+`src/core/design/asset-library/`, deliberately the same shape as `foundation-library/`. One
+recipe type across all four lanes — what varies is how a recipe is *realised*, which keeps the
+interview, the narrowing and the pick surface identical regardless of what produced the pixels:
+
+```ts
+interface AssetRecipe {
+	id: string
+	name: string                      // "Overhead workbench"
+	use: string                       // when to reach for this
+	kind: "photo" | "texture" | "pattern" | "gradient" | "mark"
+	lane: "raster" | "generator" | "iconset" | "authored"
+	tags: string[]                    // the SHARED vocabulary — LIBRARY_TAGS
+	aspects: string[]                 // the ratios this was composed for
+	realise(input: RecipeInput): RecipeRequest  // a prompt, generator params, or a brief
+	avoid: string[]                   // negative constraints: the documented slop tells
+	pairsWith: { palettes: string[] } // ties output to the committed foundation
+}
+```
+
+Sharing `LIBRARY_TAGS` with the foundation library is load-bearing, not tidiness: a project's
+committed vibe tags narrow the asset recipes directly, with no second vocabulary to keep in
+sync. Tag matching is exact, so the vocabulary is published and a query overlapping nothing is
+refused — an unmatched query ranks every candidate zero and degenerates to declaration order,
+which is indistinguishable from a real narrowing.
+
+**Recipes read `foundation.json`.** `deep-technical` produces a dark, cool, low-key image;
+`warm-earth` produces warm neutrals and no pure white. An asset that fights the palette is
+worse than no asset. This is also the first point in the codebase where the foundation
+*produces* rather than *describes*, which is the direction Phase 7 takes further. It binds
+hardest in the generator lane, where palette tokens are literally the function's inputs.
+
+### Four lanes, chosen by what the asset is
+
+A single "generate an image" pipe is the wrong abstraction. What produces a good photograph,
+a good gradient, a good icon set and a good logo have nothing in common, and only one of them
+needs an API.
+
+**1. Raster → Google Gemini image ("Nano Banana").** `gemini-2.5-flash-image` and
+`gemini-3-pro-image`. Image *editing* and multi-reference composition are the capabilities that
+matter: "match this palette" and "another asset in the same style" are edits, not fresh
+generations.
+
+**2. Decorative vector → code.** Seeded parametric generators, owned outright: grainy and mesh
+gradients, grain/noise overlays, halftone and dither treatments, geometric patterns, organic
+shapes, section dividers, wordmark treatments.
+
+The argument is not primarily cost. A model emitting `d="M12.4 88.1c…"` produces something no
+one can edit or verify — the agent cannot adjust it, the visual editor cannot address it, the
+diff is meaningless, and a subtly wrong result can only be regenerated, not corrected. A
+generator call is a parameter set: deterministic, re-runnable, diffable, and **tunable after
+the fact**, which is the Phase 8 parameter model arriving early. Generate-and-pick also stops
+costing money and latency — twelve variants is twelve integers.
+
+**3. Icons → curated open sets, installed.** Lucide, Phosphor, Radix, Heroicons. An icon set's
+value is internal consistency; asking a model for a gear, then a bell, then a user yields three
+stroke weights and three corner treatments, which is the one property that made the set worth
+having. Uses the §5.5 install path, so icons arrive as editable source and recolour to
+foundation tokens.
+
+**4. Logos and marks → agent-authored SVG in a render-compare loop.** Two different tasks hide
+under "can a model draw vector": emitting paths from a text description alone, and reproducing
+a reference. The second has a ground truth, so it converges — emit, render, look, correct.
+
+The loop is the product, not the first emission. Caret can supply it and a raw text-to-SVG API
+cannot: it renders the candidate in isolation, screenshots it, and hands the agent its own
+output beside the reference. Optionally seeded by a deterministic raster trace, which yields
+messy but structurally correct paths to clean up rather than blank coordinates. **This lane
+depends on `get_screenshot`**, which is the second reason that fix gates the phase.
+
+### The Gemini adapter
+
+One adapter over the `@google/genai` SDK, two backends selected by config:
+
+```ts
+new GoogleGenAI({ apiKey })                              // shipped path
+new GoogleGenAI({ vertexai: true, project, location })   // test-only, gcloud ADC
+```
+
+The Vertex backend exists so the project can be exercised against Vertex-only credits. It is
+configured through env/prefs, never surfaced in the UI, and the only user-facing field is the
+API key. The adapter normalises the model ids that differ between backends, and the SDK is
+given Caret's proxy-aware `fetch` per the network rules.
+
+### Transparency
+
+From the model, not from a matting step: Gemini returns transparent PNG for icon-style prompts,
+and lanes 2–4 have no background to remove. For a genuine photographic cutout, chroma-key
+against a flat background Caret chose at generation time — deterministic, no model download, no
+licence, and reliable precisely because the background is ours.
+
+### Keys and the monetization boundary
+
+**BYO API key, stored in the OS keychain, never written to `.caret/`.** This follows §11 rather
+than deferring it: the local editor is free forever, hosted inference is the paid side.
+Generation costs cents on the user's own key. A hosted "just make it" button is a Phase 12
+revenue item and must not become a dependency of this phase — the same discipline as the
+`CaretServices` refusal stub.
+
+### Output handling
+
+Generated results go through the §4.6 pipeline, so a generated asset is an asset like any
+other: resized to the composed-for ratios, `webp`/`avif` emitted alongside, EXIF stripped,
+indexed, taggable, `@`-referenceable. `origin` records model, recipe id, the answers given, the
+resolved prompt, and cost. The library labels generated assets as generated and SynthID is left
+intact — a tool arguing for honest output should not strip provenance from its own.
 
 ---
 
@@ -1240,6 +1466,17 @@ is compatible. Open-core with proprietary modules in-repo is not.
 | One signature move per page, enforced | 2026-08-01 | A micro-interaction library is a slop accelerant otherwise — "bounce on every hover" is a documented slop tell, and the reference designs won on restraint |
 | Height is in scope, axis-parameterised | 2026-07-29 | `width:auto` fills (resolves upward), `height:auto` hugs (resolves downward). Same element gives opposite verdicts, so the resolver takes an axis and the write policy differs per axis |
 | Discard Canvas UI / html-in-canvas | 2026-07-28 | WICG early stage, flag-gated, no Firefox/Safari position; output wouldn't ship. WebGL overlays are the shippable technique |
+| Assets are a design-layer primitive | 2026-08-02 | Type, colour and spacing describe how things look and say nothing about what is in them, so an agent emits a placeholder. Assets land before Phase 7: "make the correction stick" is empty while the correction is "that grey box should be my product shot" |
+| `@tag` expands before it reaches the agent | 2026-08-02 | Sending the token and trusting a lookup is the pull-tool failure mode, and it fails silently — the agent invents an asset that fits the name |
+| The asset description is stored, not derived | 2026-08-02 | Dimensions do not say "dark, wide, room top-left", which is the only fact deciding whether text can sit on it |
+| Guided generation, never a prompt box | 2026-08-02 | A prompt box returns the taste problem to the person who does not have it. Same mechanism and same justification as the 6.5 interview |
+| Four generation lanes, not one pipe | 2026-08-02 | Photographs, gradients, icon sets and logo marks share no production method. Only the raster lane needs an API, so three lanes work before any account exists |
+| Decorative vector is code, not a model | 2026-08-02 | A 4KB path string is uneditable and unverifiable; a parameter set is diffable, correctable and tunable. Variants cost an integer instead of an API call |
+| Icons come from curated sets, never generated | 2026-08-02 | A set's value is internal consistency, which one-shot generation destroys across stroke weight and corner treatment |
+| Logos are authored in a render-compare loop | 2026-08-02 | Reproducing a reference converges because there is a ground truth; emitting paths blind does not. The loop is the product, and it needs `get_screenshot` |
+| Gemini adapter: API key ships, Vertex is test-only | 2026-08-02 | One `@google/genai` SDK, two constructor configs. Vertex + gcloud ADC exists to exercise Vertex-only credits and is never surfaced in the UI |
+| Recraft dropped | 2026-08-02 | No API free tier, and its app free tier is public-images/non-commercial. Lanes 2–4 cover what it was for |
+| Refusals name the actual cause | 2026-08-02 | `get_screenshot` answered "is the canvas running?" for every failure including the ones where it was. The only consumer is an agent, and a causeless refusal is a dead end for it |
 | Defer code signing | 2026-07-28 | Not build-blocking. SignPath free for OSS; Windows is not $500 |
 
 ### Still open

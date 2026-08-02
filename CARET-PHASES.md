@@ -326,11 +326,6 @@ and asserts on disk and over HTTP: launch, MCP discovery file permissions, unaut
 cross-origin refusal, rules generation, user content surviving regeneration, watch-and-heal,
 codemod idempotence, provenance attribution, and honest no-agent refusal. 11/11 pass.
 
-**Bugs this found by driving the real app, not by unit tests:** `require()` in an ESM main
-bundle (the app would not boot at all); a `BaseWindow` chrome that no automation tool and no
-OS recognises as a window; a first launch that opened a blocking native folder dialog instead
-of the project picker that already existed; and `caret <path>` being ignored on first launch.
-
 **Deliverable:** Caret runs standalone, works with any MCP agent, and the agent always has the
 project's design foundations in context rather than guessing at them.
 
@@ -366,11 +361,121 @@ curated library rather than the agent's imagination. Engineering detail in
 **Deliverable:** a developer with no design vocabulary answers a few plain questions, picks
 from options that all look good, and lands on foundations worth protecting.
 
-**Bugs this found by driving the real app:** the MCP server answered the *first* request
-correctly and returned 500 to every request after it, forever — `StreamableHTTPServerTransport`
-in stateless mode is single-use and was being reused. Invisible until the certification made a
-second call. Also: a scenario that passed or failed depending on timing, because it read a file
-the tool had only just been asked to write.
+---
+
+## [ ] Phase 6.6: Assets — supply, tagging, and `@` references
+
+**Added 2026-08-02.** The design layer has type, colour, spacing, and (7.5) components. It has
+nothing for the actual *content*: the photograph in the hero, the logo, the product shot, the
+icon set, the background video. So an agent asked to build a landing page emits a grey
+placeholder `<div>` or a stock URL, and the user's own files have no way in at all.
+
+That is a supply gap of the same kind as typefaces, and it belongs **before** Phase 7: "make
+corrections stick" means little while the thing the user keeps correcting is *"you used a grey
+box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
+
+- [ ] `.caret/assets/` + `index.json` manifest — under git like the rest of the design layer.
+      Per entry: tag, file, kind, mime, intrinsic dimensions, bytes, content hash, alt text,
+      a one-line **character description**, and `origin` provenance.
+- [ ] **The description is the load-bearing field.** Dimensions do not tell an agent that a
+      photograph is dark, wide, and has empty space top-left — which is what decides whether
+      it can carry overlaid text. Written by the user, or proposed by the agent from the
+      pixels (it can see them; certified below).
+- [ ] Asset library surface in the chrome: drag-and-drop, paste, tag naming with validation
+      and dedupe by content hash, inline rename, delete with usage check
+- [ ] **The index goes in the always-on rules block** — tag · kind · dimensions · description.
+      An agent that must *choose* to call `list_assets` will not, and will emit a placeholder.
+      Same argument as the foundation tokens and the 7.5 catalog index. Pixels stay pull-only.
+- [ ] Vite serves `.caret/assets` at a stable path, so pages reference `/caret-assets/<file>`
+      and render in the canvas
+- [ ] `@` in the AI-edit box and the overlay editor: an asset picker with thumbnails. What is
+      sent to the agent is the **resolved entry expanded inline**, not the literal `@tag` —
+      passing a token and hoping the agent looks it up is the pull-tool failure mode again.
+- [ ] Fit is the agent's judgment, not a crop tool's: it has the asset's aspect ratio and the
+      target box geometry, so it picks cover/contain/focal point — and can **refuse**, which
+      matters more (a 400×400 asset in a 2400px hero should get a reason, not an upscale).
+- [ ] MCP: `list_assets`, `get_asset` (returns image content), `add_asset`, `describe_asset`
+- [ ] Watch-and-heal indexes assets written directly into `.caret/assets/` by any author —
+      dimensions probed, hash computed, tag derived from filename. Direct write stays a
+      supported path, exactly as it is for pages.
+- [ ] Sync copies referenced assets into the app's public directory and rewrites the path,
+      recording the copy in the mapping so Phase 9 can detect drift
+- [ ] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
+      stored, tagged, served, `@`-referenceable, synced. What differs is only the library
+      thumbnail: a frame for video, a rendered still for a model.
+- [ ] **Agent vision, certified.** The overlay editor and every "look at this and judge it"
+      interaction depend on the connected agent receiving real pixels, and emitting MCP `image`
+      content is not evidence that it does — the client decides what reaches the model. Fix
+      `get_screenshot` (it currently returns null whenever called) and certify it against a
+      real client: a random word present in the fixture only as character codes, agent allowed
+      no tool but `get_screenshot`. **This lands before any asset storage work.**
+
+**Deliverable:** the user's own assets are first-class citizens of the design layer, and
+`@hero-shot` means the same thing to a person, the visual editor, and any connected agent.
+
+---
+
+## [ ] Phase 6.7: Generated assets — guided generation, never a prompt box
+
+**Added 2026-08-02.** The other half of asset supply: the user has no photograph, no icon set,
+no texture, and stock imagery is its own kind of generic. Engineering detail in
+[CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.7.
+
+**The rule, and it is Phase 6.5's rule unchanged:** the user is never handed a prompt box. They
+answer questions about what they want; **Caret** composes the prompt from a curated recipe
+library; the model returns N variants; the user points at one. A prompt box hands the taste
+problem straight back to the person who does not have it, and "cinematic, 8k, hyperdetailed" is
+precisely what makes generated imagery legible as generated.
+
+- [ ] Curated **asset recipe library** (`src/core/design/asset-library/`), same shape as the
+      foundation library: id, name, "use when", kind, tags from the shared vocabulary,
+      composed-for aspect ratios, a prompt **template**, and an explicit `avoid` list of the
+      documented slop tells
+- [ ] **Recipes read `foundation.json`.** A project on `deep-technical` gets a dark, cool,
+      low-key image; one on `warm-earth` gets warm neutrals and no pure white. A generated
+      asset that fights the palette is worse than no asset — and this is the first place the
+      foundation *produces* something rather than merely describing it.
+- [ ] Reuse the 6.5 interview plumbing verbatim — `present_question` / `present_options`
+      already block on a human and already render specimens; here the specimens are pictures
+**Four lanes, by what the asset actually is. Only one of them costs money.**
+
+- [ ] **Raster → Google Gemini image ("Nano Banana").** One adapter over the `@google/genai`
+      SDK, two backends: **API key** is the shipped path; **Vertex AI with `gcloud` ADC** is a
+      test-only switch configured through env/prefs and absent from the UI. The SDK takes
+      Caret's proxy-aware `fetch`, and the adapter normalises the model ids that differ between
+      backends.
+- [ ] **Decorative vector → code, not a model.** Seeded parametric generators for grainy and
+      mesh gradients, grain and noise overlays, halftone and dither, geometric patterns,
+      organic shapes, section dividers and wordmark treatments. Free, instant, deterministic,
+      and **tunable after the fact** — a parameter set is diffable and correctable where a
+      4KB path string is neither. Variants cost an integer, so generate-and-pick is free here.
+- [ ] **Icons → curated open sets, installed.** Lucide, Phosphor, Radix, Heroicons. Generation
+      is the wrong tool for icons: a set's value is internal consistency, and one-shot
+      generation destroys it across stroke weight and corner treatment. Uses the 7.5 install
+      path, so icons land as editable source and recolour to foundation tokens.
+- [ ] **Logos and marks → agent-authored SVG in a render-compare loop.** The agent emits SVG,
+      Caret renders it in isolation and screenshots it, the agent sees its own output beside
+      the reference and corrects. The loop is the product, not the first emission — blind path
+      emission is the case where "models are bad at SVG" is actually true. Optionally seeded by
+      a deterministic raster trace, which gives structure to clean up instead of blank
+      coordinates.
+- [ ] **Transparency comes from the model, not a matting step.** Gemini returns transparent PNG
+      for icon-style prompts; code generators and authored SVG have no background to remove.
+      Where a genuine photographic cutout is needed, chroma-key against a flat background Caret
+      chose at generation time — deterministic, no model, no licence.
+- [ ] **BYO API key, OS keychain, never in `.caret/`.** This is the monetization boundary
+      already written down (§11): the local editor is free forever; hosted inference is the
+      paid side. Three of the four lanes need no key at all, so the phase is usable before any
+      account exists. A hosted "just make it" button is a Phase 12 revenue item, not a
+      dependency of this phase.
+- [ ] Post-process: resize to the composed-for ratios, emit `webp`/`avif` alongside, strip
+      EXIF, write through the 6.6 pipeline so a generated asset is an asset like any other
+- [ ] Provenance is complete and honest: model, recipe id, the answers given, the resolved
+      prompt, and cost — recorded in `index.json`, labelled in the UI, SynthID left intact
+
+**Deliverable:** a developer who cannot take a photograph or draw an icon still ships a landing
+page whose imagery matches its own foundations — without ever writing a prompt, and without
+needing an API key for anything but photographs.
 
 ---
 
@@ -411,7 +516,9 @@ Nothing in this phase is possible for a tool that regenerates from scratch each 
       focus/empty/error states (page-states metadata). Exposed as a `run_design_checks` MCP
       tool the rules files tell the agent to call before finishing, and surfaced on the canvas
       regardless of whether it does. The slop-tell list is versioned in `.caret/` and
-      extensible by captured corrections.
+      extensible by captured corrections. **Gains asset checks once 6.6 lands:** a placeholder
+      element where an asset was asked for, a missing `alt`, and an image whose intrinsic size
+      is wildly mismatched to its rendered box — all computable, all common.
 
 **Deliverable:** a correction made once is a correction the agent respects from then on.
 
@@ -555,17 +662,20 @@ beautiful gradient editor does not help someone who cannot choose a gradient.
 non-designer get a typeface, an asset and a composition that are not generic? Do not guess at
 the shape before that research lands.
 
-**Partly answered already:** the *component* half of supply is Phase 7.5 (the curated catalog),
-and foundations are Phase 6.5 (the interview). What remains gated is below.
+**Mostly answered already:** foundations are Phase 6.5 (the interview), the *component* half is
+Phase 7.5 (the curated catalog), and as of 2026-08-02 the *asset* half is Phases 6.6 and 6.7
+(the asset library and guided generation). What remains gated is below.
 
 Known sub-problems:
 
 - **Grounding** — reference designs the agent can consult. Replit bought this (Mobbin, 600k
-  screens, built in). Options: a curated open library, an MCP integration, or nothing.
+  screens, built in). Options: a curated open library, an MCP integration, or nothing. **This
+  is now the largest genuinely unanswered piece**, and the one the friction research is for.
 - **Generation** — grainy gradients, halftone treatments, split wordmarks. All are code, so
   Caret can own them outright and expose them as tunable parameters. **Largely superseded by
-  Phase 7.5**: integrating existing libraries is far cheaper than building these, and their
-  prop APIs already expose the parameters. What stays here is whatever the catalog can't cover.
+  Phase 7.5** (integrating existing libraries is far cheaper, and their prop APIs already
+  expose the parameters) **and by Phase 6.7** for anything raster or vector. What stays here
+  is whatever neither the catalog nor a generation recipe can cover.
 - **Typeface** — the highest-leverage single decision in every reference design reviewed, and
   the one a dev reliably gets wrong by defaulting to Inter. Licensing is the hard part.
 - **Composition recipes** — the reference footers shared one layout and differed only in skin.
