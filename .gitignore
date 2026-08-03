@@ -26,3 +26,6 @@ secrets.json
 .caret/.sync-pending.json
 .caret/.mcp.json
 .caret/.provenance.jsonl
+
+# Staged by build/before-pack.cjs — a 145MB platform binary, never committed.
+build/opencode/

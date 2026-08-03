@@ -11,7 +11,8 @@ that case.
 
 The connection details are **per project** and **change every time Caret starts**,
 so Caret generates the exact command or config file for you: open a project, click
-**Connect agent** in the top bar, pick your client, and copy what it shows.
+**Backend** in the top bar, open *Connect your own agent to this project*, pick your
+client, and copy what it shows.
 
 > **MCP is one-directional here.** An external agent can call into Caret; Caret
 > cannot push work out to it. Anything you start from Caret's own window runs on
@@ -147,7 +148,7 @@ are indexed automatically, and the library UI does the same thing.
 ## Troubleshooting
 
 **"Connection refused."** The port changed. Caret assigns a new one on every
-launch; re-copy the snippet from **Connect agent**.
+launch; re-copy the snippet from **Backend → Connect your own agent to this project**.
 
 **401 Unauthorized.** The token changed, same reason.
 

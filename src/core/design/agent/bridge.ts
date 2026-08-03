@@ -3,7 +3,7 @@
  *
  * Caret used to call `controller.initTask(prompt)` in four places — design→app
  * sync, visual AI edits, the overlay editor, and flow-restructure nav sync. Each
- * is now an outbound request on this interface.
+ * is an outbound request on this interface.
  *
  * **There is no MCP implementation of this, and there cannot be one.** MCP is
  * client-initiated: a server can hold a tool call open for minutes, but it
@@ -12,70 +12,94 @@
  * agent to collect and nothing ever collected them, so sync and visual edits
  * silently did nothing whenever an agent was connected — worse than refusing.
  *
- * Until the Phase 6.4 backend lands, the only implementation is `NullBridge`,
- * which refuses with a per-feature explanation. That is a supported state, not
- * an error path: running Caret without a backend is fine, and every feature that
- * needs one has to say so plainly rather than appearing to work.
+ * The implementation is now {@link BackendBridge}, which runs the task on the
+ * coding backend Caret owns and drives (`backend.ts`). {@link NullBridge}
+ * survives for the state where no backend is configured, which is supported: it
+ * refuses with a message naming the fix rather than appearing to work.
  */
+import { NoBackendError } from "./backend"
+import type { AgentConversation } from "./conversation"
+
 export type AgentTaskKind = "sync" | "visual-edit" | "flow-sync"
 
 export interface AgentTask {
 	kind: AgentTaskKind
 	/** The fully built prompt. Prompt construction stays in the design core. */
 	prompt: string
+	/** What the chat shows in place of the prompt — usually the user's own words. */
+	displayPrompt?: string
 	/** Data-URL images (overlay-editor screenshots). */
 	images?: string[]
 	/** Kind-specific structured context, echoed to the agent alongside the prompt. */
 	context?: Record<string, unknown>
+	/** Shown above the turn in the chat, in Caret's own voice. */
+	note?: string
 }
 
 export interface AgentBridge {
-	/** Whether an agent is currently connected and able to accept work. */
+	/** Whether a backend is configured and able to accept work. */
 	connected(): boolean
 	/**
-	 * Hands a task to the connected agent. Resolves once the task has been
-	 * *accepted* — not once the agent has finished it, which Caret cannot observe
-	 * for an agent it does not own.
+	 * Runs a task on the backend.
 	 *
-	 * Rejects with {@link NoAgentConnectedError} when nothing is connected.
+	 * Resolves when the turn **finishes**, not when it is accepted. That changed
+	 * with Phase 6.4: Caret owns the loop now, so it can tell the difference
+	 * between "handed off" and "done", and every caller would rather report the
+	 * second.
+	 *
+	 * Rejects with {@link NoBackendError} when nothing is configured.
 	 */
 	request(task: AgentTask): Promise<void>
 }
 
-export class NoAgentConnectedError extends Error {
-	constructor(kind: AgentTaskKind) {
-		super(NO_AGENT_MESSAGE[kind])
-		this.name = "NoAgentConnectedError"
-	}
-}
-
-/**
- * What the user sees when they ask for something that needs a backend.
- *
- * Phrased per feature, because "no agent connected" on its own does not tell
- * anyone what to do about it — and pointing at MCP would be actively wrong:
- * connecting an external agent over MCP does not enable any of these, because
- * MCP cannot carry work outwards. Until Phase 6.4 ships a backend these refuse
- * unconditionally, and saying so is the honest state.
- */
-const NO_AGENT_MESSAGE: Record<AgentTaskKind, string> = {
-	sync: "Syncing the design into your app needs Caret's coding backend, which isn't wired up yet. In the meantime, tell your own agent to sync — it can read the worklist over MCP.",
-	"visual-edit":
-		"Describing a change in words needs Caret's coding backend, which isn't wired up yet. Direct edits — text, colour, images — keep working without it.",
-	"flow-sync":
-		"Updating page navigation to match the flow needs Caret's coding backend, which isn't wired up yet. The flow file itself has been updated either way.",
-}
-
-/** Refuses every request, with an explanation. The only implementation until Phase 6.4. */
+/** Refuses every request, with an explanation. Used when no backend is set up. */
 export class NullBridge implements AgentBridge {
 	connected(): boolean {
 		return false
 	}
 
 	async request(task: AgentTask): Promise<void> {
-		throw new NoAgentConnectedError(task.kind)
+		throw new NoBackendError(task.kind === "sync" ? "sync" : task.kind === "flow-sync" ? "flow-sync" : "visual-edit")
 	}
 }
 
-// Bridges are looked up per project — see `services.ts`. Each open project has
-// its own MCP server, so each has its own agent connection state.
+const TITLES: Record<AgentTaskKind, string> = {
+	sync: "Sync design → app",
+	"visual-edit": "Edit",
+	"flow-sync": "Update navigation",
+}
+
+/**
+ * Runs outbound tasks on the project's own conversation, so everything Caret
+ * starts appears in the same chat the user can read, stop and answer.
+ */
+export class BackendBridge implements AgentBridge {
+	constructor(
+		private readonly conversation: AgentConversation,
+		private readonly isReady: () => boolean,
+	) {}
+
+	connected(): boolean {
+		return this.isReady()
+	}
+
+	async request(task: AgentTask): Promise<void> {
+		const outcome = await this.conversation.run({
+			kind: task.kind === "sync" ? "sync-apply" : task.kind === "flow-sync" ? "flow-sync" : "edit",
+			title: TITLES[task.kind],
+			// Sync's plan phase runs through the sync orchestrator, which starts its
+			// own read-only session. Anything arriving here is meant to write.
+			mode: "write",
+			prompt: task.prompt,
+			displayPrompt: task.displayPrompt,
+			images: task.images,
+			note: task.note,
+		})
+
+		if (!outcome.ok) {
+			throw new Error("The agent could not finish that — see the chat for what it said.")
+		}
+	}
+}
+
+// Bridges are looked up per project — see `services.ts`.

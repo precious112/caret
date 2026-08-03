@@ -9,8 +9,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ProjectState } from "../../shared/ipc"
 import { invoke, on } from "./ipc"
-import { AgentPanel } from "./views/AgentPanel"
 import { AssetsView } from "./views/AssetsView"
+import { BackendPanel } from "./views/BackendPanel"
+import { CHAT_SIDEBAR_WIDTH, ChatSidebar } from "./views/ChatSidebar"
 import { FoundationView } from "./views/FoundationView"
 import { NotificationStack } from "./views/NotificationStack"
 import { ProjectPicker } from "./views/ProjectPicker"
@@ -22,6 +23,7 @@ export type Surface = "canvas" | "foundation" | "agent" | "assets"
 export function App() {
 	const [project, setProject] = useState<ProjectState | null>(null)
 	const [surface, setSurface] = useState<Surface>("canvas")
+	const [chatOpen, setChatOpen] = useState(false)
 	/**
 	 * True while an agent is blocked on a question. Nothing may navigate away
 	 * from the foundation surface until it is answered — the token editor closes
@@ -52,13 +54,19 @@ export function App() {
 		const element = topBarRef.current
 		if (!element) return
 
-		const report = () => invoke("canvas:setBounds", project.path, element.getBoundingClientRect().height)
+		const report = () =>
+			invoke("canvas:setBounds", project.path, {
+				top: element.getBoundingClientRect().height,
+				// The sidebar is a real DOM element beside the canvas view, so main
+				// has to narrow the view by exactly its width or the two overlap.
+				right: chatOpen ? CHAT_SIDEBAR_WIDTH : 0,
+			})
 		report()
 
 		const observer = new ResizeObserver(report)
 		observer.observe(element)
 		return () => observer.disconnect()
-	}, [project])
+	}, [project, chatOpen])
 
 	useEffect(() => {
 		if (project) invoke("canvas:setVisible", project.path, surface === "canvas")
@@ -127,17 +135,36 @@ export function App() {
 		// navigation, and without it that divergence shows up only as a selector
 		// that never appears.
 		<div className="flex h-full flex-col" data-surface={surface} data-testid="app-shell">
-			<TopBar onSurfaceChange={requestSurface} project={project} ref={topBarRef} surface={surface} />
+			<TopBar
+				chatOpen={chatOpen}
+				onSurfaceChange={requestSurface}
+				onToggleChat={() => setChatOpen((open) => !open)}
+				project={project}
+				ref={topBarRef}
+				surface={surface}
+			/>
 
-			{surface === "foundation" && (
-				<FoundationView
-					onDone={() => requestSurface("canvas")}
-					onInterviewAnswered={() => markInterviewPending(false)}
-					project={project}
-				/>
-			)}
-			{surface === "agent" && <AgentPanel onClose={() => requestSurface("canvas")} project={project} />}
-			{surface === "assets" && <AssetsView onClose={() => requestSurface("canvas")} project={project} />}
+			<div className="flex min-h-0 flex-1">
+				<div className="flex min-w-0 flex-1 flex-col">
+					{surface === "foundation" && (
+						<FoundationView
+							onDone={() => requestSurface("canvas")}
+							onInterviewAnswered={() => markInterviewPending(false)}
+							project={project}
+						/>
+					)}
+					{surface === "agent" && <BackendPanel onClose={() => requestSurface("canvas")} project={project} />}
+					{surface === "assets" && <AssetsView onClose={() => requestSurface("canvas")} project={project} />}
+				</div>
+
+				{chatOpen && (
+					<ChatSidebar
+						onClose={() => setChatOpen(false)}
+						onOpenBackendSetup={() => requestSurface("agent")}
+						project={project}
+					/>
+				)}
+			</div>
 
 			<NotificationStack />
 		</div>

@@ -24,6 +24,16 @@ export interface Prefs {
 	lastSession: string[]
 	/** Set once the first-run onboarding has been completed. */
 	onboardingCompleted: boolean
+	/** Which coding backend Caret drives. Null until the user picks one. */
+	backendId: "opencode" | "claude" | "codex" | "kimi" | null
+	/** Model in the backend's own namespace, e.g. `anthropic/claude-sonnet-5`. Empty = its default. */
+	backendModel: string
+	/**
+	 * Projects where the user chose "don't ask again" for writes to their app's
+	 * own source. Per project rather than global: consent to rewrite one repo is
+	 * not consent to rewrite the next one.
+	 */
+	appWritesAllowed: string[]
 }
 
 const DEFAULTS: Prefs = {
@@ -33,6 +43,9 @@ const DEFAULTS: Prefs = {
 	autoCommitDesign: true,
 	lastSession: [],
 	onboardingCompleted: false,
+	backendId: null,
+	backendModel: "",
+	appWritesAllowed: [],
 }
 
 const MAX_RECENTS = 12

@@ -15,7 +15,6 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http"
 import type { AddressInfo } from "net"
 
-import { NullBridge, setProjectBridge } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import type { ScreenshotResult } from "../types"
@@ -83,18 +82,18 @@ export class CaretMcpServer {
 			startedAt: new Date().toISOString(),
 		})
 
-		// Until an agent actually talks to us, every feature that needs one must
-		// refuse honestly rather than appear to work.
-		setProjectBridge(this.options.projectPath, new NullBridge())
-
 		Logger.info(`[mcp] serving ${this.options.projectPath} on ${this.getUrl()}`)
 	}
 
 	async stop(): Promise<void> {
 		// Any tool call still waiting on the user would otherwise hang against a
 		// window that no longer exists.
+		//
+		// This used to also install a `NullBridge`, from when MCP was expected to
+		// carry outbound work. It cannot, and the bridge now belongs to the coding
+		// backend — so an MCP server starting or stopping quietly replaced a
+		// working backend with one that refuses everything.
 		cancelInterviewPrompts()
-		setProjectBridge(this.options.projectPath, new NullBridge())
 		await clearDiscovery(this.options.projectPath)
 		await new Promise<void>((resolve) => {
 			if (!this.http) return resolve()

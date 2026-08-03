@@ -27,6 +27,17 @@ import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
 const KEEP = process.argv.includes("--keep")
 const SHOTS = path.resolve("release/verify-shots")
 
+/**
+ * A model that costs nothing.
+ *
+ * The bundled backend reaches OpenCode Zen's free tier with no credentials, so
+ * the scenarios that need real inference run on a clean machine and in CI
+ * without anyone's subscription. Pinned rather than left to the default because
+ * the default is a reasoning model, and reasoning models are slow at
+ * "replace this word".
+ */
+const FREE_MODEL = "opencode/ling-3.0-flash-free"
+
 interface ScenarioResult {
 	name: string
 	passed: boolean
@@ -36,6 +47,7 @@ interface ScenarioResult {
 const results: ScenarioResult[] = []
 let app: ElectronApplication | null = null
 let fixture = ""
+let userData = ""
 
 function log(message: string): void {
 	console.log(`[verify-app] ${message}`)
@@ -84,6 +96,23 @@ const PAGE_SOURCE = `export default function Home() {
     <div className="min-h-screen bg-zinc-950 p-12">
       <h1 data-caret-id="hero-title" className="text-5xl font-bold text-white">Welcome</h1>
       <p data-caret-id="hero-subtitle" className="mt-4 text-lg text-zinc-400">Built with Caret</p>
+    </div>
+  )
+}
+`
+
+/**
+ * The fixture's "app" — the thing a sync translates *into*.
+ *
+ * Deliberately a near-copy of the design page, so the one assertion that matters
+ * (did the app follow the design) does not depend on a small free model being
+ * good at architecture.
+ */
+const APP_SOURCE = `export default function App() {
+  return (
+    <div className="min-h-screen bg-zinc-950 p-12">
+      <h1 className="text-5xl font-bold text-white">Welcome</h1>
+      <p className="mt-4 text-lg text-zinc-400">Built with Caret</p>
     </div>
   )
 }
@@ -166,6 +195,9 @@ async function buildFixture(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-app-"))
 	await ensureCaretDirectoryExists(dir)
 
+	await fs.mkdir(path.join(dir, "src"), { recursive: true })
+	await fs.writeFile(path.join(dir, "src", "App.tsx"), APP_SOURCE)
+
 	const pageDir = path.join(dir, ".caret", "pages", "home")
 	await fs.mkdir(pageDir, { recursive: true })
 	await fs.writeFile(path.join(pageDir, "index.tsx"), PAGE_SOURCE)
@@ -184,6 +216,19 @@ async function buildFixture(): Promise<string> {
 	git('commit -q -m "fixture" --no-verify')
 
 	return dir
+}
+
+/** Every file under `directory`, concatenated — a whole-tree fingerprint. */
+async function readTree(directory: string): Promise<string> {
+	const entries = await fs.readdir(directory, { withFileTypes: true, recursive: true })
+	const files = entries.filter((entry) => entry.isFile()).sort((a, b) => (a.name < b.name ? -1 : 1))
+	const parts = await Promise.all(
+		files.map(async (entry) => {
+			const full = path.join(entry.parentPath ?? directory, entry.name)
+			return `${full}\n${await fs.readFile(full, "utf-8").catch(() => "")}`
+		}),
+	)
+	return parts.join("\n")
 }
 
 /** Reads the per-project MCP discovery file the app writes on open. */
@@ -234,10 +279,26 @@ async function main(): Promise<void> {
 	fixture = await buildFixture()
 	log(`fixture at ${fixture}`)
 
+	// A throwaway profile. Without it the run reads and writes the developer's own
+	// preferences, so "cold launch with no backend configured" would be true only
+	// on a machine that had never configured one — and selecting a backend here
+	// would silently change theirs.
+	userData = await fs.mkdtemp(path.join(os.tmpdir(), "caret-profile-"))
+
 	app = await electron.launch({
-		args: [path.resolve("out/main/index.js"), fixture],
+		args: [path.resolve("out/main/index.js"), `--user-data-dir=${userData}`, fixture],
 		env: { ...process.env, CARET_VERIFY_PROJECT: fixture, NODE_ENV: "test" },
 	})
+
+	// Main-process output, kept.
+	//
+	// Playwright reports a dead app as "target page, context or browser has been
+	// closed" and says nothing about why — which turns a crash into a mystery. The
+	// reason is always in main's own log.
+	await fs.mkdir(SHOTS, { recursive: true })
+	const mainLog = await fs.open(path.join(SHOTS, "main.log"), "w")
+	app.process().stdout?.on("data", (chunk) => void mainLog.write(chunk))
+	app.process().stderr?.on("data", (chunk) => void mainLog.write(chunk))
 
 	await scenario("a. app launches and the window is named after the project", async () => {
 		const window = await app!.firstWindow({ timeout: 60_000 })
@@ -887,7 +948,7 @@ async function main(): Promise<void> {
 	})
 
 	await scenario("aa. the asset library renders, previews and writes a description", async () => {
-		await chrome.getByTestId("top-bar").getByText("Assets").click()
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Assets" }).click()
 
 		const surface = await waitFor(
 			"the shell to show the assets surface",
@@ -1017,6 +1078,152 @@ async function main(): Promise<void> {
 		assert(!/agent settings/i.test(result.message), "the refusal still points at MCP, which cannot carry outbound work")
 		return `refused with: "${result.message.slice(0, 60)}…"`
 	})
+
+	// ── the coding backend ────────────────────────────────────────────────────
+	//
+	// Everything below is click-only from a profile that has never configured a
+	// backend, and everything below spends real inference on a real model. These
+	// are the scenarios that say whether "clicking things in Caret causes an agent
+	// to do them" is true.
+
+	await scenario("cc. with no backend, the chat refuses and names the fix", async () => {
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Chat" }).click()
+		await chrome.waitForSelector('[data-testid="chat-no-backend"]', { timeout: 20_000 })
+
+		const refusal = await chrome.textContent('[data-testid="chat-no-backend"]')
+		assert(refusal?.includes("backend"), `the refusal does not name what is missing: ${refusal}`)
+		// Naming the fix is the whole point: "no backend" alone tells nobody what
+		// to do about it.
+		assert(/Settings.*Backend/.test(refusal ?? ""), `the refusal does not say where to go: ${refusal}`)
+		assert(await chrome.getByTestId("chat-input").isDisabled(), "the input is enabled with nothing behind it")
+
+		await shot(chrome, "10-chat-no-backend")
+		return `refused with: "${refusal?.trim().slice(0, 60)}…"`
+	})
+
+	await scenario("dd. the bundled backend is found and choosing it makes the chat usable", async () => {
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
+		await chrome.waitForSelector('[data-testid="backend-opencode"]', { timeout: 90_000 })
+
+		const row = chrome.getByTestId("backend-opencode")
+		await waitFor(
+			"the bundled backend to report ready",
+			async () => ((await row.textContent())?.includes("ready") ? true : null),
+			90_000,
+		)
+
+		await shot(chrome, "11-backend-setup")
+		await row.getByRole("button", { name: "Use this" }).click()
+
+		// Pins the model for the rest of the run, through the same field a user
+		// would type in. Left empty the backend defaults to a reasoning model,
+		// which is slow at "replace this word" and makes the scenarios below
+		// measure the wrong thing.
+		await chrome.getByTestId("backend-model").fill(FREE_MODEL)
+		await chrome.getByTestId("backend-model").blur()
+
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
+		await waitFor(
+			"the chat to become usable",
+			async () => ((await chrome.getByTestId("chat-input").isDisabled()) ? null : true),
+			30_000,
+		)
+
+		return `bundled backend selected, chat enabled, model ${FREE_MODEL}`
+	})
+
+	await scenario("ee. an instruction typed in the chat rewrites the design source to exactly that", async () => {
+		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
+
+		await chrome
+			.getByTestId("chat-input")
+			.fill(
+				'In .caret/pages/home/index.tsx, change the paragraph text "Built with Caret" to exactly "Certified by Caret". Change nothing else.',
+			)
+		await chrome.getByTestId("chat-send").click()
+
+		await waitFor(
+			"the design source to change",
+			async () => ((await fs.readFile(pagePath, "utf-8")).includes("Certified by Caret") ? true : null),
+			300_000,
+		)
+
+		await shot(chrome, "12-chat-edit")
+
+		// The decisive half: Caret answered the permission itself. A `.caret/` write
+		// is auto-approved by fixed policy, and the transcript has to say so —
+		// a silent auto-approval is indistinguishable from an agent nobody checked.
+		const resolved = await chrome.getByTestId("chat-permission-resolved").first().textContent()
+		assert(resolved?.includes("Allowed"), `the write was not recorded as allowed: ${resolved}`)
+		assert(resolved?.includes("design layer"), `the transcript does not say why Caret allowed it without asking: ${resolved}`)
+		return `page rewritten; permission auto-answered ("${resolved?.trim().slice(0, 60)}…")`
+	})
+
+	await scenario("ff. sync plans first, writes nothing until Apply, then advances the bookmark", async () => {
+		const syncStatePath = path.join(fixture, ".caret", "sync-state.json")
+
+		// A design change the app does not have yet. Deliberately a single word:
+		// what is being certified is the loop, not the model's judgment.
+		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
+		const page = await fs.readFile(pagePath, "utf-8")
+		await fs.writeFile(pagePath, page.replace(">Welcome<", ">Zephyr<"))
+
+		const snapshotBefore = readTree(path.join(fixture, "src"))
+
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Sync" }).click()
+
+		// The preflight offers to commit the design layer first. That prompt is part
+		// of the flow a user walks, so it is clicked rather than pre-empted.
+		const commit = chrome.getByTestId("notification-stack").getByRole("button", { name: "Commit .caret/ changes" })
+		await commit.waitFor({ timeout: 60_000 })
+		await commit.click()
+
+		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 })
+		await shot(chrome, "13-sync-plan")
+
+		// The guarantee, checked at the only moment it can be: a read-only plan has
+		// run to completion and the app is still byte-for-byte what it was. The
+		// whole tree, not one file — a plan that created `src/pages/` would have
+		// slipped past a single-file check.
+		assert(
+			(await readTree(path.join(fixture, "src"))) === (await snapshotBefore),
+			"the plan phase wrote to the app — the read-only boundary did not hold",
+		)
+
+		await chrome.getByTestId("chat-approval").getByRole("button", { name: "Apply" }).click()
+
+		// Applying is where writes to the user's *own* source happen, and those ask
+		// by default — accepting a plan is not the same as consenting to each file.
+		// So the prompts have to be answered, exactly as a user would.
+		let allowed = 0
+		const bookmark = await waitFor(
+			"the sync bookmark to advance",
+			async () => {
+				const allow = chrome.getByTestId("chat-permission-allow")
+				if (await allow.count()) {
+					await allow
+						.first()
+						.click()
+						.catch(() => {})
+					allowed += 1
+				}
+
+				const raw = await fs.readFile(syncStatePath, "utf-8").catch(() => null)
+				const state = raw ? (JSON.parse(raw) as { lastSyncedCommit?: string | null }) : null
+				return state?.lastSyncedCommit ?? null
+			},
+			420_000,
+		)
+
+		await shot(chrome, "14-sync-applied")
+
+		// Anywhere under `src/`. A good sync is allowed to restructure — this one
+		// split two design pages into a router and page components — so pinning the
+		// assertion to `App.tsx` would fail the correct outcome.
+		const applied = await readTree(path.join(fixture, "src"))
+		assert(applied.includes("Zephyr"), `the app did not follow the design:\n${applied.slice(0, 1500)}`)
+		return `app updated after ${allowed} allowed write(s), bookmark at ${bookmark.slice(0, 8)}`
+	})
 }
 
 async function cleanup(): Promise<void> {
@@ -1026,6 +1233,7 @@ async function cleanup(): Promise<void> {
 	} else if (fixture) {
 		log(`fixture kept at ${fixture}`)
 	}
+	if (userData && !KEEP) await fs.rm(userData, { recursive: true, force: true }).catch(() => {})
 }
 
 main()

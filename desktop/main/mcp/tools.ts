@@ -395,7 +395,7 @@ export const TOOLS: ToolDefinition[] = [
 		title: "Update foundation tokens",
 		description:
 			"Replaces the foundation tokens and regenerates the rules files every agent reads. Changing these changes how everything in the project looks, so make the change the user asked for and nothing else.",
-		inputSchema: { tokens: z.record(z.unknown()).describe("A complete FoundationTokens object") },
+		inputSchema: { tokens: z.record(z.string(), z.unknown()).describe("A complete FoundationTokens object") },
 		async handler(ctx, args: { tokens: Record<string, unknown> }) {
 			if (!validateFoundationTokens(args.tokens)) {
 				return fail("Invalid foundation tokens — expected the full { vibe, color, typography, spacing, radius } shape.")

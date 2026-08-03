@@ -14,14 +14,17 @@ import {
 	ASSET_TYPES,
 	assetsDirectory,
 	assetUrl,
+	type BackendId,
 	completeSync,
 	describeAsset,
 	type FoundationTokens,
 	findAsset,
 	fullLibrary,
 	generateTokenScale,
+	getBackend,
 	LARGE_ASSET_BYTES,
 	listPages,
+	probeBackends,
 	readAssetIndex,
 	readFoundationTokens,
 	reindexAssets,
@@ -35,7 +38,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
-import { forgetRecentProject, getPrefs, setPrefs } from "./prefs"
+import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import type { DesignInboundMessage } from "./types"
 import type { WindowManager } from "./window-manager"
@@ -239,6 +242,65 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return buildAgentClientConfigs(projectPath, mcp.getUrl(), mcp.getToken())
 	})
 
+	// ── the coding backend ────────────────────────────────────────────────────
+
+	ipcMain.handle("agent:state", (_event, projectPath: string) => {
+		return windows.get(projectPath)?.getAgent().conversation.getState() ?? null
+	})
+
+	/**
+	 * Fire-and-forget: a turn runs for minutes and streams its progress over
+	 * `agent:state`. Making the renderer await it would hang the invoke channel
+	 * for the whole turn and give it nothing the event stream has not already
+	 * delivered.
+	 */
+	ipcMain.handle("agent:send", (_event, projectPath: string, text: string) => {
+		const agent = windows.get(projectPath)?.getAgent()
+		if (!agent) return
+		void agent.conversation.sendMessage(text).catch((err) => {
+			agent.conversation.note(err instanceof Error ? err.message : String(err))
+		})
+	})
+
+	ipcMain.handle("agent:abort", async (_event, projectPath: string) => {
+		await windows.get(projectPath)?.getAgent().conversation.abort()
+	})
+
+	ipcMain.handle(
+		"agent:permission",
+		async (_event, projectPath: string, requestId: string, decision: "allow" | "deny" | "allow-always") => {
+			await windows.get(projectPath)?.getAgent().conversation.respondToPermission(requestId, decision)
+		},
+	)
+
+	ipcMain.handle("agent:approval", (_event, projectPath: string, id: string, ok: boolean) => {
+		windows.get(projectPath)?.getAgent().conversation.respondToApproval(id, ok)
+	})
+
+	ipcMain.handle("agent:reset", (_event, projectPath: string) => {
+		windows.get(projectPath)?.getAgent().conversation.reset()
+	})
+
+	ipcMain.handle("agent:backends", () => probeBackends())
+
+	ipcMain.handle("agent:selectBackend", async (_event, id: BackendId | null) => {
+		await setPref("backendId", id)
+		// Every open project re-resolves, so a backend chosen in one window stops
+		// the other windows refusing too.
+		await Promise.all(windows.list().map((window) => window.getAgent().conversation.refreshBackend()))
+	})
+
+	ipcMain.handle("agent:sessions", async (_event, projectPath: string) => {
+		const id = getPrefs().backendId
+		if (!id) return []
+		const backend = getBackend(id)
+		return (await backend.listSessions?.(projectPath).catch(() => [])) ?? []
+	})
+
+	ipcMain.handle("agent:replay", async (_event, projectPath: string, sessionId: string) => {
+		return (await windows.get(projectPath)?.getAgent().conversation.replay(sessionId)) ?? false
+	})
+
 	// ── preferences ───────────────────────────────────────────────────────────
 
 	ipcMain.handle("prefs:get", () => getPrefs())
@@ -253,8 +315,8 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		await windows.get(projectPath)?.handleCanvasMessage(message)
 	})
 
-	ipcMain.handle("canvas:setBounds", (_event, projectPath: string, inset: number) => {
-		windows.get(projectPath)?.setChromeInset(inset)
+	ipcMain.handle("canvas:setBounds", (_event, projectPath: string, insets: { top: number; right: number }) => {
+		windows.get(projectPath)?.setChromeInsets(insets)
 	})
 
 	ipcMain.handle("canvas:setVisible", (_event, projectPath: string, visible: boolean) => {

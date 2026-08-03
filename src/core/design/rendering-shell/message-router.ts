@@ -10,7 +10,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
-import { type AgentTask, NoAgentConnectedError } from "../agent/bridge"
+import type { AgentTask } from "../agent/bridge"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
 import { bridgeFor, hostFor } from "../services"
@@ -56,7 +56,7 @@ async function requestAgent(workspacePath: string, task: AgentTask): Promise<boo
 		await bridgeFor(workspacePath).request(task)
 		return true
 	} catch (err) {
-		const message = err instanceof NoAgentConnectedError ? err.message : err instanceof Error ? err.message : String(err)
+		const message = err instanceof Error ? err.message : String(err)
 		Logger.warn(`[design] agent request (${task.kind}) refused: ${message}`)
 		sendEditResult(workspacePath, { success: false, error: message })
 		return false
@@ -170,6 +170,7 @@ async function handleAiEdit(payload: AiEditRequestPayload, workspacePath: string
 			await requestAgent(workspacePath, {
 				kind: "visual-edit",
 				prompt,
+				displayPrompt: payload.instruction,
 				context: { filePath: payload.filePath, caretId: payload.caretId },
 			})
 		) {
@@ -199,7 +200,13 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 		)
 		const images = payload.screenshotDataUrl ? [payload.screenshotDataUrl] : undefined
 		if (
-			await requestAgent(workspacePath, { kind: "visual-edit", prompt, images, context: { region: payload.regionBounds } })
+			await requestAgent(workspacePath, {
+				kind: "visual-edit",
+				prompt,
+				displayPrompt: payload.instruction,
+				images,
+				context: { region: payload.regionBounds },
+			})
 		) {
 			sendEditResult(workspacePath, { success: true })
 		}

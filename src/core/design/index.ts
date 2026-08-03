@@ -1,10 +1,38 @@
 export {
+	type AvailabilityReport,
+	BackendError,
+	type BackendEvent,
+	type BackendFeature,
+	type BackendId,
+	type BackendSession,
+	type CodingBackend,
+	NoBackendError,
+	type SessionMode,
+	StructuredOutputError,
+	type StructuredRequest,
+	type StructuredResult,
+} from "./agent/backend"
+export {
 	type AgentBridge,
 	type AgentTask,
 	type AgentTaskKind,
-	NoAgentConnectedError,
+	BackendBridge,
 	NullBridge,
 } from "./agent/bridge"
+export {
+	type Activity,
+	type ActivityKind,
+	AgentConversation,
+	type ConversationDeps,
+	type ConversationState,
+	type PendingApproval,
+	type RunOutcome,
+	type RunRequest,
+} from "./agent/conversation"
+export { setBundledBackendDirectory } from "./agent/opencode/binary"
+export { type AppWritePolicy, classify, type PermissionRuling, rulePermission } from "./agent/permissions"
+export { BACKEND_IDS, disposeBackends, getBackend, probeBackends } from "./agent/registry"
+export type { TranscriptEntry, TranscriptState } from "./agent/transcript"
 export {
 	ASSET_TYPES,
 	ASSETS_DIR,
@@ -68,10 +96,12 @@ export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-sh
 export { caretDirectoryExists, ensureCaretDirectoryExists, ensureCaretGitignore } from "./scaffold"
 export {
 	bridgeFor,
+	conversationFor,
 	hostFor,
 	type ProjectServices,
 	registerProjectServices,
 	setProjectBridge,
+	setProjectConversation,
 	unregisterProjectServices,
 } from "./services"
 export { DesignSession, type DesignSessionOptions } from "./session"

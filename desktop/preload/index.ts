@@ -10,70 +10,81 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { CaretBridge, IpcEventChannel, IpcRequestChannel } from "../shared/ipc"
 
 /**
- * Channels the renderer may call. An allowlist rather than a passthrough,
- * because the renderer is where a compromised dependency would land first and
- * main can touch the filesystem and spawn processes.
- */
-const REQUEST_CHANNELS: readonly IpcRequestChannel[] = [
-	"project:pickFolder",
-	"project:open",
-	"project:close",
-	"project:recents",
-	"project:forgetRecent",
-	"project:state",
-	"tokens:read",
-	"tokens:write",
-	"tokens:generateScale",
-	"fonts:search",
-	"pages:list",
-	"assets:list",
-	"assets:add",
-	"assets:retag",
-	"assets:describe",
-	"assets:remove",
-	"assets:pickFiles",
-	"sync:now",
-	"sync:rollback",
-	"sync:markSynced",
-	"agent:clientConfigs",
-	"prefs:get",
-	"prefs:set",
-	"canvas:message",
-	"canvas:setBounds",
-	"canvas:setVisible",
-	"notification:respond",
-	"interview:respond",
-	"interview:library",
-	"interview:pending",
-]
-
-/**
- * Event channels the renderer may subscribe to.
+ * The allowlists, written as **exhaustive maps** rather than arrays.
  *
- * Adding a channel to `IpcEvents` is not enough — this list is the allowlist and
- * `on()` **throws** for anything absent from it. A throw inside a component's
- * effect unmounts the entire React tree, so a channel added to the types and
- * forgotten here does not degrade, it blanks the window.
+ * An allowlist, because the renderer is where a compromised dependency lands
+ * first and main can touch the filesystem and spawn processes. A map keyed by
+ * the channel union, because an array literal cannot be checked for
+ * completeness: a channel added to `IpcEvents` and forgotten here used to
+ * compile, ship, and then **blank the window** — `on()` throws, the throw
+ * happens inside a component effect, and React unmounts the whole tree. Now the
+ * same omission is a type error in `npm run check-types`.
+ *
+ * Set a channel to `false` to deliberately withhold it from the renderer.
  */
-const EVENT_CHANNELS: readonly IpcEventChannel[] = [
-	"project:stateChanged",
-	"canvas:message",
-	"notification:show",
-	"interview:prompt",
-	"assets:changed",
-	"log",
-]
+const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
+	"project:pickFolder": true,
+	"project:open": true,
+	"project:close": true,
+	"project:recents": true,
+	"project:forgetRecent": true,
+	"project:state": true,
+	"tokens:read": true,
+	"tokens:write": true,
+	"tokens:generateScale": true,
+	"fonts:search": true,
+	"pages:list": true,
+	"assets:list": true,
+	"assets:add": true,
+	"assets:retag": true,
+	"assets:describe": true,
+	"assets:remove": true,
+	"assets:pickFiles": true,
+	"sync:now": true,
+	"sync:rollback": true,
+	"sync:markSynced": true,
+	"agent:clientConfigs": true,
+	"agent:state": true,
+	"agent:send": true,
+	"agent:abort": true,
+	"agent:permission": true,
+	"agent:approval": true,
+	"agent:reset": true,
+	"agent:backends": true,
+	"agent:selectBackend": true,
+	"agent:sessions": true,
+	"agent:replay": true,
+	"prefs:get": true,
+	"prefs:set": true,
+	"canvas:message": true,
+	"canvas:setBounds": true,
+	"canvas:setVisible": true,
+	"notification:respond": true,
+	"interview:respond": true,
+	"interview:library": true,
+	"interview:pending": true,
+}
+
+const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {
+	"project:stateChanged": true,
+	"canvas:message": true,
+	"notification:show": true,
+	"interview:prompt": true,
+	"assets:changed": true,
+	"agent:state": true,
+	log: true,
+}
 
 const bridge: CaretBridge = {
 	invoke(channel, ...args) {
-		if (!REQUEST_CHANNELS.includes(channel)) {
+		if (!REQUEST_CHANNELS[channel]) {
 			return Promise.reject(new Error(`Unknown IPC channel: ${channel}`))
 		}
 		return ipcRenderer.invoke(channel, ...args) as any
 	},
 
 	on(channel, listener) {
-		if (!EVENT_CHANNELS.includes(channel)) {
+		if (!EVENT_CHANNELS[channel]) {
 			throw new Error(`Unknown IPC event channel: ${channel}`)
 		}
 		const wrapped = (_event: unknown, ...args: unknown[]) => (listener as (...a: unknown[]) => void)(...args)

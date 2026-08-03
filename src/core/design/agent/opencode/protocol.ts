@@ -1,0 +1,138 @@
+/**
+ * The OpenCode server's wire shapes, pinned from the running binary.
+ *
+ * These were read off `GET /doc` on the pinned server (see
+ * {@link PINNED_OPENCODE_VERSION}), **not** from `@opencode-ai/sdk`. That is
+ * deliberate. The published SDK at the identical version number disagrees with
+ * the binary it ships beside: the server emits `permission.asked` /
+ * `permission.replied` where the SDK's generated types declare
+ * `permission.updated`, and the SDK's prompt body has no `format` field even
+ * though the route accepts one. Generating a client off the live document and
+ * transcribing the parts Caret uses keeps one source of truth — the server that
+ * is actually running — instead of two that drift.
+ *
+ * The SDK's server launcher is unusable here regardless: it spawns `opencode`
+ * from `PATH`, which is the one thing this phase forbids.
+ *
+ * Only the fields Caret reads are declared. Everything else is passed through
+ * untouched or ignored.
+ */
+
+/** `POST /session` */
+export interface OpencodeSession {
+	id: string
+	title?: string
+	time?: { created: number; updated: number }
+}
+
+export type OpencodeToolStatus = "pending" | "running" | "completed" | "error"
+
+export interface OpencodeToolState {
+	status: OpencodeToolStatus
+	input?: Record<string, unknown>
+	output?: string
+	error?: string
+	title?: string
+	metadata?: Record<string, unknown>
+}
+
+export type OpencodePart =
+	| { type: "text"; id: string; messageID: string; text: string; synthetic?: boolean }
+	| { type: "reasoning"; id: string; messageID: string; text: string }
+	| { type: "tool"; id: string; messageID: string; tool: string; callID: string; state: OpencodeToolState }
+	| { type: "step-finish"; id: string; messageID: string; cost?: number; tokens?: OpencodeTokens }
+	| { type: string; id: string; messageID: string; [key: string]: unknown }
+
+export interface OpencodeTokens {
+	input?: number
+	output?: number
+	reasoning?: number
+	total?: number
+	cache?: { read?: number; write?: number }
+}
+
+export interface OpencodeAssistantMessage {
+	id: string
+	sessionID: string
+	role: "assistant"
+	cost?: number
+	tokens?: OpencodeTokens
+	error?: { name: string; data?: { message?: string } }
+}
+
+/** `POST /session/{id}/message` */
+export interface OpencodePromptResponse {
+	info: OpencodeAssistantMessage
+	parts: OpencodePart[]
+}
+
+/**
+ * `GET /event` (SSE).
+ *
+ * The union below is only the members Caret maps onto a {@link BackendEvent};
+ * the server emits ~90 types and the rest are dropped on purpose.
+ */
+export type OpencodeEvent =
+	| { type: "message.part.updated"; properties: { sessionID: string; part: OpencodePart } }
+	| { type: "message.part.delta"; properties: { sessionID: string; partID: string; field: string; delta: string } }
+	| { type: "session.idle"; properties: { sessionID: string } }
+	| { type: "session.error"; properties: { sessionID?: string; error?: { name?: string; data?: { message?: string } } } }
+	| { type: "file.edited"; properties: { file: string } }
+	| { type: "permission.asked"; properties: OpencodePermissionAsked }
+	| { type: "permission.replied"; properties: { sessionID: string; requestID: string; reply: OpencodePermissionReply } }
+	| { type: string; properties?: Record<string, unknown> }
+
+export interface OpencodePermissionAsked {
+	id: string
+	sessionID: string
+	/** The action being asked about, e.g. `edit`, `bash`, `webfetch`. */
+	permission: string
+	/** What it applies to — file paths for `edit`, the command for `bash`. */
+	patterns: string[]
+	metadata: Record<string, unknown>
+	always: string[]
+	tool?: { messageID: string; callID: string }
+}
+
+export type OpencodePermissionReply = "once" | "always" | "reject"
+
+/** `GET /session/{id}/diff` */
+export interface OpencodeFileDiff {
+	file?: string
+	patch?: string
+	additions: number
+	deletions: number
+	status?: "added" | "deleted" | "modified"
+}
+
+/**
+ * Structured output, as the server actually delivers it.
+ *
+ * `format: { type: "json_schema", schema }` makes the server force a tool call
+ * named `StructuredOutput` whose `state.input` **is** the object. There is no
+ * text part carrying the JSON, so parsing the reply text finds nothing.
+ */
+export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
+
+export interface OpencodeConfig {
+	model?: string
+	small_model?: string
+	instructions?: string[]
+	permission?: Record<string, unknown>
+	agent?: Record<string, unknown>
+	provider?: Record<string, unknown>
+	logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR"
+	[key: string]: unknown
+}
+
+export interface OpencodeProviderInfo {
+	id: string
+	name?: string
+	models: Record<string, { name?: string; cost?: { input?: number; output?: number } }>
+}
+
+/** `GET /config/providers` */
+export interface OpencodeProvidersResponse {
+	providers: OpencodeProviderInfo[]
+	default: Record<string, string>
+}

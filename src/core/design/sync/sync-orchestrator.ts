@@ -8,9 +8,10 @@ import {
 	getLatestGitCommitHash,
 	hasDesignChangesSince,
 } from "@/utils/git"
-import { NoAgentConnectedError } from "../agent/bridge"
+import { NoBackendError } from "../agent/backend"
 import { caretDirectoryExists } from "../scaffold"
-import { bridgeFor } from "../services"
+import { bridgeFor, conversationFor } from "../services"
+import { runBackendSync } from "./sync-backend"
 import { clearPendingSync, registerPendingSync } from "./sync-completion"
 import { commitDesignLayer, ensureGitRepo } from "./sync-git"
 import { buildSyncPrompt } from "./sync-prompt"
@@ -45,12 +46,11 @@ export interface SyncOptions {
 /**
  * Runs a design→app sync: get the design layer into a committed state, compute
  * the net changed-files worklist since the last sync, capture a rollback point,
- * and hand the prompt to whichever agent is connected.
+ * and start the plan.
  *
- * The preflight is unchanged from V1 — it was the reliable part. What changed is
- * the far end: instead of `controller.initTask(prompt)` starting a local
- * plan-mode task, the prompt goes out over the {@link AgentBridge} and Caret
- * waits for a completion signal it does not control (see `sync-completion.ts`).
+ * The preflight is unchanged from V1 — it was the reliable part. The far end is
+ * back to the V1 contract too, now that Caret owns the loop: plan, review,
+ * apply, and Caret advances the bookmark itself (`sync-backend.ts`).
  */
 export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<SyncResult> {
 	if (!(await caretDirectoryExists(cwd))) {
@@ -59,7 +59,7 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 
 	// Fail before doing any git work if there is nobody to hand the sync to.
 	if (!bridgeFor(cwd).connected()) {
-		return { status: "no-agent", message: new NoAgentConnectedError("sync").message }
+		return { status: "no-agent", message: new NoBackendError("sync").message }
 	}
 
 	// Preflight: get the design layer into a committed state (the bookmark is a
@@ -122,7 +122,7 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 	const isFirstSync = lastSyncedCommit === null
 
 	const syncId = randomUUID()
-	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog, syncId })
+	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog, syncId, audience: "backend" })
 
 	// Capture the rollback point BEFORE the agent touches anything. Ordered this
 	// way deliberately: an agent that starts editing the instant it receives the
@@ -136,20 +136,18 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 		preSyncSnapshot,
 	})
 
-	try {
-		await bridgeFor(cwd).request({
-			kind: "sync",
-			prompt,
-			context: { syncId, changedFiles, targetCommit },
-		})
-	} catch (err) {
-		// The agent went away between the connected() check and the request.
-		// Drop the pending record so a stale sync can't be completed later.
+	const conversation = conversationFor(cwd)
+	if (!conversation) {
+		// The backend went away between the connected() check and here. Drop the
+		// pending record so a stale sync can't be completed later.
 		await clearPendingSync(cwd)
-		const message = err instanceof Error ? err.message : String(err)
-		Logger.error(`[sync] agent refused the sync: ${message}`)
-		return { status: "no-agent", message }
+		return { status: "no-agent", message: new NoBackendError("sync").message }
 	}
+
+	// Deliberately not awaited. A sync is a plan, a human decision and an apply —
+	// minutes of wall clock — and it reports its own progress into the chat. The
+	// caller is a button that has to come back.
+	void runBackendSync(conversation, { cwd, syncId, prompt, changedCount: changedFiles.length })
 
 	Logger.info(`[sync] Started: ${changedFiles.length} changed design file(s), target ${targetCommit.slice(0, 8)}`)
 

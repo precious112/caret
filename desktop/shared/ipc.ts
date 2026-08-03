@@ -128,6 +128,63 @@ export type InterviewPromptWire =
 			total?: number
 	  }
 
+/**
+ * The coding backend Caret drives, as the renderer sees it.
+ *
+ * Structural mirrors of the core types, like every other `*Wire` here, so a
+ * renderer import of main-process code stays a compile error.
+ */
+export type BackendIdWire = "opencode" | "claude" | "codex" | "kimi"
+
+export interface BackendReportWire {
+	id: BackendIdWire
+	displayName: string
+	installed: boolean
+	authenticated: boolean
+	ready: boolean
+	detail: string
+	remedy?: { label: string; command?: string; url?: string }
+	untested?: boolean
+}
+
+export type TranscriptEntryWire =
+	| { kind: "user"; id: string; text: string }
+	| { kind: "assistant"; id: string; text: string }
+	| { kind: "thinking"; id: string; text: string }
+	| { kind: "tool"; id: string; callId: string; name: string; summary: string; status: "running" | "ok" | "failed" }
+	| {
+			kind: "permission"
+			id: string
+			requestId: string
+			summary: string
+			status: "pending" | "allowed" | "denied"
+			automatic?: string
+	  }
+	| { kind: "error"; id: string; message: string }
+	| { kind: "note"; id: string; text: string }
+
+export interface AgentStateWire {
+	backendId: BackendIdWire | null
+	backendName: string | null
+	ready: boolean
+	blocked: string | null
+	activity: { id: string; kind: string; title: string; mode: "read-only" | "write"; sessionId: string } | null
+	streaming: boolean
+	transcript: {
+		entries: TranscriptEntryWire[]
+		files: string[]
+		usage: { inputTokens: number; outputTokens: number; costUsd: number }
+	}
+	pendingApproval: { id: string; question: string; confirmLabel: string; cancelLabel: string } | null
+	appWrites: "ask" | "allow"
+}
+
+export interface AgentSessionWire {
+	id: string
+	title: string
+	updatedAt: number
+}
+
 export interface SyncOutcome {
 	status: string
 	message: string
@@ -209,12 +266,31 @@ export interface IpcRequests {
 
 	"agent:clientConfigs": (projectPath: string) => AgentClientConfig[]
 
+	/** Everything the chat sidebar renders. Also pushed on the `agent:state` event. */
+	"agent:state": (projectPath: string) => AgentStateWire | null
+	"agent:send": (projectPath: string, text: string) => void
+	"agent:abort": (projectPath: string) => void
+	"agent:permission": (projectPath: string, requestId: string, decision: "allow" | "deny" | "allow-always") => void
+	"agent:approval": (projectPath: string, id: string, ok: boolean) => void
+	"agent:reset": (projectPath: string) => void
+	/** Availability of every backend, for the setup screen. Probed live. */
+	"agent:backends": () => BackendReportWire[]
+	"agent:selectBackend": (id: BackendIdWire | null) => void
+	"agent:sessions": (projectPath: string) => AgentSessionWire[]
+	"agent:replay": (projectPath: string, sessionId: string) => boolean
+
 	"prefs:get": () => Record<string, unknown>
 	"prefs:set": (patch: Record<string, unknown>) => void
 
 	"canvas:message": (projectPath: string, message: DesignInboundWire) => void
-	/** Height of the chrome's top bar, so main knows where to put the canvas view. */
-	"canvas:setBounds": (projectPath: string, inset: number) => void
+	/**
+	 * How much room the chrome occupies around the canvas view.
+	 *
+	 * Layout authority stays in the renderer, which is the only place that knows
+	 * how tall the top bar is or whether the chat sidebar is open — main cannot
+	 * measure a DOM it does not own.
+	 */
+	"canvas:setBounds": (projectPath: string, insets: { top: number; right: number }) => void
 	/** Parks the canvas off-screen while the chrome shows a full-window surface. */
 	"canvas:setVisible": (projectPath: string, visible: boolean) => void
 
@@ -236,6 +312,8 @@ export interface IpcEvents {
 	"interview:prompt": (prompt: InterviewPromptWire) => void
 	/** The asset index changed — by the UI, an agent, or a file dropped in Finder. */
 	"assets:changed": (projectPath: string) => void
+	/** The chat moved on: a token streamed, a permission was raised, a turn ended. */
+	"agent:state": (projectPath: string, state: AgentStateWire) => void
 	log: (line: string) => void
 }
 

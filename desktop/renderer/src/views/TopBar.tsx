@@ -7,7 +7,7 @@
  * work below it.
  */
 
-import { Blocks, Images, Palette, RefreshCw } from "lucide-react"
+import { Blocks, Images, MessageSquare, Palette, RefreshCw } from "lucide-react"
 import { forwardRef } from "react"
 
 import type { ProjectState } from "../../../shared/ipc"
@@ -18,10 +18,15 @@ import { cn } from "../lib/utils"
 interface TopBarProps {
 	project: ProjectState
 	surface: Surface
+	chatOpen: boolean
 	onSurfaceChange(surface: Surface): void
+	onToggleChat(): void
 }
 
-export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar({ project, surface, onSurfaceChange }, ref) {
+export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar(
+	{ project, surface, chatOpen, onSurfaceChange, onToggleChat },
+	ref,
+) {
 	return (
 		<div
 			className={cn(
@@ -53,12 +58,13 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar({ 
 					onClick={() => onSurfaceChange(surface === "assets" ? "canvas" : "assets")}
 				/>
 
+				<TopBarButton active={chatOpen} icon={<MessageSquare size={14} />} label="Chat" onClick={onToggleChat} />
+
 				<TopBarButton
 					active={surface === "agent"}
 					icon={<Blocks size={14} />}
-					label={project.agentConnected ? "Agent connected" : "Connect agent"}
+					label="Backend"
 					onClick={() => onSurfaceChange(surface === "agent" ? "canvas" : "agent")}
-					tone={project.agentConnected ? "ok" : "warn"}
 				/>
 
 				<TopBarButton icon={<RefreshCw size={14} />} label="Sync" onClick={() => invoke("sync:now", project.path)} />

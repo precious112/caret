@@ -1,0 +1,131 @@
+/**
+ * Design → app sync, run on the backend Caret owns.
+ *
+ * This restores the V1 contract that the BYO-agent detour could not keep. The
+ * preflight, the worklist prompt, the pre-sync snapshot and "Undo sync" are all
+ * unchanged; what comes back is the part that needs Caret to be in the loop:
+ *
+ * 1. **Plan** in a `read-only` session. App writes are denied at Caret's own
+ *    permission boundary no matter what the agent config says, so "review before
+ *    anything changes" is a guarantee rather than an instruction.
+ * 2. **Review.** The plan streams into the chat and the user accepts or discards
+ *    it. Discarding ends the session with nothing written.
+ * 3. **Apply** in the same session, switched to `write`. App-path permissions
+ *    follow the user's own toggle.
+ * 4. **Caret advances the bookmark**, in this file, in its own code. The model is
+ *    never asked to write `sync-state.json` — an honour-system bookmark was the
+ *    bug that made every sync re-report the whole design layer.
+ */
+import { Logger } from "@/shared/services/Logger"
+import type { AgentConversation } from "../agent/conversation"
+import { clearPendingSync, completeSync } from "./sync-completion"
+
+export interface BackendSyncRequest {
+	cwd: string
+	syncId: string
+	/** The worklist prompt from `buildSyncPrompt` — file names, never file contents. */
+	prompt: string
+	changedCount: number
+}
+
+const APPLY_PROMPT = `The plan is approved. Make those edits to the app now.
+
+You have already read everything you need — that was the whole point of the planning turn.
+**Start editing immediately.** Do not re-list directories, re-read config files or look for
+conventions again; if you catch yourself exploring, stop and write the edit instead.
+
+Work only from the plan you just wrote. If something in it turns out to be wrong once you
+open the file, say so and stop rather than improvising a different change — the user approved
+a specific plan.
+
+Do not touch \`.caret/\` — the design layer is already correct; it is the source you are
+translating *from*. Do not write \`sync-state.json\`: Caret records the sync itself.`
+
+/**
+ * Runs the whole two-phase sync. Long-lived — the caller starts it and returns.
+ *
+ * Every exit path clears the pending record. A pending sync that outlives its
+ * conversation would let a later `complete_sync` advance the bookmark past work
+ * nobody applied, which is the one failure that silently loses design changes.
+ */
+export async function runBackendSync(conversation: AgentConversation, request: BackendSyncRequest): Promise<void> {
+	const { cwd, syncId, changedCount } = request
+
+	try {
+		const plan = await conversation.run({
+			kind: "sync-plan",
+			title: "Sync design → app",
+			mode: "read-only",
+			prompt: request.prompt,
+			displayPrompt:
+				changedCount === 0
+					? "Reconcile the whole design layer into the app."
+					: `Bring the app in line with ${changedCount} changed design file${changedCount === 1 ? "" : "s"}.`,
+			note:
+				changedCount === 0
+					? "Planning a full reconciliation. Nothing in your app is written yet."
+					: `Planning from ${changedCount} changed design file${changedCount === 1 ? "" : "s"}. Nothing in your app is written yet.`,
+		})
+
+		if (!plan.ok) {
+			conversation.note("The plan didn't finish, so nothing was applied. Your design layer is untouched.")
+			await clearPendingSync(cwd)
+			return
+		}
+
+		const approved = await conversation.requestApproval({
+			id: syncId,
+			question: "Apply this to your app?",
+			confirmLabel: "Apply",
+			cancelLabel: "Discard",
+		})
+
+		if (!approved) {
+			conversation.note("Discarded. Nothing was written, and this design change will be offered again next sync.")
+			await clearPendingSync(cwd)
+			return
+		}
+
+		const before = plan.filesChanged.length
+
+		const applied = await conversation.run({
+			kind: "sync-apply",
+			title: "Sync design → app",
+			mode: "write",
+			prompt: APPLY_PROMPT,
+			displayPrompt: "Apply the plan.",
+			// Same session: the plan is the context that makes the apply correct,
+			// and re-sending it as text would be both wasteful and lossy.
+			resumeSessionId: plan.sessionId ?? undefined,
+		})
+
+		if (!applied.ok) {
+			conversation.note("The changes didn't finish cleanly. Use Undo sync if the app is in a bad state.")
+			return
+		}
+
+		// A turn can end cleanly having written nothing — an agent that spends its
+		// budget exploring and then stops is the common shape of that. Advancing
+		// the bookmark there would be the worst possible outcome: the design change
+		// is never offered again, so it is silently dropped rather than retried.
+		// "It finished" is not "it did it".
+		if (applied.filesChanged.length <= before) {
+			conversation.note(
+				"The agent finished without changing anything in your app, so this sync hasn't been recorded — the same design changes will be offered again next time. Try again, or use a stronger model.",
+			)
+			await clearPendingSync(cwd)
+			return
+		}
+
+		const outcome = await completeSync(cwd, syncId)
+		conversation.note(
+			outcome === "advanced"
+				? "Synced. The next sync will only report changes made from here."
+				: `Applied, but the sync bookmark didn't advance (${outcome}). The next sync will re-report these files.`,
+		)
+	} catch (err) {
+		Logger.error("[sync] backend sync failed:", err)
+		conversation.note(`Sync stopped: ${err instanceof Error ? err.message : String(err)}`)
+		await clearPendingSync(cwd).catch(() => {})
+	}
+}

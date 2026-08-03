@@ -47,6 +47,24 @@ const IGNORED = [
 
 export interface WatchAndHealOptions {
 	projectPath: string
+	/**
+	 * Whether a Caret-driven agent turn is in flight.
+	 *
+	 * The backend Caret owns writes `.caret/` files with its own tools, so from
+	 * the watcher's side those look identical to a person editing the file in
+	 * their editor. They are not the same thing: one is the user working *in*
+	 * Caret, the other is bypassing it. Phase 7 mines this distinction to tell
+	 * taste from machine output, and the direct-edit notice below would otherwise
+	 * fire on the user's own AI edits.
+	 */
+	isAgentActive?(): boolean
+	/**
+	 * The first genuinely direct write to the design layer this session.
+	 *
+	 * Direct edits are tolerated and healed, never recommended — the visual editor
+	 * is the supported path — so this is said once and then never again.
+	 */
+	onFirstDirectWrite?(filePath: string): void
 	/** Called after a heal actually changed a file, so the canvas can be told. */
 	onHealed?(filePath: string): void
 	/** Called when foundation tokens change, after the rules files are rewritten. */
@@ -65,6 +83,8 @@ export class WatchAndHeal {
 	 * idempotent, but the wasted parse is avoidable.
 	 */
 	private selfWrites = new Set<string>()
+	/** The direct-edit notice is once per session, not once per file. */
+	private announcedDirectWrite = false
 
 	constructor(private readonly options: WatchAndHealOptions) {}
 
@@ -111,6 +131,24 @@ export class WatchAndHeal {
 		)
 	}
 
+	/**
+	 * Records who wrote a file, and says something the first time it was written
+	 * around Caret rather than through it.
+	 */
+	private async recordAuthor(filePath: string, action: "create" | "write"): Promise<void> {
+		if (this.options.isAgentActive?.()) {
+			await recordEdit(this.options.projectPath, { actor: "agent", action, file: filePath })
+			return
+		}
+
+		await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
+
+		if (!this.announcedDirectWrite) {
+			this.announcedDirectWrite = true
+			this.options.onFirstDirectWrite?.(filePath)
+		}
+	}
+
 	private async handle(filePath: string, action: "create" | "write"): Promise<void> {
 		const resolved = path.resolve(filePath)
 		const wasSelfWrite = this.selfWrites.delete(resolved)
@@ -127,13 +165,13 @@ export class WatchAndHeal {
 
 		if (!isHealable(filePath)) {
 			if (!wasSelfWrite && isDesignContent(filePath)) {
-				await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
+				await this.recordAuthor(filePath, action)
 			}
 			return
 		}
 
 		if (!wasSelfWrite) {
-			await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
+			await this.recordAuthor(filePath, action)
 		}
 
 		try {

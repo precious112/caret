@@ -6,6 +6,10 @@ directories:
   output: release
   buildResources: build
 
+# Stages the bundled coding backend for the target platform and architecture,
+# which is not the build machine's. See the file.
+beforePack: build/before-pack.cjs
+
 # Ad-hoc signs the macOS bundle. See the file for why `identity: null` alone is
 # not enough — it means "skip", and an unsigned arm64 binary will not launch.
 afterPack: build/after-pack.cjs
@@ -13,6 +17,12 @@ afterPack: build/after-pack.cjs
 files:
   - out/**/*
   - package.json
+
+# The coding backend Caret drives. Spawned from here and never from `PATH`, so a
+# user upgrading their own OpenCode cannot change what Caret executes.
+extraResources:
+  - from: build/opencode
+    to: opencode
 
 # `.caret/` dependencies are installed into the user's project at runtime, so
 # nothing about the design layer is bundled here.

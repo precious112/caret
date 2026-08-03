@@ -12,7 +12,8 @@ import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { getLatestGitCommitHash, hasDesignChangesSince } from "@/utils/git"
 import { caretDirectoryExists } from "../scaffold"
-import { hostFor } from "../services"
+import { conversationFor, hostFor } from "../services"
+import { readPendingSync } from "./sync-completion"
 import { runSync, type SyncResult } from "./sync-orchestrator"
 import { readSyncState } from "./sync-state"
 
@@ -69,6 +70,13 @@ export function createSyncWatcher(cwd: string): SyncWatcher {
 				const { lastSyncedCommit } = await readSyncState(cwd)
 				if (lastSyncedCommit === head) return // already in sync
 				if (!(await hasDesignChangesSince(cwd, lastSyncedCommit))) return // HEAD moved, design didn't
+
+				// A sync in flight moves HEAD itself — the preflight commits `.caret/`
+				// before planning — so without this the watcher offers a second sync
+				// on top of the one the user is already reading, and the offer sits
+				// there unanswerable until they dismiss it.
+				if (await readPendingSync(cwd)) return
+				if (conversationFor(cwd)?.getState().streaming) return
 
 				lastHandledCommit = head
 				const choice = await hostFor(cwd).notify("info", "Design changes detected — sync them into the app?", [SYNC_NOW])

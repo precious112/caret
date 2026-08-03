@@ -44,7 +44,9 @@ export function NotificationStack() {
 	if (items.length === 0) return null
 
 	return (
-		<div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[380px] flex-col gap-2">
+		<div
+			className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[380px] flex-col gap-2"
+			data-testid="notification-stack">
 			{items.map((item) => (
 				<div
 					className={cn(

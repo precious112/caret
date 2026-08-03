@@ -537,18 +537,23 @@ running with no backend is a supported state, and every feature that needs one s
 
 | | OpenCode (reference) | Claude | Codex *(untested)* | Kimi *(untested)* |
 |---|---|---|---|---|
-| Package | `@opencode-ai/sdk` | `@anthropic-ai/claude-agent-sdk` | `@openai/codex-sdk` | `@moonshot-ai/kimi-agent-sdk` (+ `zod` peer) |
+| Package | **none — a pinned HTTP client of Caret's own** | `@anthropic-ai/claude-agent-sdk` | `@openai/codex-sdk` | `@moonshot-ai/kimi-agent-sdk` (+ `zod` peer) |
 | Wraps | bundled `opencode` binary | `claude` CLI | `codex` CLI | `kimi` CLI |
 | Session | `createOpencode()` → `session.create` / `prompt` / `prompt_async` | SDK session API | `startThread({workingDirectory})` / `resumeThread(id)` (persists in `~/.codex/sessions`) | `createSession({workDir, model, sessionId, executable})` |
 | Streaming | `event.subscribe()` SSE | SDK message stream | `runStreamed()` async generator (`item.completed`, `turn.completed`) | `session.prompt()` → async-iterable `Turn` (`TurnBegin`, `ContentPart`, `ToolCall`, `ToolResult`, `ApprovalRequest`, `StatusUpdate`) |
-| Read-only mode | Plan agent + permission config | plan mode | approval modes | permission events (no `yoloMode`) |
-| Structured output | `format: {type:"json_schema"}`, `StructuredOutputError` on failure | forced tool use | `outputSchema` on `run()` | **none — emulated** |
+| Read-only mode | Plan agent + permission config | plan mode | **sandbox only — no permission callback exists** | permission events (no `yoloMode`) |
+| Structured output | `format: {type:"json_schema"}` → forced `StructuredOutput` tool call; emulated fallback | forced tool use | `outputSchema` on `run()` | **none — emulated** |
 | Abort | `session.abort` | SDK abort | thread abort | `session.close()` / interrupt |
 | History | `session.list` + `session.messages` | SDK session list | `~/.codex/sessions` via `resumeThread` | `listSessions(workDir)` + `parseSessionEvents` |
 | Auth | reads OpenCode's standard credential store | `claude auth login` / `setup-token`; keychain-backed | `CODEX_API_KEY` env injection, or CLI login | Kimi CLI login; config in `~/.kimi/` |
 
 Codex and Kimi ship **written to spec and flagged untested** until subscriptions exist to test
 against; their availability checks must say so rather than presenting them as equally proven.
+Codex additionally has **no interactive permission callback at all** — its safety model is a
+sandbox mode plus an approval policy chosen before the turn starts — so Caret enforces there by
+sandbox (`read-only` for plans, `workspace-write` otherwise, approvals `never`) and the
+per-write "ask" toggle is inert on that backend. That is stated in the UI rather than left for
+someone to discover.
 **GLM gets no adapter**: Z.ai ships no embeddable agent SDK (ZCode is an application), and
 GLM's coding plan works through OpenCode's provider config, which Z.ai supports day-one.
 Revisit only if a ZCode SDK appears.
@@ -556,18 +561,41 @@ Revisit only if a ZCode SDK appears.
 ### OpenCode specifics
 
 - **Bundled, pinned, spawned from the app bundle — never resolved from `PATH`.** A user
-  upgrading their own OpenCode must not change what Caret executes. Per-platform binaries via
-  `extraResources` in `electron-builder.yml` (mac arm64/x64 kept per-arch, not universal-doubled).
+  upgrading their own OpenCode must not change what Caret executes. `build/before-pack.cjs`
+  stages the binary for the *target* platform and arch (not the build machine's) into
+  `extraResources`; x64 always takes the `-baseline` build, because plain x64 requires AVX2 and
+  a packaged app cannot know its future CPU. macOS ships arm64 and x64 separately — a universal
+  bundle would need both merged with no way for the adapter to choose, so it is refused.
+- **No `@opencode-ai/sdk` dependency** *(corrected 2026-08-03, by running it)*. The published
+  SDK at the identical version number disagrees with the binary it ships beside: the server
+  emits `permission.asked` / `permission.replied` where the SDK's generated types declare
+  `permission.updated`, and the SDK's prompt body has no `format` field although the route
+  accepts one. Its server launcher also spawns `opencode` from `PATH`, which this phase
+  forbids. So Caret transcribes the shapes it uses from the running server's own `/doc` and
+  talks HTTP directly — one source of truth instead of two that drift.
 - **Inline config only.** Caret never writes `~/.config/opencode/*`; it *reads* the user's
   standard credential store so an existing signed-in account is picked up without a second
-  login, and passes provider/agent/permission config to `createOpencode()` inline.
-- Server surface used: `session.create` / `prompt` / `prompt_async`, `GET /event` (SSE),
-  `GET /session/:id/diff`, `POST /session/:id/abort`, `POST /session/:id/permissions/:id`,
-  `session.revert`/`unrevert`, `POST /session/:id/fork` (design-mode branching: explore a
-  direction, fork back, try another).
-- **Before the sidebar is built:** boot the server and read the live OpenAPI at `/doc`. The
-  event vocabulary of `/event` and the response shape of `/session/:id/diff` are undocumented;
-  pin both from the spec, never from assumption.
+  login, and passes provider/agent/permission config inline through `OPENCODE_CONFIG_CONTENT`.
+- Secured the way Caret's own MCP server is: loopback, OS-assigned port, random per-launch
+  password. The scheme is **HTTP Basic with the username `opencode`** — any other username is a
+  401 regardless of password, and Bearer is refused.
+- Server surface used: `POST /session`, `POST /session/:id/message` and `/prompt_async`,
+  `GET /event` (SSE), `GET /session/:id/message` (history replay), `GET /session/:id/diff`,
+  `POST /session/:id/abort`, `POST /session/:id/permissions/:id`.
+- **`directory` is not an optional query parameter.** The server keeps one instance — and one
+  event bus — per directory, so an `/event` subscription without it listens to the server
+  process's own working directory and receives nothing at all from the project's session.
+- **The event subscription must be open before the prompt is posted.** A fast turn can finish
+  between the two, and the `session.idle` that ends it is then missed, so the caller waits
+  forever.
+- Caret assigns the **user message's id** rather than letting the server do it. Parts of that
+  message arrive on the same bus as the assistant's, so without it every turn opens by replaying
+  the user's own prompt back at them as if the model had said it.
+- **Structured output is a forced `StructuredOutput` tool call whose input *is* the object.**
+  There is no text part carrying the JSON. And native support is a **model** capability, not a
+  server one — a reasoning model cannot be given a forced tool choice, and some providers'
+  speculative decoding has no grammar support — so `structured()` falls back to prompt-and-parse
+  with `emulated: true` rather than working on some models and not others.
 
 ### Permissions — Caret is the enforcement boundary
 
@@ -580,6 +608,23 @@ request itself and the rule holds regardless of which agent or subagent asked:
 - App-path writes in a `read-only` session: **denied**, always.
 - App-path writes in a `write` session: per the user's toggle — default **ask**, with a
   "don't ask again for this project" option on the prompt.
+- Shell commands in a `read-only` session: allowed **only** from a program allowlist that is
+  read-only in the same sense the session is (`ls`, `rg`, `cat`, `find`, `git log|status|diff`,
+  …), with anything that could chain, redirect or substitute a second command refused before
+  the program name is even read. Denying bash outright was tried first and is worse in both
+  directions: the agent retries it until the turn runs out, and the plan it eventually writes
+  is worse for never having looked at the app. Discarding stderr (`2>/dev/null`, `2>&1`) is not
+  treated as a redirection — it is how every agent writes `find`.
+- In a `write` session every command asks, including a harmless one. The session is allowed to
+  change things; that is exactly when a command is worth reading.
+- Anything the rules do not recognise **asks**. A backend that grows a new capability must not
+  gain it silently inside Caret.
+- **Paths are matched under every spelling a backend uses.** The same edit arrives absolute,
+  absolute-with-the-leading-separator-stripped, project-relative, and (on macOS) through
+  `/private`. A single interpretation refuses real design-layer writes, and the user watches
+  their agent get denied its own work with no way to tell why — so a non-absolute path is tried
+  both ways and taken as whichever lands inside the project. That is the safe direction to be
+  wrong in: the failure mode is one extra prompt, not a wrong refusal.
 - The pre-task git snapshot (Phase 6) is the recovery net beneath all of it.
 
 ### Sessions and the chat surface
@@ -589,9 +634,21 @@ request itself and the rule holds regardless of which agent or subagent asked:
 - Collapsible chat sidebar (UX reference: OpenCode's desktop app): streamed text, collapsed
   thinking, tool-call lines, a file-change list, permission prompts, a stop button (= abort).
   Dismissible at will; available in design mode for brainstorming, not only during sync.
-- **Diffs are computed from Caret's own pre-task git snapshot** — canonical and
-  backend-independent. Backend diff endpoints are enrichment, never the source of truth.
-- Chat history rehydrates from the adapter's session APIs, listed per project.
+- **What the model is sent and what the chat shows are separate.** Caret's own prompts are
+  instruction blocks — the sync worklist is a page of `<explicit_instructions>` — and pasting
+  one into the transcript as though the user had typed it makes the chat unreadable at the
+  moment they most need to follow it. Every Caret-initiated turn carries a one-line display
+  form; a turn the user typed is shown as they typed it.
+- The transcript records **why** Caret answered a permission without asking. A silent
+  auto-approval is indistinguishable from an agent nobody checked.
+- The sidebar lists the **files a session changed**, derived from the editing tools' own inputs
+  rather than from the server's `file.edited` event, which carries no session id — with two
+  projects open there would be no way to say whose change it was. A diff *viewer* is deferred to
+  the Phase 8 undo work; Caret's pre-task git snapshot stays the canonical recovery mechanism
+  (it is what "Undo sync" restores from), and backend diff endpoints stay enrichment.
+- Chat history rehydrates from the adapter's session APIs, listed per project, and is replayed
+  **through the same reducer that built the transcript live** — a history panel with its own
+  parser is a second implementation that will eventually disagree with the first.
 
 ### Context injection
 
@@ -606,13 +663,17 @@ Detection ladder, in order: bundled OpenCode (always present) → installed CLIs
 `codex`, `kimi`) probed for presence and auth state → that backend's own account login →
 paste-an-API-key last. A detected signed-in CLI shows as "found — use it", one click.
 
+- Claude's auth state is read from `claude auth status`, which prints JSON and **costs no
+  inference**. Anything that had to run a turn to find out would spend the user's credits to
+  answer "are you signed in".
 - Claude account auth bills the **separate Agent SDK credit pool**, not normal Claude Code
   limits — disclosed in one sentence at the point of choice, not in docs.
 - The setup screen names **routes, never prices or quotas** (they drift): "OpenCode
   subscription", "OpenCode credits", "your own API key", with links out.
 - A backend whose CLI is absent shows an honest "install this first" state with the command —
-  never a dead option. CLI login flows spawned from Electron are tested cold; if one needs a
-  real terminal, the UI says "run this command", then detects the credentials it wrote.
+  never a dead option. Commands are **shown to run, never run for you**: these flows want a real
+  terminal (a browser hand-off, a device code), and one spawned from a GUI with nowhere to type
+  is a dead end. "Check again" re-probes and picks up the credentials they wrote.
 
 ### Providers and the monetization boundary
 
@@ -633,7 +694,9 @@ forever, inference the paid side.
 1. Preflight unchanged from V1 (git states, one-click fixes, `hasDesignChangesSince` gating).
 2. Pre-sync snapshot captured.
 3. Worklist prompt built (`buildSyncPrompt`, no file contents — the agent reads current
-   sources itself).
+   sources itself). The apply turn's prompt then tells it to **stop exploring and edit**: it
+   has already read everything, and a second reading pass is how an apply turn ends having
+   written nothing.
 4. **Plan phase:** `read-only` session; the plan streams into the sidebar; app writes are
    denied at Caret's permission boundary no matter what the agent config says.
 5. User reviews. Rejecting ends the session; nothing was written.
@@ -642,6 +705,18 @@ forever, inference the paid side.
 7. **Caret advances the bookmark in its own code on apply** — never by instructing the model
    to write `sync-state.json`. The honor-system `complete_sync` exists only on the external
    MCP path (B4).
+   **And only if the apply actually wrote something.** A turn can end cleanly having changed
+   nothing — an agent that spends its budget exploring and then stops is the common shape of
+   that, and was observed. Advancing there is the worst outcome the system has: the design
+   change is never offered again, so it is silently dropped rather than retried. "It finished"
+   is not "it did it", and the difference is a file count.
+8. The HEAD watcher stays quiet while a sync is running. The preflight commits `.caret/` before
+   planning, which moves HEAD — so without this the watcher offers a *second* sync on top of
+   the one the user is reading, and the offer sits there unanswerable.
+
+The sync prompt is written for its audience: the backend is told it is planning and that any
+write it attempts will be refused, and is never told to call `complete_sync`, which it has no
+way to call.
 
 ---
 

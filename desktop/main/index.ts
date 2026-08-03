@@ -9,6 +9,7 @@ import { app, dialog, shell } from "electron"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
+import { disposeBackends, setBundledBackendDirectory } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { registerIpcHandlers } from "./ipc"
 import { closeLauncherWindow, hasLauncherWindow, type LauncherWindowOptions, openLauncherWindow } from "./launcher-window"
@@ -38,6 +39,11 @@ async function main(): Promise<void> {
 
 	await app.whenReady()
 	loadPrefs()
+
+	// Where the bundled coding backend lives. Only the main process knows this,
+	// and the design core is deliberately host-free, so it is told rather than
+	// left to guess — and it never falls back to `PATH`.
+	if (app.isPackaged) setBundledBackendDirectory(path.join(process.resourcesPath, "opencode"))
 
 	const launcherOptions: LauncherWindowOptions = {
 		chromeEntry: resolveChromeEntry(),
@@ -105,6 +111,9 @@ async function main(): Promise<void> {
 
 	app.on("before-quit", () => {
 		void windows.closeAll()
+		// The embedded backend is a child process. Left running it would outlive
+		// the app and keep holding a port.
+		void disposeBackends()
 	})
 }
 

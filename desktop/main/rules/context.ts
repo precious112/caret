@@ -71,7 +71,18 @@ export async function buildFoundationContext(projectPath: string): Promise<Found
  * every row and the editor would mutate the wrong one — and an agent that knows
  * the reason generalises it to cases this text does not list.
  */
-export async function buildGuide(projectPath: string): Promise<string> {
+/**
+ * Who the guide is being written for.
+ *
+ * `mcp` is an external agent, which reaches Caret only through tools and has to
+ * be told their names. `embedded` is the coding backend Caret drives itself:
+ * this text is injected straight into its system prompt, it has no Caret tools
+ * at all, and naming tools it cannot call is worse than saying nothing — it will
+ * try, fail, and report the failure as the user's problem.
+ */
+export type GuideAudience = "mcp" | "embedded"
+
+export async function buildGuide(projectPath: string, audience: GuideAudience = "mcp"): Promise<string> {
 	const context = await buildFoundationContext(projectPath)
 
 	return `# Authoring the Caret design layer
@@ -173,8 +184,11 @@ one, or Caret can generate it.`
 
 ${context.assets.map((line) => `- ${line}`).join("\n")}
 
-When the user writes \`@tag\`, they mean one of these. Use \`get_asset\` to see the actual image
-before placing it somewhere the composition matters. Respect the intrinsic size: an asset
+When the user writes \`@tag\`, they mean one of these.${
+				audience === "mcp"
+					? " Use `get_asset` to see the actual image\nbefore placing it somewhere the composition matters."
+					: ""
+			} Respect the intrinsic size: an asset
 placed into a box much larger than itself will look soft, and one whose aspect ratio is far from
 its box will lose most of the picture to cropping. Say so rather than doing it.`
 }

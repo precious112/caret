@@ -351,106 +351,146 @@ writes the design layer safely, always with the project's foundations in context
 
 ---
 
-## [ ] Phase 6.4: The coding backend — Caret owns the loop
+## [~] Phase 6.4: The coding backend — Caret owns the loop
 
 **Added 2026-08-03.** Every Caret-initiated feature — sync, AI edit, the overlay editor, the
 interview, Phase 7's generate-and-pick — needs Caret to hand work to an agent, and MCP cannot
 carry that direction. So Caret embeds a coding backend behind an adapter seam and drives it
-through an agent SDK. This phase blocks 6.5's interview rewrite, 6.7's authored-SVG lane, and
-all of Phase 7. Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.4 — **read it
-in full before implementing; the SDK surfaces, event mappings and auth flows are specified
-there, not here.**
+itself. This phase blocks 6.5's interview rewrite, 6.7's authored-SVG lane, and all of Phase 7.
+Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.4 — **read it in full before
+implementing; the wire surfaces, event mappings and auth flows are specified there, not here.**
 
 **The seam:**
 
-- [ ] `CodingBackend` interface in `src/core/design/agent/backend.ts`: `availability()`,
+- [x] `CodingBackend` interface in `src/core/design/agent/backend.ts`: `availability()`,
       `startSession()`, and `structured()` (one-shot, JSON-schema-constrained — carries the
       interview). Sessions expose `send()` streaming normalised `BackendEvent`s,
       `respondToPermission()`, `abort()`, `close()`.
-- [ ] `AgentBridge` call sites route through it; the dead MCP-outbound plumbing
+- [x] `AgentBridge` call sites route through it; the dead MCP-outbound plumbing
       (`takePendingTasks`, the `agent:task` chrome event, the queue in `createBridge`) is
       **deleted**, not left beside the new path
-- [ ] `NoBackendError` refusals name the fix ("Open Settings → Backend…"), per feature, same
+- [x] `NoBackendError` refusals name the fix ("Open Settings → Backend…"), per feature, same
       posture as the existing no-agent messages
 
 **OpenCode — the reference adapter, ships first:**
 
-- [ ] `@opencode-ai/sdk`; binary **bundled with Caret, pinned**, spawned from the app bundle —
-      never resolved from `PATH` (a user upgrading their own OpenCode must not change what
-      Caret executes). Per-platform `extraResources` in `electron-builder.yml`.
-- [ ] Config passed **inline** to the embedded instance. Caret never writes
+- [x] Binary **bundled with Caret, pinned**, spawned from the app bundle — never resolved from
+      `PATH` (a user upgrading their own OpenCode must not change what Caret executes).
+      `build/before-pack.cjs` stages the binary for the *target* platform and arch, which is
+      not the build machine's; x64 always ships the `-baseline` build, because plain x64 needs
+      AVX2 and a packaged app cannot know its future CPU.
+- [x] **No `@opencode-ai/sdk` dependency — corrected 2026-08-03.** Caret talks to the pinned
+      server over HTTP with shapes transcribed from its own live `/doc`. Two reasons, both
+      found by running it: the published SDK at the *identical* version number disagrees with
+      the binary it ships beside (the server emits `permission.asked`/`permission.replied`
+      where the SDK declares `permission.updated`, and the SDK's prompt body has no `format`
+      field though the route accepts one), and the SDK's server launcher spawns `opencode`
+      from `PATH`, which this phase forbids. One source of truth — the server that is
+      running — beats two that drift.
+- [x] Server secured like Caret's own MCP endpoint: loopback, OS-assigned port, random
+      per-launch password. HTTP Basic with the username `opencode`; Bearer is refused.
+- [x] Config passed **inline** to the embedded instance. Caret never writes
       `~/.config/opencode/*`; it *reads* the user's existing credentials so a signed-in
       OpenCode account is picked up without a second login.
-- [ ] One session per activity (a sync, a brainstorm, an edit) — never one long thread
-- [ ] Before building the sidebar: boot the server, read the live OpenAPI at `/doc`, and pin
-      the actual event types from `/event` and the response shape of `GET /session/:id/diff`.
-      Both are undocumented; neither may be guessed at.
-- [ ] **Caret's permission handler is the enforcement boundary.** Backend agent/permission
+- [x] One session per activity (a sync, a brainstorm, an edit) — never one long thread
+- [x] Event types and response shapes pinned from the live OpenAPI before the sidebar was
+      built. Also pinned there: structured output is delivered as a **forced `StructuredOutput`
+      tool call whose input is the object** — there is no text part carrying JSON, so parsing
+      the reply finds nothing.
+- [x] `structured()` is native where the model supports it and **falls back to prompt-and-parse,
+      flagged `emulated`**. Native json_schema is a *model* capability, not a server one: a
+      reasoning model cannot be given a forced tool choice, and some providers' speculative
+      decoding has no grammar support. Both were observed on the bundled backend's own models.
+- [x] **Caret's permission handler is the enforcement boundary.** Backend agent/permission
       config (Plan agent, glob rules) is the first line only — upstream has open issues where
       subagents inherit none of the parent's `edit: deny`. Caret answers every permission
       request itself: `.caret/**` writes auto-approved (fixed, not configurable), app-path
       writes denied outright in a read-only session, and prompted per the user's toggle
-      (default: ask, with "don't ask again for this project") in a write session.
+      (default: ask, with "don't ask again for this project") in a write session. The rules are
+      a pure function with its own unit tests, because a write that should not have happened
+      cannot be re-run.
 
 **Chat surface:**
 
-- [ ] Collapsible chat sidebar: streamed text, collapsed thinking, tool-call lines, file-change
-      list, permission prompts, stop (= abort). Dismissible at will; UX reference is OpenCode's
-      desktop app.
-- [ ] Chat history: sessions listed per project, rehydrated via the SDK's session/message APIs
-- [ ] Diffs shown from **Caret's own pre-task git snapshot** (exists since Phase 6) — canonical
-      and backend-independent; the backend's diff endpoint is enrichment, not the source
-- [ ] Works in design mode for brainstorming sessions, not only for sync
+- [x] Collapsible chat sidebar: streamed text, collapsed thinking, tool-call lines, file-change
+      list, permission prompts, stop (= abort). Dismissible at will.
+- [x] Chat history: sessions listed per project, and an old session **replayed through the same
+      reducer that built it live** — a history panel with its own parser is a second
+      implementation that eventually disagrees with the first.
+- [x] The sidebar lists the **files a session changed**. A diff *viewer* is deferred to the
+      Phase 8 undo work; the pre-task git snapshot remains the canonical recovery mechanism
+      (it is what "Undo sync" restores from), and the backend's diff endpoint stays enrichment,
+      never the source of truth.
+- [x] Works in design mode for brainstorming sessions, not only for sync
 
 **Setup and auth (each backend gets both paths — account login first, API key fallback):**
 
-- [ ] Detection ladder: bundled OpenCode always present → detect installed CLIs (`claude`,
+- [x] Detection ladder: bundled OpenCode always present → detect installed CLIs (`claude`,
       `codex`, `kimi`) and their auth state → offer that backend's own login → paste-a-key
       last. A detected, signed-in CLI shows as "found — use it", one click.
-- [ ] Claude: auth via the CLI's `auth login` / `setup-token` (subscription-backed, no console
-      trip). Billing disclosure **at the point of choice**: account auth draws the separate
-      Agent SDK credit pool, not normal Claude Code limits.
-- [ ] The setup screen names routes, never prices or quotas (they drift): "OpenCode
-      subscription", "OpenCode credits", "your own API key", with links out
-- [ ] A backend whose CLI is missing shows an honest "install this first" state with the
-      command — never a dead or half-working option
-- [ ] Provider ladder through OpenCode: BYOK (any provider) · OpenCode Go (subscription) ·
+- [x] Claude auth state is read from `claude auth status`, which prints JSON and **costs no
+      inference** — the only honest way to answer "is this signed in" without spending the
+      user's credits to find out. Billing disclosure at the point of choice: account auth
+      draws the separate Agent SDK credit pool, not normal Claude Code limits.
+- [x] The setup screen names routes, never prices or quotas (they drift)
+- [x] A backend whose CLI is missing shows an honest "install this first" state with the
+      command — never a dead or half-working option. Commands are **shown to run, not run for
+      you**: these flows want a real terminal, and one spawned from a GUI with nowhere to type
+      is a dead end. "Check again" re-probes.
+- [x] Provider ladder through OpenCode: BYOK (any provider) · OpenCode Go (subscription) ·
       OpenCode Zen (credits). Caret-hosted inference later is an OpenAI-compatible `baseURL`
       provider block — config, not integration (§11 boundary).
 
 **Secondary adapters — written to spec, flagged `(untested)` until subscriptions exist:**
 
-- [ ] Claude Agent SDK adapter (`@anthropic-ai/claude-agent-sdk`)
-- [ ] Codex adapter (`@openai/codex-sdk`) *(untested)*
-- [ ] Kimi adapter (`@moonshot-ai/kimi-agent-sdk`) *(untested)* — no native structured output;
+- [x] Claude Agent SDK adapter (`@anthropic-ai/claude-agent-sdk`). Its `canUseTool` hook is
+      Caret's boundary, so the rules hold there as they do on OpenCode.
+- [x] Codex adapter (`@openai/codex-sdk`) *(untested)* — **no interactive permission callback
+      exists.** Its safety model is a sandbox mode plus an approval policy chosen up front, so
+      Caret enforces by sandbox (`read-only` for plans, `workspace-write` otherwise, approvals
+      `never`) rather than by answering requests. Consequence, stated in the UI: the per-write
+      "ask" toggle does nothing on this backend.
+- [x] Kimi adapter (`@moonshot-ai/kimi-agent-sdk`) *(untested)* — no native structured output;
       the emulation's post-validation is load-bearing there
-- [ ] GLM: **no adapter.** Z.ai ships no embeddable agent SDK (ZCode is an app); GLM
+- [x] GLM: **no adapter.** Z.ai ships no embeddable agent SDK (ZCode is an app); GLM
       subscribers connect through the OpenCode adapter's provider config, which Z.ai supports
       day-one. Revisit only if a ZCode SDK appears.
 
 **Sync, restored to the V1 contract on the backend (spec: §4.4 + `caret/main` history):**
 
-- [ ] Preflight and one-click git fixes carry over unchanged
-- [ ] Plan phase: read-only session, worklist prompt (no file contents); the plan streams into
+- [x] Preflight and one-click git fixes carry over unchanged
+- [x] Plan phase: read-only session, worklist prompt (no file contents); the plan streams into
       the sidebar for review
-- [ ] Apply: same session switches to write mode; app-path permissions per the user's toggle
-- [ ] **Caret advances the bookmark in its own code on apply** — never by instructing the
-      model to write `sync-state.json`
-- [ ] Pre-sync snapshot and "Undo sync" unchanged
+- [x] Apply: same session switches to write mode; app-path permissions per the user's toggle
+- [x] **Caret advances the bookmark in its own code on apply** — never by instructing the
+      model to write `sync-state.json` — and **only when the apply actually changed a file**.
+      A turn that ends cleanly having written nothing is common (an agent that explores until
+      its budget runs out), and advancing there drops the design change silently instead of
+      re-offering it next sync
+- [x] Pre-sync snapshot and "Undo sync" unchanged
 
 **Policy:**
 
-- [ ] Direct edits to `.caret/` are an **anti-pattern, tolerated and healed, never
-      recommended**: watch-and-heal stays exactly as is, and the first `external`-actor write
+- [x] Direct edits to `.caret/` are an **anti-pattern, tolerated and healed, never
+      recommended**: watch-and-heal stays exactly as is, and the first genuinely direct write
       in a session raises a once-per-session notice pointing at the visual editor.
-      `connect-an-agent.md` stops describing direct writes as a supported path.
+      `connect-an-agent.md` stops describing direct writes as a supported path. Writes made by
+      Caret's own backend mid-turn are recorded as `agent`, not `external` — from the watcher's
+      side they look identical to someone editing the file by hand, and Phase 7 mines that
+      distinction to tell taste from machine output.
 
-**Certification — cold launch, click-only, no harness-supplied counterparts:**
+**Certification — cold launch, click-only, no harness-supplied counterparts.** Runs against
+**OpenCode Zen's free tier, which needs no credentials**, so the loop is certified with real
+inference on a clean machine rather than asserted against a stub:
 
-- [ ] From a fresh install with the bundled backend: type an instruction in the AI-edit box →
-      the source file changes to exactly that
-- [ ] Click Sync → a plan streams in → apply → the app changes, the bookmark advances
-- [ ] With no backend configured: every one of those refuses with its named fix
+- [x] From a fresh profile with the bundled backend: type an instruction in the chat → the
+      design source changes to exactly that, and the transcript records that Caret answered the
+      write permission itself and why
+- [x] Click Sync → a plan streams in → **the app is byte-for-byte unchanged while the plan is
+      waiting for approval** → apply → the app follows the design and the bookmark advances
+- [x] With no backend configured: the chat refuses with its named fix, and so does sync
+- [x] `npm run verify:backend` certifies the adapter on its own — availability, schema-bound
+      answers, a write that lands, and a **denied** write that does not
 
 **Deliverable:** clicking things in Caret causes an agent to do them. The user connects a
 subscription or key once, or uses the bundled default, and never opens a terminal.

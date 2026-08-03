@@ -11,8 +11,18 @@ export interface SyncPromptInput {
 	isFirstSync: boolean
 	/** Commit-subject narrative — context only, may list superseded changes. */
 	intentLog?: string
-	/** Caret's id for this sync, which the agent echoes back via `complete_sync`. */
+	/** Caret's id for this sync, which an external agent echoes back via `complete_sync`. */
 	syncId: string
+	/**
+	 * Who is being asked.
+	 *
+	 * `backend` is the agent Caret drives: it is in a read-only plan session, it
+	 * has no Caret tools, and Caret advances the bookmark itself once the user
+	 * accepts and the apply finishes. `mcp` is an external agent in the user's own
+	 * terminal, which has to be told to call `complete_sync` because Caret cannot
+	 * observe when it is done.
+	 */
+	audience?: "backend" | "mcp"
 }
 
 /**
@@ -177,7 +187,16 @@ The \`data-caret-id\` attributes in the design sources are Caret's visual-editor
 
 Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source.
 
-When you are done, call the \`complete_sync\` tool on the Caret MCP server with syncId "${input.syncId}". That is the ONLY way to record the sync. Do NOT edit .caret/sync-state.json by hand — Caret owns that file, and writing it yourself will be overwritten.
+${
+	input.audience === "backend"
+		? `RIGHT NOW YOU ARE PLANNING, NOT CHANGING ANYTHING. Read whatever you need and write the plan
+as your reply: which app files you would change, and what each change is. Do not edit a single
+application file in this turn — the user reviews the plan first, and any write you attempt will be
+refused. If they accept, you will be asked to carry it out.
+
+Do NOT edit .caret/sync-state.json. Caret records the sync itself once the changes are applied.`
+		: `When you are done, call the \`complete_sync\` tool on the Caret MCP server with syncId "${input.syncId}". That is the ONLY way to record the sync. Do NOT edit .caret/sync-state.json by hand — Caret owns that file, and writing it yourself will be overwritten.`
+}
 </explicit_instructions>`
 
 	const sections = [header, "", "─".repeat(60), worklist]

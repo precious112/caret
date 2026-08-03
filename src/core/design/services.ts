@@ -12,15 +12,25 @@
  * headless runs and tests that only exercise the design core.
  */
 import { type AgentBridge, NullBridge } from "./agent/bridge"
+import type { AgentConversation } from "./agent/conversation"
 import { type DesignHost, nullDesignHost } from "./host"
 
 export interface ProjectServices {
 	host: DesignHost
 	bridge: AgentBridge
+	/**
+	 * The project's chat with its backend, when one is running.
+	 *
+	 * Sync needs more than the bridge's fire-and-forget: it runs a read-only plan,
+	 * waits for the user to accept it, then applies — and it advances the sync
+	 * bookmark in Caret's own code afterwards. All three need the conversation
+	 * itself, not a task handed to it.
+	 */
+	conversation: AgentConversation | null
 }
 
 const registry = new Map<string, ProjectServices>()
-const fallback: ProjectServices = { host: nullDesignHost, bridge: new NullBridge() }
+const fallback: ProjectServices = { host: nullDesignHost, bridge: new NullBridge(), conversation: null }
 
 /** Installs the services for an open project. Called when its window opens. */
 export function registerProjectServices(workspacePath: string, services: Partial<ProjectServices>): void {
@@ -40,7 +50,15 @@ export function bridgeFor(workspacePath: string): AgentBridge {
 	return registry.get(workspacePath)?.bridge ?? fallback.bridge
 }
 
-/** Replaces just the bridge — an agent connecting or disconnecting mid-session. */
+export function conversationFor(workspacePath: string): AgentConversation | null {
+	return registry.get(workspacePath)?.conversation ?? null
+}
+
+/** Replaces just the bridge — a backend becoming available mid-session. */
 export function setProjectBridge(workspacePath: string, bridge: AgentBridge): void {
 	registerProjectServices(workspacePath, { bridge })
+}
+
+export function setProjectConversation(workspacePath: string, conversation: AgentConversation | null): void {
+	registerProjectServices(workspacePath, { conversation })
 }
