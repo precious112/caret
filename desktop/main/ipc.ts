@@ -7,14 +7,25 @@
  * to whichever one happens to be focused.
  */
 import { dialog, ipcMain } from "electron"
+import * as fs from "fs/promises"
+import * as path from "path"
 
 import {
+	ASSET_TYPES,
+	assetsDirectory,
+	assetUrl,
 	completeSync,
+	describeAsset,
 	type FoundationTokens,
+	findAsset,
 	fullLibrary,
 	generateTokenScale,
+	LARGE_ASSET_BYTES,
 	listPages,
+	readAssetIndex,
 	readFoundationTokens,
+	reindexAssets,
+	retagAsset,
 	rollbackSync,
 	searchGoogleFonts,
 	validateFoundationTokens,
@@ -93,6 +104,110 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("pages:list", (_event, projectPath: string) => listPages(projectPath))
 
+	// ── assets ────────────────────────────────────────────────────────────────
+
+	ipcMain.handle("assets:list", async (_event, projectPath: string) => {
+		const index = await readAssetIndex(projectPath)
+		return index.assets.map((asset) => ({
+			tag: asset.tag,
+			file: asset.file,
+			url: assetUrl(asset),
+			kind: asset.kind,
+			mime: asset.mime,
+			width: asset.width,
+			height: asset.height,
+			bytes: asset.bytes,
+			alt: asset.alt,
+			description: asset.description,
+			origin: asset.origin.type,
+			addedAt: asset.addedAt,
+		}))
+	})
+
+	ipcMain.handle("assets:pickFiles", async () => {
+		const result = await dialog.showOpenDialog({
+			title: "Add assets",
+			properties: ["openFile", "multiSelections"],
+			filters: [{ name: "Assets", extensions: Object.keys(ASSET_TYPES).map((extension) => extension.slice(1)) }],
+		})
+		return result.canceled ? [] : result.filePaths
+	})
+
+	/**
+	 * Copies files in and lets watch-and-heal index them.
+	 *
+	 * Copying rather than referencing in place: an asset that lives outside the
+	 * repo is not versioned with the design and breaks for the next person to
+	 * clone it, which defeats the reason `.caret/` exists.
+	 */
+	ipcMain.handle("assets:add", async (_event, projectPath: string, sourcePaths: string[]) => {
+		const directory = assetsDirectory(projectPath)
+		await fs.mkdir(directory, { recursive: true })
+
+		const added: string[] = []
+		const rejected: Array<{ file: string; reason: string }> = []
+
+		for (const source of sourcePaths) {
+			const name = path.basename(source)
+			const extension = path.extname(name).toLowerCase()
+
+			if (!ASSET_TYPES[extension]) {
+				rejected.push({ file: name, reason: `${extension || "files with no extension"} is not a supported asset type` })
+				continue
+			}
+
+			try {
+				const stat = await fs.stat(source)
+				if (stat.size > LARGE_ASSET_BYTES) {
+					// Assets live in git with the design. A warning rather than a
+					// refusal: it is the user's repository and their call.
+					Logger.warn(`[assets] ${name} is ${Math.round(stat.size / 1024 / 1024)}MB — consider Git LFS`)
+				}
+
+				// Never silently overwrite: two different photographs called
+				// "screenshot.png" is the common case, not the rare one.
+				const target = await freeName(directory, name)
+				await fs.copyFile(source, path.join(directory, target))
+				added.push(target)
+			} catch (err) {
+				rejected.push({ file: name, reason: err instanceof Error ? err.message : String(err) })
+			}
+		}
+
+		await reindexAssets(projectPath).catch((err) => Logger.warn(`[assets] reindex after add failed: ${err}`))
+		return { added, rejected }
+	})
+
+	ipcMain.handle("assets:retag", async (_event, projectPath: string, from: string, to: string) => {
+		const result = await retagAsset(projectPath, from, to)
+		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+		return result.ok ? { ok: true } : { ok: false, error: result.reason }
+	})
+
+	ipcMain.handle(
+		"assets:describe",
+		async (_event, projectPath: string, tag: string, fields: { alt?: string; description?: string }) => {
+			const result = await describeAsset(projectPath, tag, fields)
+			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+			return result.ok ? { ok: true } : { ok: false, error: result.reason }
+		},
+	)
+
+	ipcMain.handle("assets:remove", async (_event, projectPath: string, tag: string) => {
+		const index = await readAssetIndex(projectPath)
+		const entry = findAsset(index, tag)
+		if (!entry) return { ok: false, error: `No asset tagged "${tag}".` }
+
+		try {
+			await fs.rm(path.join(assetsDirectory(projectPath), entry.file))
+			await reindexAssets(projectPath)
+			await regenerateRulesFiles(projectPath).catch(() => {})
+			return { ok: true }
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) }
+		}
+	})
+
 	// ── sync ──────────────────────────────────────────────────────────────────
 
 	ipcMain.handle("sync:now", async (_event, projectPath: string) => {
@@ -157,4 +272,26 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("interview:library", () => fullLibrary())
 
 	ipcMain.handle("interview:pending", () => currentPrompt())
+}
+
+/**
+ * A filename that is free in `directory`, suffixing `-2`, `-3`, … as needed.
+ *
+ * Two unrelated photographs both called `screenshot.png` is the common case when
+ * dragging files in, and silently replacing the first one loses an asset a page
+ * may already reference.
+ */
+async function freeName(directory: string, name: string): Promise<string> {
+	const extension = path.extname(name)
+	const base = name.slice(0, name.length - extension.length)
+
+	for (let suffix = 1; suffix < 1000; suffix++) {
+		const candidate = suffix === 1 ? name : `${base}-${suffix}${extension}`
+		try {
+			await fs.access(path.join(directory, candidate))
+		} catch {
+			return candidate
+		}
+	}
+	throw new Error(`Could not find a free filename for "${name}".`)
 }

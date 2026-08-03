@@ -1,14 +1,22 @@
-# Connect an agent
+# Connect an external agent
 
-Caret does not bundle an agent. It exposes your project's design layer over a
-local MCP server, and you point whichever agent you already use at it.
+Caret has its own coding backend for the work you start **inside Caret** — an AI
+edit, the overlay editor, a sync, the foundation interview. You do not need to
+read this page for any of that.
+
+This page is for the other direction: you are working in your **own terminal**
+with Claude Code, Cursor or similar, and you want that agent to read and write
+this project's design layer. Caret exposes it over a local MCP server for exactly
+that case.
 
 The connection details are **per project** and **change every time Caret starts**,
 so Caret generates the exact command or config file for you: open a project, click
 **Connect agent** in the top bar, pick your client, and copy what it shows.
 
-This page explains what that snippet is doing, and how to fix it when it doesn't
-work.
+> **MCP is one-directional here.** An external agent can call into Caret; Caret
+> cannot push work out to it. Anything you start from Caret's own window runs on
+> Caret's backend instead, which is why nothing on this page is required to use
+> the app.
 
 ## What Caret exposes
 
@@ -28,14 +36,11 @@ than the docs.
 
 ## Clients
 
-**Verification status.** The Claude Code path is tested end to end on every
-release by `npm run verify:mcp-client`, which registers the server with the real
-CLI, health-checks it, has an agent call a tool, and confirms a question that
-blocks for 45 seconds still gets its answer. The other snippets follow each
-client's documented format but are **not** covered by that test — if one is
-wrong, please open an issue.
+**Verification status.** These snippets follow each client's documented config
+format. The Claude Code one has been exercised against the real CLI; the others
+have not. If one is wrong, please open an issue.
 
-### Claude Code (verified)
+### Claude Code
 
 ```bash
 claude mcp add --transport http caret <URL> --header "Authorization: Bearer <TOKEN>"
@@ -123,13 +128,21 @@ preserved across regeneration.
 Every tool result also echoes the foundation as JSON, as a backstop for an agent
 that only touches the tools.
 
-## You do not have to use the write tools
+## Use the write tools
 
-Your agent can edit `.caret/pages/*` with its own file tools, and most will.
-That is a supported path, not a workaround: Caret watches `.caret/` and runs the
+`.caret/` is Caret's surface. Editing it directly — with your agent's own file
+tools, or by hand in an editor — is an **anti-pattern**: your changes race with
+what Caret writes, and can be overwritten. Use `write_page` and friends, or the
+visual editor.
+
+Direct writes are *tolerated*, not endorsed. Caret watches `.caret/` and runs the
 same validation and the same `data-caret-id` codemod over anything that lands
-there, whoever wrote it. The MCP write tools are the *nicer* path — atomic writes
-and validation for free — not the one that keeps things working.
+there, whoever wrote it, because silently breaking would be worse than healing.
+That safety net exists so mistakes are survivable, not so they are a workflow —
+and Caret will tell you once per session when it sees one.
+
+`.caret/assets/` is the one exception where dropping files in is expected: they
+are indexed automatically, and the library UI does the same thing.
 
 ## Troubleshooting
 

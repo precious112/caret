@@ -234,7 +234,7 @@ holds the seam.
 
 ---
 
-## [~] Phase 6: Standalone + agent-agnostic
+## [~] Phase 6: Standalone + the inbound MCP surface
 
 **Gate — settled 2026-08-01:**
 
@@ -309,9 +309,11 @@ outbound feature may depend on an MCP client calling in):*
 - [x] **The no-agent state** — every agent-requiring feature refuses with a per-feature
       explanation rather than failing silently
 - [x] Client configs + docs: Claude Code, Cursor, Codex, OpenCode, Kimi, GLM. **Only the
-      Claude Code path is verified against a real client** (`npm run verify:mcp-client`);
-      the rest follow each client's documented format and are marked untested in the docs
-      rather than presented as equally certain
+      Claude Code path was exercised against a real client**; the rest follow each client's
+      documented format and are marked untested in the docs rather than presented as equally
+      certain. The dedicated real-client suite was retired 2026-08-03 when MCP stopped being
+      the mechanism the product depends on — it cost real inference per run to certify a
+      secondary path.
 - [x] Deleted: `src/core/api`, `src/core/task`, `src/core/prompts`, `src/core/controller`,
       `webview-ui`, `cli`, `standalone`, `evals`, `walkthrough`, `proto`, `src/generated`,
       checkpoint manager, terminal, browser tool
@@ -330,11 +332,12 @@ outbound feature may depend on an MCP client calling in):*
 - [ ] Deprecation notice shipped **inside** the final Open VSX extension release — needs a
       publish against the retired extension, whose source this branch no longer contains
 
-**Real-client certification:** `npm run verify:mcp-client` — registers the server with the
-actual `claude` CLI, health-checks it, has an agent list the tools and call `get_project` for
-real data, confirms a tool that **blocks 45 seconds on a human** still receives its answer, and
-confirms the client delivers **image content to the model** (an agent reads a random word off a
-rendered page with `get_screenshot` as its only permitted tool).
+**Findings kept from the retired real-client suite** (it registered the server with the actual
+`claude` CLI before being removed 2026-08-03): the documented `mcp add` command works verbatim;
+a tool that **blocks 45 seconds on a human** still receives its answer; and a real client
+**does deliver image content to the model** — an agent read a random word off a rendered page
+with `get_screenshot` as its only permitted tool. That last one is what makes every
+"look at it and judge it" interaction viable.
 
 **App-level reliability floor:** `npm run verify:app` — launches the real Electron binary and
 asserts on disk, over HTTP, and by driving the chrome UI: launch, MCP auth/origin refusal,

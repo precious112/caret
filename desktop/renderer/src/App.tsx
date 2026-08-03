@@ -10,13 +10,14 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { ProjectState } from "../../shared/ipc"
 import { invoke, on } from "./ipc"
 import { AgentPanel } from "./views/AgentPanel"
+import { AssetsView } from "./views/AssetsView"
 import { FoundationView } from "./views/FoundationView"
 import { NotificationStack } from "./views/NotificationStack"
 import { ProjectPicker } from "./views/ProjectPicker"
 import { TopBar } from "./views/TopBar"
 
 /** Which full-window surface is covering the canvas, if any. */
-export type Surface = "canvas" | "foundation" | "agent"
+export type Surface = "canvas" | "foundation" | "agent" | "assets"
 
 export function App() {
 	const [project, setProject] = useState<ProjectState | null>(null)
@@ -82,10 +83,28 @@ export function App() {
 		if (project && !project.hasFoundation) setSurface("foundation")
 	}, [project])
 
-	/** Surface changes that a pending interview is allowed to veto. */
+	/**
+	 * Surface changes that a pending interview is allowed to veto.
+	 *
+	 * The flag is renderer-local but the truth lives in main, and the two can
+	 * drift: a tool call abandoned by its client, or a prompt cancelled when a
+	 * project closed, clears the prompt in main and never tells the renderer.
+	 * The flag would then be stuck on forever and every button in the top bar
+	 * would silently do nothing — a far worse failure than the one the veto
+	 * exists to prevent. So a veto is confirmed against main before it is
+	 * honoured, which makes the flag self-healing.
+	 */
 	const requestSurface = useCallback((next: Surface) => {
-		if (interviewPendingRef.current && next !== "foundation") return
-		setSurface(next)
+		if (!interviewPendingRef.current || next === "foundation") {
+			setSurface(next)
+			return
+		}
+
+		void invoke("interview:pending").then((pending) => {
+			if (pending) return
+			interviewPendingRef.current = false
+			setSurface(next)
+		})
 	}, [])
 
 	const openProject = useCallback(async (projectPath: string) => {
@@ -103,7 +122,11 @@ export function App() {
 	}
 
 	return (
-		<div className="flex h-full flex-col">
+		// `data-surface` is what the shell is actually showing, as opposed to what
+		// was last clicked. The two diverge whenever a pending interview vetoes a
+		// navigation, and without it that divergence shows up only as a selector
+		// that never appears.
+		<div className="flex h-full flex-col" data-surface={surface} data-testid="app-shell">
 			<TopBar onSurfaceChange={requestSurface} project={project} ref={topBarRef} surface={surface} />
 
 			{surface === "foundation" && (
@@ -114,6 +137,7 @@ export function App() {
 				/>
 			)}
 			{surface === "agent" && <AgentPanel onClose={() => requestSurface("canvas")} project={project} />}
+			{surface === "assets" && <AssetsView onClose={() => requestSurface("canvas")} project={project} />}
 
 			<NotificationStack />
 		</div>

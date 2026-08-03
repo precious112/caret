@@ -233,7 +233,6 @@ export interface IpcEvents {
 	"project:stateChanged": (state: ProjectState) => void
 	"canvas:message": (projectPath: string, message: DesignOutboundWire) => void
 	"notification:show": (request: NotificationRequest) => void
-	"agent:task": (task: { kind: string; prompt: string }) => void
 	"interview:prompt": (prompt: InterviewPromptWire) => void
 	/** The asset index changed — by the UI, an agent, or a file dropped in Finder. */
 	"assets:changed": (projectPath: string) => void

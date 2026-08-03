@@ -25,18 +25,25 @@ You design in the first, then sync into the second. The design layer's known
 shape is what makes the live canvas, visual editing and design→app sync possible
 regardless of what your shipped app is built with.
 
-## Caret doesn't bundle an agent
+## Bring your own model, not your own plumbing
 
-You already chose one. Caret exposes your project's design layer over a local
-MCP server and any agent drives it — Claude Code, Cursor, Codex, OpenCode, Kimi,
-GLM. See [docs/connect-an-agent.md](docs/connect-an-agent.md).
+Caret drives a coding agent for the work you start inside it — an AI edit, the
+overlay editor, a design→app sync, the foundation interview. It ships with
+OpenCode's engine and connects to whichever provider you want: your own API key,
+an OpenCode subscription, or Claude Code, Codex and Kimi if you already have
+them. No key is required to open the app and design in it.
+
+**You can also drive Caret from your own terminal.** It exposes the design layer
+over a local MCP server, so an agent you're already talking to can read and write
+your pages — see [docs/connect-an-agent.md](docs/connect-an-agent.md). That's the
+inbound direction and it's optional; nothing in the app depends on it.
 
 Caret also generates `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` from your
 foundation tokens and keeps them current, so your colours, type and spacing are
-in every agent session without anyone remembering to mention them. That matters
-more than it sounds: an agent asked to "build me a card" that has to *choose* to
-look up your spacing scale will not, and will fill the gap from its training
-data.
+in every external agent's session without anyone remembering to mention them.
+That matters more than it sounds: an agent asked to "build me a card" that has to
+*choose* to look up your spacing scale will not, and will fill the gap from its
+training data.
 
 ## What it gives you
 

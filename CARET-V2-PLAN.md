@@ -9,7 +9,7 @@ one is *how* and *why*. Decisions live here so they don't have to be re-derived.
 
 | phase | state |
 |---|---|
-| **6** Standalone + agent-agnostic | **specified, ready to build** (§3, §4) |
+| **6** Standalone + inbound MCP | **built**; outbound half moved to 6.4 (§3, §4) |
 | **6.5** Foundation interview | **specified (§4.5)** — library content needs a curation session with the user |
 | **7** Make corrections stick | **not yet specified** — the differentiator, designed together next |
 | **7.5** Component supply | **specified (§5.5)** — gated on a user review of the candidate list |
@@ -817,9 +817,10 @@ poster for video and 3D, plus metadata in every case.
 The overlay editor, an agent judging a generated asset, and an agent describing an upload all
 require the connected agent to receive real pixels. Emitting MCP `image` content is not
 sufficient evidence — the client decides what reaches the model — so this is certified against
-a real client rather than assumed: `verify:mcp-client` asserts an agent reads a word off a
-rendered page, where the word exists in the fixture only as character codes, is random per run,
-and the agent is allowed no tool but `get_screenshot`.
+a real client rather than assumed: an agent read a word off a rendered page where the word
+existed in the fixture only as character codes, was random per run, and `get_screenshot` was
+its only permitted tool. (The dedicated real-client suite was retired 2026-08-03 with MCP's
+demotion; the finding stands, and the same guarantee on the owned backend is covered by §4.4.)
 
 ---
 

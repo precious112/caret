@@ -1,16 +1,21 @@
 /**
- * The boundary where Caret stops owning the agent.
+ * The outbound boundary: work Caret starts and hands to an agent.
  *
  * Caret used to call `controller.initTask(prompt)` in four places — design→app
  * sync, visual AI edits, the overlay editor, and flow-restructure nav sync. Each
- * of those now becomes an outbound request on this interface, so the agent is a
- * dependency the user chooses rather than something Caret bundles.
+ * is now an outbound request on this interface.
  *
- * Two implementations ship: `McpBridge` surfaces the task to whichever agent is
- * connected over the local MCP server, and `NullBridge` refuses honestly. The
- * `NullBridge` case is not an error path — running Caret with no agent connected
- * is a supported state, and every feature that needs one must say so plainly
- * rather than silently doing nothing.
+ * **There is no MCP implementation of this, and there cannot be one.** MCP is
+ * client-initiated: a server can hold a tool call open for minutes, but it
+ * cannot start one, and every caller above begins with the user clicking
+ * something in Caret's window. An earlier version queued these tasks for an
+ * agent to collect and nothing ever collected them, so sync and visual edits
+ * silently did nothing whenever an agent was connected — worse than refusing.
+ *
+ * Until the Phase 6.4 backend lands, the only implementation is `NullBridge`,
+ * which refuses with a per-feature explanation. That is a supported state, not
+ * an error path: running Caret without a backend is fine, and every feature that
+ * needs one has to say so plainly rather than appearing to work.
  */
 export type AgentTaskKind = "sync" | "visual-edit" | "flow-sync"
 
@@ -45,19 +50,23 @@ export class NoAgentConnectedError extends Error {
 }
 
 /**
- * What the user sees when they ask for something that needs an agent and none is
- * connected. Phrased per feature, because "no agent connected" on its own does
- * not tell someone what to do about it.
+ * What the user sees when they ask for something that needs a backend.
+ *
+ * Phrased per feature, because "no agent connected" on its own does not tell
+ * anyone what to do about it — and pointing at MCP would be actively wrong:
+ * connecting an external agent over MCP does not enable any of these, because
+ * MCP cannot carry work outwards. Until Phase 6.4 ships a backend these refuse
+ * unconditionally, and saying so is the honest state.
  */
 const NO_AGENT_MESSAGE: Record<AgentTaskKind, string> = {
-	sync: "Syncing the design into your app needs a connected agent. Connect one from Caret's agent settings, then try again.",
+	sync: "Syncing the design into your app needs Caret's coding backend, which isn't wired up yet. In the meantime, tell your own agent to sync — it can read the worklist over MCP.",
 	"visual-edit":
-		"Describing a change in words needs a connected agent. Connect one from Caret's agent settings — direct edits (text, colour, images) keep working without it.",
+		"Describing a change in words needs Caret's coding backend, which isn't wired up yet. Direct edits — text, colour, images — keep working without it.",
 	"flow-sync":
-		"Updating page navigation to match the flow needs a connected agent. The flow file itself has been updated either way.",
+		"Updating page navigation to match the flow needs Caret's coding backend, which isn't wired up yet. The flow file itself has been updated either way.",
 }
 
-/** Refuses every request, with an explanation. The default until an agent connects. */
+/** Refuses every request, with an explanation. The only implementation until Phase 6.4. */
 export class NullBridge implements AgentBridge {
 	connected(): boolean {
 		return false

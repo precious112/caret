@@ -1,10 +1,14 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { describeInline, expandReferences, readAssetIndex } from "../assets"
 import type { AiEditRequestPayload } from "../rendering-shell/messages"
 import { findJSXElementAtPosition, findJSXElementByCaretId, parseSource } from "./ast-editor"
 
-function extractElementSource(source: string, node: { loc?: { start: { line: number; column: number }; end: { line: number; column: number } } | null }): string | null {
+function extractElementSource(
+	source: string,
+	node: { loc?: { start: { line: number; column: number }; end: { line: number; column: number } } | null },
+): string | null {
 	if (!node.loc) return null
 	const lines = source.split("\n")
 	const startLine = node.loc.start.line - 1
@@ -29,14 +33,38 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 
 	const isOverlayEdit = payload.lineNumber === 0 && !payload.caretId
 
+	// `@tag` is resolved here rather than passed through, and here rather than in
+	// the canvas, so every surface that can send an instruction gets it — the
+	// inline box, the painted overlay, and anything added later. An agent handed a
+	// bare `@hero-shot` does not error when it fails to resolve it; it invents an
+	// asset that suits the name and proceeds.
+	const expansion = expandReferences(payload.instruction, await readAssetIndex(workspacePath))
+	const instruction = expansion.text
+
 	if (isOverlayEdit) {
 		sections.push(`The user painted a region on the design preview and provided a screenshot of what they see.`)
 		sections.push(`Look at the attached screenshot to understand what the user is referring to.`)
-		sections.push(`\nUser instruction: "${payload.instruction}"`)
+		sections.push(`\nUser instruction: "${instruction}"`)
 	} else {
 		sections.push(`The user selected a SPECIFIC element in the design preview and requested an edit.`)
 		sections.push(`IMPORTANT: Only modify the element at the specified location. Do NOT change other elements in the file.`)
-		sections.push(`\nUser instruction: "${payload.instruction}"`)
+		sections.push(`\nUser instruction: "${instruction}"`)
+	}
+
+	if (expansion.resolved.length > 0) {
+		sections.push(
+			`\nThe user named ${expansion.resolved.length === 1 ? "an asset" : "assets"} from this project's library. Use ${expansion.resolved.length === 1 ? "it" : "them"} exactly — do not substitute a placeholder or a stock URL:`,
+			...expansion.resolved.map((asset) => `  - ${describeInline(asset)}`),
+			`Respect the intrinsic size. If an asset is much smaller than the space it is going into, or its aspect ratio is far from the target, say so rather than stretching it.`,
+		)
+	}
+
+	if (expansion.unknown.length > 0) {
+		// Named but missing. Saying so is the point: silently ignoring it produces
+		// an edit that reads as though the user never asked for an image.
+		sections.push(
+			`\nThe user referred to ${expansion.unknown.map((tag) => `@${tag}`).join(", ")}, which ${expansion.unknown.length === 1 ? "is not an asset" : "are not assets"} in this project. Do not invent ${expansion.unknown.length === 1 ? "it" : "them"} — tell the user the tag does not exist and list what does, using list_assets.`,
+		)
 	}
 
 	if (payload.filePath) {
@@ -52,7 +80,8 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 			try {
 				const ast = parseSource(source)
 				const node = payload.caretId
-					? findJSXElementByCaretId(ast, payload.caretId) || findJSXElementAtPosition(ast, payload.lineNumber, payload.columnNumber)
+					? findJSXElementByCaretId(ast, payload.caretId) ||
+						findJSXElementAtPosition(ast, payload.lineNumber, payload.columnNumber)
 					: findJSXElementAtPosition(ast, payload.lineNumber, payload.columnNumber)
 
 				if (node) {
@@ -73,7 +102,9 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 				sections.push("```tsx")
 				sections.push(elementCode)
 				sections.push("```")
-				sections.push(`Located at line ${elementLine}${payload.columnNumber > 0 ? `, column ${payload.columnNumber}` : ""} in ${relPath}.`)
+				sections.push(
+					`Located at line ${elementLine}${payload.columnNumber > 0 ? `, column ${payload.columnNumber}` : ""} in ${relPath}.`,
+				)
 				if (isInsideIterator) {
 					sections.push(`This element may be inside a .map() or iteration callback.`)
 				}

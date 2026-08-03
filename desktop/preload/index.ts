@@ -26,6 +26,12 @@ const REQUEST_CHANNELS: readonly IpcRequestChannel[] = [
 	"tokens:generateScale",
 	"fonts:search",
 	"pages:list",
+	"assets:list",
+	"assets:add",
+	"assets:retag",
+	"assets:describe",
+	"assets:remove",
+	"assets:pickFiles",
 	"sync:now",
 	"sync:rollback",
 	"sync:markSynced",
@@ -41,12 +47,20 @@ const REQUEST_CHANNELS: readonly IpcRequestChannel[] = [
 	"interview:pending",
 ]
 
+/**
+ * Event channels the renderer may subscribe to.
+ *
+ * Adding a channel to `IpcEvents` is not enough — this list is the allowlist and
+ * `on()` **throws** for anything absent from it. A throw inside a component's
+ * effect unmounts the entire React tree, so a channel added to the types and
+ * forgotten here does not degrade, it blanks the window.
+ */
 const EVENT_CHANNELS: readonly IpcEventChannel[] = [
 	"project:stateChanged",
 	"canvas:message",
 	"notification:show",
-	"agent:task",
 	"interview:prompt",
+	"assets:changed",
 	"log",
 ]
 

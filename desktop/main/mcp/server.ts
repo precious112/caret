@@ -15,7 +15,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http"
 import type { AddressInfo } from "net"
 
-import { type AgentBridge, type AgentTask, NullBridge, setProjectBridge } from "../../../src/core/design"
+import { NullBridge, setProjectBridge } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import type { ScreenshotResult } from "../types"
@@ -35,8 +35,6 @@ export interface CaretMcpServerOptions {
 	onAgentConnectionChanged?(connected: boolean): void
 	/** Renders one page and captures it, or says why it could not. */
 	screenshot?(pageId: string): Promise<ScreenshotResult>
-	/** Surfaces an outbound agent task (sync, visual edit) to the user. */
-	onAgentTask?(task: AgentTask): void
 	/** Sends an interview question or option set to the chrome renderer. */
 	onInterviewPrompt?(prompt: InterviewPrompt): void
 }
@@ -46,9 +44,6 @@ export class CaretMcpServer {
 	private token = generateToken()
 	private port: number | null = null
 	private connected = false
-
-	/** Tasks handed out but not yet picked up by an agent. */
-	private queue: AgentTask[] = []
 
 	constructor(private readonly options: CaretMcpServerOptions) {}
 
@@ -62,13 +57,6 @@ export class CaretMcpServer {
 
 	hasConnectedAgent(): boolean {
 		return this.connected
-	}
-
-	/** Tasks waiting for the agent to collect. Drains on read. */
-	takePendingTasks(): AgentTask[] {
-		const taken = this.queue
-		this.queue = []
-		return taken
 	}
 
 	async start(): Promise<void> {
@@ -97,7 +85,7 @@ export class CaretMcpServer {
 
 		// Until an agent actually talks to us, every feature that needs one must
 		// refuse honestly rather than appear to work.
-		setProjectBridge(this.options.projectPath, this.createBridge())
+		setProjectBridge(this.options.projectPath, new NullBridge())
 
 		Logger.info(`[mcp] serving ${this.options.projectPath} on ${this.getUrl()}`)
 	}
@@ -115,21 +103,6 @@ export class CaretMcpServer {
 		this.http = null
 		this.port = null
 		this.setConnected(false)
-	}
-
-	private createBridge(): AgentBridge {
-		const server = this
-		return {
-			connected: () => server.connected,
-			async request(task: AgentTask) {
-				if (!server.connected) {
-					const { NoAgentConnectedError } = await import("../../../src/core/design")
-					throw new NoAgentConnectedError(task.kind)
-				}
-				server.queue.push(task)
-				server.options.onAgentTask?.(task)
-			},
-		}
 	}
 
 	private registerTools(mcp: McpServer): void {

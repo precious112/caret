@@ -95,13 +95,15 @@ export class ProjectWindow {
 			projectPath: this.projectPath,
 			onAgentConnectionChanged: () => void this.pushState(),
 			screenshot: (pageId) => this.screenshotPage(pageId),
-			onAgentTask: (task) => this.sendToChrome("agent:task", task),
 			onInterviewPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
 		})
 
 		this.healer = new WatchAndHeal({
 			projectPath: this.projectPath,
 			onTokensChanged: () => void this.pushState(),
+			// An asset can arrive from an agent or from Finder, not only from the
+			// library surface, so the renderer is told rather than left to poll.
+			onAssetsChanged: () => this.sendToChrome("assets:changed", this.projectPath),
 		})
 
 		this.loadChrome()

@@ -4,13 +4,20 @@
 		<meta charset="UTF-8" />
 		<meta content="width=device-width, initial-scale=1.0" name="viewport" />
 		<!--
-			The chrome loads nothing remote: its scripts are bundled, its styles are
-			bundled, and the only network host it may reach is the project's own Vite
-			server. Anything beyond that is a bug, so it is refused here rather than
-			relied on not to happen.
+			Scripts are bundled and no remote script may ever load. Three narrow
+			exceptions to "nothing remote", each earning its place:
+
+			- Google Fonts (`style-src` + `font-src`) — the interview's specimens are
+			  worthless unless they render in the real typeface, which is the whole
+			  argument for showing pictures instead of font names. This was omitted
+			  originally and the specimens silently fell back to the system face; the
+			  test asserted on the CSS family string, which is present either way.
+			- localhost images (`img-src`) — asset thumbnails are served by the
+			  project's own Vite server, which is not this document's origin.
+			- localhost `connect-src` — the same server for everything else.
 		-->
 		<meta
-			content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://localhost:* http://127.0.0.1:*; font-src 'self' data:;"
+			content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*; connect-src 'self' http://localhost:* http://127.0.0.1:*; font-src 'self' data: https://fonts.gstatic.com;"
 			http-equiv="Content-Security-Policy"
 		/>
 		<title>Caret</title>

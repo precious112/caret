@@ -7,7 +7,7 @@
  * work below it.
  */
 
-import { Blocks, Palette, RefreshCw } from "lucide-react"
+import { Blocks, Images, Palette, RefreshCw } from "lucide-react"
 import { forwardRef } from "react"
 
 import type { ProjectState } from "../../../shared/ipc"
@@ -44,6 +44,13 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar({ 
 					icon={<Palette size={14} />}
 					label="Foundation"
 					onClick={() => onSurfaceChange(surface === "foundation" ? "canvas" : "foundation")}
+				/>
+
+				<TopBarButton
+					active={surface === "assets"}
+					icon={<Images size={14} />}
+					label="Assets"
+					onClick={() => onSurfaceChange(surface === "assets" ? "canvas" : "assets")}
 				/>
 
 				<TopBarButton

@@ -514,11 +514,20 @@ async function main(): Promise<void> {
 
 	const chrome = await app.firstWindow()
 
+	// Collected for the whole run, not just for mount. A React error thrown at any
+	// point unmounts the tree, and every scenario after it then fails as "selector
+	// not found" — which reads as a missing feature rather than a crash. Whatever
+	// the renderer throws is reported by the scenario that trips over it.
+	const rendererErrors: string[] = []
+	chrome.on("pageerror", (err) => rendererErrors.push(err.message))
+	chrome.on("console", (message) => {
+		if (message.type() === "error") rendererErrors.push(`console: ${message.text()}`)
+	})
+
 	await scenario("n. the chrome renders and shows the project", async () => {
 		// A renderer that threw during mount leaves an empty #root and every later
 		// scenario times out with a confusing message, so check that first.
-		const failures: string[] = []
-		chrome.on("pageerror", (err) => failures.push(err.message))
+		const failures = rendererErrors
 
 		await chrome.waitForSelector('[data-testid="top-bar"]', { timeout: 60_000 })
 		await shot(chrome, "01-chrome")
@@ -644,12 +653,32 @@ async function main(): Promise<void> {
 
 		// A specimen has to actually render the typeface it is offering — a card
 		// showing the fallback is worse than useless, because the user picks on it.
+		//
+		// `getComputedStyle().fontFamily` is NOT sufficient: it returns the declared
+		// family whether or not the file ever loaded. This suite asserted on that
+		// string and passed for weeks while the chrome's CSP silently blocked
+		// fonts.googleapis.com and every specimen rendered in the system face.
+		// `document.fonts.check` is the only assertion that distinguishes them.
 		const family = await cards
 			.first()
 			.locator("p")
 			.first()
 			.evaluate((el) => getComputedStyle(el).fontFamily)
-		assert(!/^(ui-|system-ui|-apple)/.test(family), `specimen fell back to a system face: ${family}`)
+		assert(!/^(ui-|system-ui|-apple)/.test(family), `specimen declared a system face: ${family}`)
+
+		const declared = family.split(",")[0].replace(/["']/g, "").trim()
+		const loaded = await waitFor(
+			`the ${declared} webfont to load`,
+			async () => {
+				const ok = await chrome.evaluate(
+					(name) => document.fonts.check(`16px "${name}"`) && document.fonts.status === "loaded",
+					declared,
+				)
+				return ok ? true : null
+			},
+			30_000,
+		).catch(() => false)
+		assert(loaded, `"${declared}" never loaded — the specimen is rendering a fallback, so the user picks on a lie`)
 
 		await cards.first().click()
 		const picked = await pending.then((r) => r.text())
@@ -857,6 +886,93 @@ async function main(): Promise<void> {
 		return `${bytes.length} bytes served as image/png; encoded traversal → ${escaped.status}`
 	})
 
+	await scenario("aa. the asset library renders, previews and writes a description", async () => {
+		await chrome.getByTestId("top-bar").getByText("Assets").click()
+
+		const surface = await waitFor(
+			"the shell to show the assets surface",
+			async () => {
+				const current = await chrome.getByTestId("app-shell").getAttribute("data-surface")
+				return current === "assets" ? current : null
+			},
+			30_000,
+		).catch(async () => {
+			const shellPresent = (await chrome.locator('[data-testid="app-shell"]').count()) > 0
+			const stuck = shellPresent ? await chrome.getByTestId("app-shell").getAttribute("data-surface") : "no shell"
+			const body = (await chrome.evaluate(() => document.body.innerText).catch(() => "")).slice(0, 200)
+			throw new Error(
+				`clicking Assets left the shell on "${stuck}". Renderer errors: ${rendererErrors.join(" | ") || "none"}. Body: ${body}`,
+			)
+		})
+		assert(surface === "assets", "the shell did not switch surfaces")
+		await chrome.waitForSelector('[data-testid="assets-view"]', { timeout: 30_000 })
+
+		const row = chrome.locator('[data-testid="asset-row"]').first()
+		await row.waitFor({ timeout: 30_000 })
+
+		// The chrome is not served by Vite, so a relative /caret-assets/ src would
+		// resolve against the wrong origin and fail silently as a broken image.
+		// naturalWidth is the only assertion that distinguishes "rendered" from
+		// "an <img> element exists".
+		const previewWidth = await waitFor(
+			"the thumbnail to decode",
+			async () => {
+				const width = await row.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)
+				return width > 0 ? width : null
+			},
+			30_000,
+		)
+		assert(previewWidth === 240, `the preview decoded at ${previewWidth}px, expected the real asset`)
+
+		const description = row.getByTestId("asset-description")
+		await description.fill("wide, dark, empty space top-left")
+		await description.blur()
+
+		// On disk is what counts — and then in the rules file, since that is the
+		// only path by which a description reaches an agent.
+		await waitFor(
+			"the description to be written",
+			async () => {
+				const raw = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+				return raw.includes("empty space top-left") ? true : null
+			},
+			30_000,
+		)
+		await waitFor(
+			"the description to reach AGENTS.md",
+			async () => {
+				const rules = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
+				return rules.includes("empty space top-left") ? true : null
+			},
+			30_000,
+		)
+
+		await shot(chrome, "08-assets")
+		return "preview decoded from the design server; description written and carried into the rules"
+	})
+
+	await scenario("bb. the library refuses a bad tag in the UI without losing the asset", async () => {
+		const tagField = chrome.locator('[data-testid="asset-row"]').first().getByTestId("asset-tag")
+		await tagField.fill("Not A Tag")
+		await tagField.blur()
+
+		// The refusal has to restore the real tag, not leave the field showing a
+		// name that does not exist — the next thing the user does is type @ and
+		// expect it to be there.
+		await waitFor(
+			"the tag to be restored",
+			async () => ((await tagField.inputValue()) === "hero-shot-2x" ? true : null),
+			15_000,
+		)
+
+		const raw = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8")
+		assert(raw.includes('"hero-shot-2x"'), "the asset lost its tag on a refused rename")
+		assert(!raw.includes("Not A Tag"), "a malformed tag was written")
+
+		await chrome.getByTestId("assets-view").getByText("Done").click()
+		return "malformed tag refused, field restored, index untouched"
+	})
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message
@@ -894,7 +1010,11 @@ async function main(): Promise<void> {
 		const { runSync } = await import("../src/core/design/sync/sync-orchestrator")
 		const result = await runSync(fixture)
 		assert(result.status === "no-agent", `expected "no-agent", got "${result.status}"`)
-		assert(result.message.includes("agent"), "the refusal does not explain what to do")
+		// Naming the missing thing is not enough — the refusal has to say what to
+		// do. It used to point at MCP agent settings, which would not have helped:
+		// connecting an agent over MCP enables none of the outbound features.
+		assert(result.message.includes("backend"), `the refusal does not name what is missing: ${result.message}`)
+		assert(!/agent settings/i.test(result.message), "the refusal still points at MCP, which cannot carry outbound work")
 		return `refused with: "${result.message.slice(0, 60)}…"`
 	})
 }
