@@ -194,14 +194,25 @@ user makes evaporates. **`.caret/` does not.** It is a persistent design layer, 
 under version control. That is the one thing Caret has that none of them do, and the whole
 roadmap below is ordered around exploiting it.
 
-**Three decisions, 2026-07-28 to 2026-08-01:**
+**Four decisions, 2026-07-28 to 2026-08-03:**
 
-1. **Caret stops owning the agent.** A local MCP server exposes the design layer; any agent
-   drives it.
+1. **Caret stops requiring a particular agent** — *amended 2026-08-03.* The original form
+   ("Caret stops owning the agent; MCP carries everything") is unimplementable for most of the
+   product: MCP is client-initiated, and nearly every Caret feature starts with the user
+   clicking something in Caret's window. The corrected split, by direction:
+   - **Caret → agent** (sync, AI edit, overlay editor, interview, generate-and-pick): an
+     **embedded coding backend** Caret drives through an agent SDK. Phase 6.4.
+   - **Agent → Caret** (a user in their own terminal telling their agent to work on the design
+     layer): the local **MCP server**, unchanged. This is MCP's whole scope — real, supported,
+     and secondary.
 2. **Caret becomes a standalone Electron app**, not an extension or a VSCodium fork. The Open
    VSX extension is retired at its last published version.
 3. **The differentiator is persistence, not precision.** Direct manipulation is table stakes so
    the tool doesn't feel like a chat box; it is not the thing that makes output non-generic.
+4. **The backend is an adapter, never a hard dependency on one vendor.** OpenCode's SDK is the
+   reference implementation and ships bundled; Claude Code, Codex and Kimi attach behind the
+   same seam using the user's existing subscription or key. Caret-hosted inference later is a
+   provider config block, not an integration.
 
 **What must be true for the output to stop looking generic** (documented consistently across
 practitioner writing):
@@ -268,9 +279,14 @@ Windows, so the same design would look different per machine):**
 - [x] Ad-hoc codesign for Apple Silicon (`identity: null` in `electron-builder.yml`)
 - [x] Unsigned builds: macOS `.zip`, Windows `.exe` + portable, Linux AppImage/`.deb`/`.rpm`
 
-**Agent decoupling + MCP:**
+**Agent decoupling + MCP** *(scope corrected 2026-08-03: this section is the **agent-initiated**
+path — an external agent driving the design layer from the user's terminal. Everything
+**Caret-initiated** — sync, AI edit, overlay, interview — runs on the Phase 6.4 backend, and no
+outbound feature may depend on an MCP client calling in):*
 
-- [x] `AgentBridge` boundary replacing every `controller.initTask()` call site
+- [x] `AgentBridge` boundary replacing every `controller.initTask()` call site — the interface
+      survives as the seam; its outbound implementation is Phase 6.4's backend, and the
+      MCP-side task queue (`takePendingTasks`, the `agent:task` event) is deleted with it
 - [x] Local MCP server over HTTP, auto-starting on project open
 - [x] Tools v1: `get_project`, `get_page`, `get_tokens`, `get_flows`, `get_screenshot`,
       `get_sync_worklist`, `get_guide`, `create_page`, `write_page`, `update_tokens`,
@@ -316,50 +332,185 @@ Windows, so the same design would look different per machine):**
 
 **Real-client certification:** `npm run verify:mcp-client` — registers the server with the
 actual `claude` CLI, health-checks it, has an agent list the tools and call `get_project` for
-real data, and confirms a tool that **blocks 45 seconds on a human** still receives its answer.
-That last one was the genuine unknown: the whole foundation interview depends on a client
-tolerating a request held open while somebody decides, and nothing short of a real client
-could answer it. 5/5.
+real data, confirms a tool that **blocks 45 seconds on a human** still receives its answer, and
+confirms the client delivers **image content to the model** (an agent reads a random word off a
+rendered page with `get_screenshot` as its only permitted tool).
 
-**New app-level reliability floor:** `npm run verify:app` — launches the real Electron binary
-and asserts on disk and over HTTP: launch, MCP discovery file permissions, unauthenticated and
-cross-origin refusal, rules generation, user content surviving regeneration, watch-and-heal,
-codemod idempotence, provenance attribution, and honest no-agent refusal. 11/11 pass.
+**App-level reliability floor:** `npm run verify:app` — launches the real Electron binary and
+asserts on disk, over HTTP, and by driving the chrome UI: launch, MCP auth/origin refusal,
+rules generation and user-block survival, watch-and-heal and idempotence, provenance, the
+interview surfaces, screenshot capture, and the asset pipeline. A scenario only counts as
+driving the app if a user could reach the same state by clicking — a harness that supplies the
+counterpart (an MCP call, a queued task) certifies the half it wrote, nothing more.
 
-**Deliverable:** Caret runs standalone, works with any MCP agent, and the agent always has the
-project's design foundations in context rather than guessing at them.
+**Deliverable:** Caret runs standalone; an external agent pointed at the MCP server reads and
+writes the design layer safely, always with the project's foundations in context.
 
 ---
 
-## [x] Phase 6.5: The foundation interview (token wizard v2)
+## [ ] Phase 6.4: The coding backend — Caret owns the loop
 
-The wizard stopped being a form. Foundations are set in a short **agent-led interview**:
-plain-language questions, then curated options the user points at. This is the supply-side
-v0 — it did not wait on the Phase 11 research, because every pickable option comes from a
-curated library rather than the agent's imagination. Engineering detail in
+**Added 2026-08-03.** Every Caret-initiated feature — sync, AI edit, the overlay editor, the
+interview, Phase 7's generate-and-pick — needs Caret to hand work to an agent, and MCP cannot
+carry that direction. So Caret embeds a coding backend behind an adapter seam and drives it
+through an agent SDK. This phase blocks 6.5's interview rewrite, 6.7's authored-SVG lane, and
+all of Phase 7. Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.4 — **read it
+in full before implementing; the SDK surfaces, event mappings and auth flows are specified
+there, not here.**
+
+**The seam:**
+
+- [ ] `CodingBackend` interface in `src/core/design/agent/backend.ts`: `availability()`,
+      `startSession()`, and `structured()` (one-shot, JSON-schema-constrained — carries the
+      interview). Sessions expose `send()` streaming normalised `BackendEvent`s,
+      `respondToPermission()`, `abort()`, `close()`.
+- [ ] `AgentBridge` call sites route through it; the dead MCP-outbound plumbing
+      (`takePendingTasks`, the `agent:task` chrome event, the queue in `createBridge`) is
+      **deleted**, not left beside the new path
+- [ ] `NoBackendError` refusals name the fix ("Open Settings → Backend…"), per feature, same
+      posture as the existing no-agent messages
+
+**OpenCode — the reference adapter, ships first:**
+
+- [ ] `@opencode-ai/sdk`; binary **bundled with Caret, pinned**, spawned from the app bundle —
+      never resolved from `PATH` (a user upgrading their own OpenCode must not change what
+      Caret executes). Per-platform `extraResources` in `electron-builder.yml`.
+- [ ] Config passed **inline** to the embedded instance. Caret never writes
+      `~/.config/opencode/*`; it *reads* the user's existing credentials so a signed-in
+      OpenCode account is picked up without a second login.
+- [ ] One session per activity (a sync, a brainstorm, an edit) — never one long thread
+- [ ] Before building the sidebar: boot the server, read the live OpenAPI at `/doc`, and pin
+      the actual event types from `/event` and the response shape of `GET /session/:id/diff`.
+      Both are undocumented; neither may be guessed at.
+- [ ] **Caret's permission handler is the enforcement boundary.** Backend agent/permission
+      config (Plan agent, glob rules) is the first line only — upstream has open issues where
+      subagents inherit none of the parent's `edit: deny`. Caret answers every permission
+      request itself: `.caret/**` writes auto-approved (fixed, not configurable), app-path
+      writes denied outright in a read-only session, and prompted per the user's toggle
+      (default: ask, with "don't ask again for this project") in a write session.
+
+**Chat surface:**
+
+- [ ] Collapsible chat sidebar: streamed text, collapsed thinking, tool-call lines, file-change
+      list, permission prompts, stop (= abort). Dismissible at will; UX reference is OpenCode's
+      desktop app.
+- [ ] Chat history: sessions listed per project, rehydrated via the SDK's session/message APIs
+- [ ] Diffs shown from **Caret's own pre-task git snapshot** (exists since Phase 6) — canonical
+      and backend-independent; the backend's diff endpoint is enrichment, not the source
+- [ ] Works in design mode for brainstorming sessions, not only for sync
+
+**Setup and auth (each backend gets both paths — account login first, API key fallback):**
+
+- [ ] Detection ladder: bundled OpenCode always present → detect installed CLIs (`claude`,
+      `codex`, `kimi`) and their auth state → offer that backend's own login → paste-a-key
+      last. A detected, signed-in CLI shows as "found — use it", one click.
+- [ ] Claude: auth via the CLI's `auth login` / `setup-token` (subscription-backed, no console
+      trip). Billing disclosure **at the point of choice**: account auth draws the separate
+      Agent SDK credit pool, not normal Claude Code limits.
+- [ ] The setup screen names routes, never prices or quotas (they drift): "OpenCode
+      subscription", "OpenCode credits", "your own API key", with links out
+- [ ] A backend whose CLI is missing shows an honest "install this first" state with the
+      command — never a dead or half-working option
+- [ ] Provider ladder through OpenCode: BYOK (any provider) · OpenCode Go (subscription) ·
+      OpenCode Zen (credits). Caret-hosted inference later is an OpenAI-compatible `baseURL`
+      provider block — config, not integration (§11 boundary).
+
+**Secondary adapters — written to spec, flagged `(untested)` until subscriptions exist:**
+
+- [ ] Claude Agent SDK adapter (`@anthropic-ai/claude-agent-sdk`)
+- [ ] Codex adapter (`@openai/codex-sdk`) *(untested)*
+- [ ] Kimi adapter (`@moonshot-ai/kimi-agent-sdk`) *(untested)* — no native structured output;
+      the emulation's post-validation is load-bearing there
+- [ ] GLM: **no adapter.** Z.ai ships no embeddable agent SDK (ZCode is an app); GLM
+      subscribers connect through the OpenCode adapter's provider config, which Z.ai supports
+      day-one. Revisit only if a ZCode SDK appears.
+
+**Sync, restored to the V1 contract on the backend (spec: §4.4 + `caret/main` history):**
+
+- [ ] Preflight and one-click git fixes carry over unchanged
+- [ ] Plan phase: read-only session, worklist prompt (no file contents); the plan streams into
+      the sidebar for review
+- [ ] Apply: same session switches to write mode; app-path permissions per the user's toggle
+- [ ] **Caret advances the bookmark in its own code on apply** — never by instructing the
+      model to write `sync-state.json`
+- [ ] Pre-sync snapshot and "Undo sync" unchanged
+
+**Policy:**
+
+- [ ] Direct edits to `.caret/` are an **anti-pattern, tolerated and healed, never
+      recommended**: watch-and-heal stays exactly as is, and the first `external`-actor write
+      in a session raises a once-per-session notice pointing at the visual editor.
+      `connect-an-agent.md` stops describing direct writes as a supported path.
+
+**Certification — cold launch, click-only, no harness-supplied counterparts:**
+
+- [ ] From a fresh install with the bundled backend: type an instruction in the AI-edit box →
+      the source file changes to exactly that
+- [ ] Click Sync → a plan streams in → apply → the app changes, the bookmark advances
+- [ ] With no backend configured: every one of those refuses with its named fix
+
+**Deliverable:** clicking things in Caret causes an agent to do them. The user connects a
+subscription or key once, or uses the bundled default, and never opens a terminal.
+
+---
+
+## [~] Phase 6.5: The foundation interview (token wizard v2)
+
+**Re-scoped 2026-08-03.** The interview is a **Caret-owned state machine running on the Phase
+6.4 backend** — not an agent-led flow an external agent must initiate, which nothing in the
+product can trigger. Caret sequences the steps; the model only ranks curated candidates and
+explains its recommendation in the user's terms. Engineering detail in
 [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.5.
+
+**Kept from the first build (done, certified):**
 
 - [x] Curated foundation library (`src/core/design/foundation-library/`): 8 typeface
       pairings, 5 palette recipes, 5 shape/density presets. **Every typeface licence was
-      verified from the family's own source repository**, not from a marketing page — all
-      SIL OFL 1.1, which permits commercial use, self-hosting and bundling.
-- [x] Interview MCP tools: `present_question`, `present_options`, `commit_foundation`.
-      `present_options` takes **library ids only** — an agent cannot pass its own hexes or
-      font names, which is the whole anti-slop mechanism. Certified: an invented candidate
-      id is refused.
-- [x] Interview script shipped as an MCP prompt (`foundation_interview`) **and** as an
-      instruction in the generated rules files, so an agent finds it without being told
+      verified from the family's own source repository** — all SIL OFL 1.1.
 - [x] Options displayed as live specimens — the real typeface loaded, the palette applied
       to a heading, body copy and one accented button. No hex codes, no scale ratios.
 - [x] Pro path: a tab switches to direct token editing at any point; same `foundation.json`
-- [x] No-agent fallback: the token editor is the default when nothing is connected, and the
-      interview tab is disabled with a reason rather than silently missing
+- [x] Interview MCP tools (`present_question`, `present_options`, `commit_foundation`) —
+      **repositioned as the external-agent path only.** They stay certified and stay refusing
+      non-library ids; the in-app interview below does not use them.
+
+**The in-app interview (new build):**
+
+- [ ] Entry: one field — *"Describe what you're trying to build"* — the only typing in the
+      flow. Reachable from launch with zero setup beyond a backend.
+- [ ] Caret owns the step sequence. Per step, `structured()` sends the description, decisions
+      so far, and the step's full curated candidate set; the schema's **`enum` is the candidate
+      ids**, so a model cannot introduce a font or hex at the request level. Post-validation
+      stays (schema-valid ≠ semantically valid).
+- [ ] The model returns a ranking of 3 with one plain-language reason each, grounded in the
+      description. The top recommendation renders **preselected** — pressing through the whole
+      interview yields a good foundation, not a default one.
+- [ ] Steps: typeface pairing · colour direction · brand colour · density/spacing · corner
+      character · border-and-elevation weight. (Adding steps is a user decision — question
+      fatigue is the failure mode; the description should carry inference so steps only ask
+      what genuinely cannot be inferred.)
+- [ ] **"None of these" is the user's override, never the model's**: full Google Fonts list
+      for type, a picker for colour. After an override, later steps pair around the user's
+      choice.
+- [ ] Every answer persists per step (scratch state under `.caret/`, gitignored, cleared on
+      commit); a crash at step 5 resumes at step 5
+- [ ] Fallback: `structured()` failure or **no backend at all** degrades that step to the
+      deterministic tag-based narrowing — same screens, no grounded reasoning line. The
+      interview never dead-ends on backend state.
+- [ ] Final screen: a real page rendered with the chosen foundation — not a swatch sheet —
+      confirm or step back
+- [ ] Commit builds `foundation.json` locally from curated pieces + `generateTokenScale`; the
+      model never writes the file
 - [ ] Re-runnable with blast radius shown — the *proposal* half needs Phase 7's live
       bindings to compute what a token change would affect. Re-running today overwrites,
       which is why the surface warns before the first commit rather than after.
 
-**Deliverable:** a developer with no design vocabulary answers a few plain questions, picks
-from options that all look good, and lands on foundations worth protecting.
+**Gate (working-agreement exception 2):** the user runs the interview on a real project and
+rates the output before this phase closes.
+
+**Deliverable:** a developer with no design vocabulary describes what they're building, answers
+a handful of guided steps, and lands on foundations worth protecting — with every option on
+screen coming from the curated library.
 
 ---
 
@@ -374,41 +525,48 @@ That is a supply gap of the same kind as typefaces, and it belongs **before** Ph
 corrections stick" means little while the thing the user keeps correcting is *"you used a grey
 box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
 
-- [ ] `.caret/assets/` + `index.json` manifest — under git like the rest of the design layer.
+- [x] `.caret/assets/` + `index.json` manifest — under git like the rest of the design layer.
       Per entry: tag, file, kind, mime, intrinsic dimensions, bytes, content hash, alt text,
       a one-line **character description**, and `origin` provenance.
-- [ ] **The description is the load-bearing field.** Dimensions do not tell an agent that a
+- [x] **The description is the load-bearing field.** Dimensions do not tell an agent that a
       photograph is dark, wide, and has empty space top-left — which is what decides whether
       it can carry overlaid text. Written by the user, or proposed by the agent from the
-      pixels (it can see them; certified below).
-- [ ] Asset library surface in the chrome: drag-and-drop, paste, tag naming with validation
-      and dedupe by content hash, inline rename, delete with usage check
-- [ ] **The index goes in the always-on rules block** — tag · kind · dimensions · description.
-      An agent that must *choose* to call `list_assets` will not, and will emit a placeholder.
-      Same argument as the foundation tokens and the 7.5 catalog index. Pixels stay pull-only.
-- [ ] Vite serves `.caret/assets` at a stable path, so pages reference `/caret-assets/<file>`
-      and render in the canvas
-- [ ] `@` in the AI-edit box and the overlay editor: an asset picker with thumbnails. What is
-      sent to the agent is the **resolved entry expanded inline**, not the literal `@tag` —
-      passing a token and hoping the agent looks it up is the pull-tool failure mode again.
-- [ ] Fit is the agent's judgment, not a crop tool's: it has the asset's aspect ratio and the
-      target box geometry, so it picks cover/contain/focal point — and can **refuse**, which
-      matters more (a 400×400 asset in a 2400px hero should get a reason, not an upscale).
-- [ ] MCP: `list_assets`, `get_asset` (returns image content), `add_asset`, `describe_asset`
-- [ ] Watch-and-heal indexes assets written directly into `.caret/assets/` by any author —
-      dimensions probed, hash computed, tag derived from filename. Direct write stays a
-      supported path, exactly as it is for pages.
-- [ ] Sync copies referenced assets into the app's public directory and rewrites the path,
-      recording the copy in the mapping so Phase 9 can detect drift
+      pixels. Descriptions survive a byte change to the file — they describe the slot.
+- [ ] Asset library surface in the chrome: drag-and-drop, native picker, tag rename with
+      validation, description/alt editing, delete. **Certified by driving the UI from a cold
+      launch** — thumbnail decodes from the design server, a description typed in the row
+      reaches `index.json` and the rules files, a refused rename restores the field.
+- [x] **The index is always-on context** — tag · kind · dimensions · description, one line
+      each, in the generated rules block; the Phase 6.4 backend gets the same lines injected
+      into its system prompt directly. Pixels stay pull-only.
+- [x] Vite serves `.caret/assets` at `/caret-assets/<file>` — path-confined after URL
+      decoding; encoded traversal refused
+- [x] `@tag` expands to the **resolved entry inline** (path, dimensions, description) before
+      any instruction reaches an agent, in the shared prompt builder so every edit surface
+      gets it. Unknown tags are kept verbatim and flagged — never silently dropped.
+- [ ] `@` picker in the AI-edit box and overlay editor: thumbnail autocomplete over the index
+- [ ] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
+      >2×) joins the expanded reference once the selection payload carries box geometry — and
+      the agent can **refuse**, which matters more (a 400×400 asset in a 2400px hero should
+      get a reason, not an upscale)
+- [x] MCP: `list_assets`, `get_asset` (returns pixels + metadata, tolerates a leading `@`,
+      refusals name the tags that do exist), `describe_asset`
+- [x] Watch-and-heal indexes assets written directly into `.caret/assets/` by any author —
+      dimensions probed from file headers, hash computed, tag derived from filename, rules
+      regenerated. Same tolerated-and-healed posture as pages.
+- [x] Sync prompt tables every referenced asset and instructs the copy into the app's own
+      public directory with the path rewritten — never a hotlink to `/caret-assets/`
+- [ ] Sync records each asset copy in the mapping so Phase 9 can detect drift (lands with the
+      Phase 9 manifest)
 - [ ] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
       stored, tagged, served, `@`-referenceable, synced. What differs is only the library
-      thumbnail: a frame for video, a rendered still for a model.
-- [ ] **Agent vision, certified.** The overlay editor and every "look at this and judge it"
-      interaction depend on the connected agent receiving real pixels, and emitting MCP `image`
-      content is not evidence that it does — the client decides what reaches the model. Fix
-      `get_screenshot` (it currently returns null whenever called) and certify it against a
-      real client: a random word present in the fixture only as character codes, agent allowed
-      no tool but `get_screenshot`. **This lands before any asset storage work.**
+      thumbnail: a frame for video, a rendered still for a model. (Raster + SVG complete;
+      video/model thumbnails pending.)
+- [x] **Agent vision, certified.** `get_screenshot` captures a fresh isolated render (settled:
+      fonts ready, images decoded), refuses unknown pages by naming the ones that exist, and
+      pairs the image with a text sibling so a client that drops image content degrades
+      honestly. Certified against a real client: an agent read a random word present in the
+      fixture only as character codes, with `get_screenshot` its only permitted tool.
 
 **Deliverable:** the user's own assets are first-class citizens of the design layer, and
 `@hero-shot` means the same thing to a person, the visual editor, and any connected agent.
@@ -435,8 +593,10 @@ precisely what makes generated imagery legible as generated.
       low-key image; one on `warm-earth` gets warm neutrals and no pure white. A generated
       asset that fights the palette is worse than no asset — and this is the first place the
       foundation *produces* something rather than merely describing it.
-- [ ] Reuse the 6.5 interview plumbing verbatim — `present_question` / `present_options`
-      already block on a human and already render specimens; here the specimens are pictures
+- [ ] Reuse the 6.5 interview surface — the same Caret-owned step machine and pick screens;
+      here the specimens are pictures, and the recipe narrowing runs through the backend's
+      `structured()` with recipe ids in the enum, exactly like foundation candidates
+
 **Four lanes, by what the asset actually is. Only one of them costs money.**
 
 - [ ] **Raster → Google Gemini image ("Nano Banana").** One adapter over the `@google/genai`
@@ -453,12 +613,13 @@ precisely what makes generated imagery legible as generated.
       is the wrong tool for icons: a set's value is internal consistency, and one-shot
       generation destroys it across stroke weight and corner treatment. Uses the 7.5 install
       path, so icons land as editable source and recolour to foundation tokens.
-- [ ] **Logos and marks → agent-authored SVG in a render-compare loop.** The agent emits SVG,
-      Caret renders it in isolation and screenshots it, the agent sees its own output beside
-      the reference and corrects. The loop is the product, not the first emission — blind path
-      emission is the case where "models are bad at SVG" is actually true. Optionally seeded by
-      a deterministic raster trace, which gives structure to clean up instead of blank
-      coordinates.
+- [ ] **Logos and marks → backend-authored SVG in a render-compare loop.** A Phase 6.4 session
+      emits SVG; Caret renders it in isolation, screenshots it, and feeds the image back into
+      the session beside the reference; the model corrects and re-emits. Caret drives the loop
+      and decides when to stop — the loop is the product, not the first emission, because blind
+      path emission is the case where "models are bad at SVG" is actually true. Optionally
+      seeded by a deterministic raster trace, which gives structure to clean up instead of
+      blank coordinates.
 - [ ] **Transparency comes from the model, not a matting step.** Gemini returns transparent PNG
       for icon-style prompts; code generators and authored SVG have no background to remove.
       Where a genuine photographic cutout is needed, chroma-key against a flat background Caret
@@ -502,20 +663,23 @@ Nothing in this phase is possible for a tool that regenerates from scratch each 
       files, so they reach every future agent session.
 - [ ] **Rules are versioned with the design.** They live in `.caret/`, under git, reviewable in
       a PR, and travel with the project.
-- [ ] **Generate-and-pick.** For anything that cannot be said precisely in words, the agent
-      produces N variants and the user points at one. Pointing needs no design vocabulary, which
-      is exactly right for a non-designer. Replit ships this as "Ambient Intelligence"; treat it
-      as table stakes rather than a novelty. Plumbing: somewhere for variants to render
-      (variant pages or page states), a compare-and-pick canvas surface, and a
-      `propose_variants` MCP tool + rules-file instruction — Caret cannot force an external
-      agent to produce variants, only make it easy and expected.
+- [ ] **Generate-and-pick.** For anything that cannot be said precisely in words, N variants
+      render and the user points at one. Pointing needs no design vocabulary, which is exactly
+      right for a non-designer. Replit ships this as "Ambient Intelligence"; treat it as table
+      stakes rather than a novelty. Plumbing: somewhere for variants to render (variant pages
+      or page states) and a compare-and-pick canvas surface. **Primary path: Caret orchestrates
+      it directly on the 6.4 backend** — N sessions or N turns, one per variant, no cooperation
+      required. A `propose_variants` MCP tool + rules-file instruction remains for external
+      agents, which Caret can only make it easy and expected for, not force.
 - [ ] **A deterministic acceptance checker Caret runs** — not an agent honor-system self-check
       (an agent that must *choose* to self-check will not; same failure mode as pull-only
       `get_guide`). Most slop tells are computable on the rendered page: contrast (axe-core),
       identical card rows (DOM structure comparison), a border on everything (count), missing
-      focus/empty/error states (page-states metadata). Exposed as a `run_design_checks` MCP
-      tool the rules files tell the agent to call before finishing, and surfaced on the canvas
-      regardless of whether it does. The slop-tell list is versioned in `.caret/` and
+      focus/empty/error states (page-states metadata). **Caret runs it after every backend
+      session that wrote pages and feeds failures back into the session** — the owned loop
+      means the checker is enforced, not requested. It is also exposed as a `run_design_checks`
+      MCP tool the rules files tell external agents to call before finishing, and surfaced on
+      the canvas regardless of whether anything called it. The slop-tell list is versioned in `.caret/` and
       extensible by captured corrections. **Gains asset checks once 6.6 lands:** a placeholder
       element where an asset was asked for, a missing `alt`, and an image whose intrinsic size
       is wildly mismatched to its rendered box — all computable, all common.
