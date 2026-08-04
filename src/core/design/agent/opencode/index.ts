@@ -76,14 +76,16 @@ const FILE_TOOLS = new Set(["edit", "write", "patch", "multiedit"])
 
 export class OpencodeBackend implements CodingBackend {
 	readonly id = "opencode" as const
+	readonly permissionModel = "ask" as const
 	readonly displayName = "OpenCode (bundled)"
 
 	async availability(): Promise<AvailabilityReport> {
+		const base = { id: this.id, displayName: this.displayName, permissionModel: this.permissionModel } as const
+
 		const binary = resolveOpencodeBinary()
 		if (!binary) {
 			return {
-				id: this.id,
-				displayName: this.displayName,
+				...base,
 				installed: false,
 				authenticated: false,
 				ready: false,
@@ -99,8 +101,7 @@ export class OpencodeBackend implements CodingBackend {
 
 			if (names.length === 0) {
 				return {
-					id: this.id,
-					displayName: this.displayName,
+					...base,
 					installed: true,
 					authenticated: false,
 					ready: false,
@@ -112,6 +113,7 @@ export class OpencodeBackend implements CodingBackend {
 			return {
 				id: this.id,
 				displayName: this.displayName,
+				permissionModel: this.permissionModel,
 				installed: true,
 				authenticated: true,
 				ready: true,
@@ -121,6 +123,7 @@ export class OpencodeBackend implements CodingBackend {
 			return {
 				id: this.id,
 				displayName: this.displayName,
+				permissionModel: this.permissionModel,
 				installed: true,
 				authenticated: false,
 				ready: false,

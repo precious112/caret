@@ -35,10 +35,16 @@ const INSTALL_COMMAND = "npm install -g @openai/codex"
 
 export class CodexBackend implements CodingBackend {
 	readonly id = "codex" as const
+	readonly permissionModel = "sandbox" as const
 	readonly displayName = "Codex"
 
 	async availability(): Promise<AvailabilityReport> {
-		const base = { id: this.id, displayName: this.displayName, untested: true } as const
+		const base = {
+			id: this.id,
+			displayName: this.displayName,
+			permissionModel: this.permissionModel,
+			untested: true,
+		} as const
 
 		const version = await runCommand("codex", ["--version"])
 		if (version === null) {
@@ -72,6 +78,7 @@ export class CodexBackend implements CodingBackend {
 		const thread = new Codex().startThread({
 			workingDirectory: req.workingDirectory,
 			model: req.model,
+			...(req.effort ? { modelReasoningEffort: req.effort } : {}),
 			sandboxMode: "read-only",
 			approvalPolicy: "never",
 			skipGitRepoCheck: true,
@@ -109,6 +116,9 @@ class CodexSession implements BackendSession {
 		const threadOptions = {
 			workingDirectory: this.options.workingDirectory,
 			model: this.options.model,
+			// Left unset the CLI reports "reasoning effort: none", which is not the
+			// same as a sensible default — it is no reasoning at all.
+			...(this.options.effort ? { modelReasoningEffort: this.options.effort } : {}),
 			sandboxMode: this.options.mode === "read-only" ? ("read-only" as const) : ("workspace-write" as const),
 			approvalPolicy: "never" as const,
 			skipGitRepoCheck: true,
@@ -119,16 +129,24 @@ class CodexSession implements BackendSession {
 		const controller = new AbortController()
 		this.controller = controller
 
-		const { events } = await thread.runStreamed(input.text, { signal: controller.signal })
+		try {
+			const { events } = await thread.runStreamed(input.text, { signal: controller.signal })
 
-		for await (const event of events) {
-			this.threadId ??= thread.id
-			for (const mapped of mapCodexEvent(event)) {
-				yield mapped
-				if (mapped.type === "done") return
+			for await (const event of events) {
+				this.threadId ??= thread.id
+				for (const mapped of mapCodexEvent(event)) {
+					yield mapped
+					if (mapped.type === "done") return
+				}
 			}
+			yield { type: "done", text: "" }
+		} finally {
+			// The signal must not outlive the turn. This SDK wires it straight to the
+			// CLI child process, so aborting a *finished* turn — which `close()` does
+			// as a matter of course — makes the child emit an unhandled `error` and
+			// takes the whole process down with it.
+			if (this.controller === controller) this.controller = null
 		}
-		yield { type: "done", text: "" }
 	}
 
 	async respondToPermission(): Promise<void> {
@@ -136,7 +154,11 @@ class CodexSession implements BackendSession {
 	}
 
 	async abort(): Promise<void> {
-		this.controller?.abort()
+		// Taken and cleared, so a second abort — or a `close()` after the turn ended
+		// on its own — is a no-op rather than a signal fired at nothing.
+		const controller = this.controller
+		this.controller = null
+		controller?.abort()
 	}
 
 	async close(): Promise<void> {

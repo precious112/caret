@@ -22,6 +22,7 @@ import {
 	type BackendSession,
 	type CodingBackend,
 	type PermissionDecision,
+	type ReasoningEffort,
 	type SendInput,
 	type StartSessionOptions,
 	StructuredOutputError,
@@ -32,12 +33,26 @@ import { type Deferred, deferred, EventQueue } from "./stream-utils"
 
 const INSTALL_COMMAND = "npm install -g @anthropic-ai/claude-code"
 
+/**
+ * Caret's effort scale onto Claude's.
+ *
+ * The two agree on everything except the bottom: Claude has no `minimal`, so it
+ * folds into `low`. Written out rather than cast, because a silent cast here
+ * would send a string the SDK rejects and the failure would surface as a broken
+ * turn rather than as an unsupported setting.
+ */
+function claudeEffort(effort: ReasoningEffort | undefined): "low" | "medium" | "high" | "xhigh" | undefined {
+	if (!effort) return undefined
+	return effort === "minimal" ? "low" : effort
+}
+
 export class ClaudeBackend implements CodingBackend {
 	readonly id = "claude" as const
+	readonly permissionModel = "ask" as const
 	readonly displayName = "Claude Code"
 
 	async availability(): Promise<AvailabilityReport> {
-		const base = { id: this.id, displayName: this.displayName } as const
+		const base = { id: this.id, displayName: this.displayName, permissionModel: this.permissionModel } as const
 
 		const status = await probeClaudeAuth()
 		if (status.kind === "missing") {
@@ -83,6 +98,7 @@ export class ClaudeBackend implements CodingBackend {
 			options: {
 				cwd: req.workingDirectory,
 				model: req.model,
+				...(claudeEffort(req.effort) ? { effort: claudeEffort(req.effort) } : {}),
 				permissionMode: "plan",
 				// Answering a question, not doing work: every tool here is a way to
 				// spend minutes and arrive somewhere worse.
@@ -181,6 +197,7 @@ class ClaudeSession implements BackendSession {
 			options: {
 				cwd: this.options.workingDirectory,
 				model: this.options.model,
+				...(claudeEffort(this.options.effort) ? { effort: claudeEffort(this.options.effort) } : {}),
 				abortController: controller,
 				// Plan mode is the backend's own restriction. Caret's `canUseTool`
 				// below is the boundary that actually holds.
@@ -232,6 +249,9 @@ class ClaudeSession implements BackendSession {
 				if (event.type === "done") return
 			}
 		} finally {
+			// Cleared first: `close()` aborting an already-finished turn is how the
+			// Codex adapter crashed the process, and this SDK spawns a child too.
+			if (this.controller === controller) this.controller = null
 			controller.abort()
 			// Unblock anything still waiting on a permission nobody will answer.
 			for (const wait of this.pending.values()) wait.resolve("deny")
@@ -251,7 +271,9 @@ class ClaudeSession implements BackendSession {
 	}
 
 	async abort(): Promise<void> {
-		this.controller?.abort()
+		const controller = this.controller
+		this.controller = null
+		controller?.abort()
 	}
 
 	async close(): Promise<void> {

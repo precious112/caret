@@ -30,6 +30,7 @@
 		"format:fix": "biome check --changed --no-errors-on-unmatched --files-ignore-unknown=true --write",
 		"test:unit": "mocha",
 		"verify:design-shell": "npx tsx scripts/verify-design-shell.ts",
+		"backends": "npx tsx scripts/backends.ts",
 		"verify:backend": "npx tsx scripts/verify-backend.ts",
 		"verify:app": "npx tsx scripts/verify-app.ts",
 		"package": "npm run build && electron-builder --publish never",

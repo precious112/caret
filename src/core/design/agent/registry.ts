@@ -55,6 +55,7 @@ export async function probeBackends(): Promise<AvailabilityReport[]> {
 				return {
 					id,
 					displayName: backend.displayName,
+					permissionModel: backend.permissionModel,
 					installed: false,
 					authenticated: false,
 					ready: false,

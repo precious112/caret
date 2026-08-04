@@ -38,6 +38,7 @@ export class AgentService {
 			projectPath: options.projectPath,
 			resolveBackend: () => this.resolveBackend(),
 			model: () => getPrefs().backendModel || undefined,
+			effort: () => getPrefs().backendEffort || undefined,
 			appWrites: () => this.appWrites(),
 			setAppWrites: (policy) => this.setAppWrites(policy),
 			systemPrompt: () => this.systemPrompt(),

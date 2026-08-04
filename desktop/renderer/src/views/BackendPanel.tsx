@@ -33,6 +33,7 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 	const [backends, setBackends] = useState<BackendReportWire[] | null>(null)
 	const [selected, setSelected] = useState<string | null>(null)
 	const [model, setModel] = useState("")
+	const [effort, setEffort] = useState("")
 	const [busy, setBusy] = useState(false)
 
 	const refresh = useCallback(async () => {
@@ -45,6 +46,7 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 		setBackends(reports)
 		setSelected(state?.backendId ?? null)
 		setModel(String(prefs.backendModel ?? ""))
+		setEffort(String(prefs.backendEffort ?? ""))
 		setBusy(false)
 	}, [project.path])
 
@@ -106,6 +108,29 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 					</span>
 				</label>
 
+				<label className="mt-3 block">
+					<span className="text-shell-muted">Reasoning effort</span>
+					<select
+						className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none focus:border-caret-accent/60"
+						data-testid="backend-effort"
+						onChange={(event) => {
+							setEffort(event.target.value)
+							void invoke("prefs:set", { backendEffort: event.target.value })
+						}}
+						value={effort}>
+						<option value="">The backend's default</option>
+						<option value="minimal">Minimal</option>
+						<option value="low">Low</option>
+						<option value="medium">Medium</option>
+						<option value="high">High</option>
+						<option value="xhigh">Extra high</option>
+					</select>
+					<span className="mt-1 block text-[11.5px] leading-relaxed text-shell-muted">
+						Backends that have no such setting ignore it. On Codex, leaving this at the default means <em>no</em>{" "}
+						reasoning rather than some.
+					</span>
+				</label>
+
 				<p className="mt-4 text-[11.5px] leading-relaxed text-shell-muted">
 					Caret runs its bundled backend from inside the app, never from your PATH, so upgrading your own copy of a tool
 					can't change what Caret executes. Everything it writes to your app's own source asks first, unless you say
@@ -143,6 +168,14 @@ function BackendRow({ backend, selected, onChoose }: { backend: BackendReportWir
 					</span>
 				) : (
 					<span className="text-[11px] text-amber-300">{backend.installed ? "needs sign-in" : "not installed"}</span>
+				)}
+
+				{backend.permissionModel === "sandbox" && (
+					<span
+						className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300"
+						title="This backend has no per-action permission callback. Caret confines it with a sandbox instead, so a plan genuinely cannot write — but inside a write session Caret cannot ask you about individual files.">
+						can't ask per file
+					</span>
 				)}
 
 				{backend.untested && (
@@ -190,6 +223,13 @@ function BackendRow({ backend, selected, onChoose }: { backend: BackendReportWir
 						</a>
 					)}
 				</div>
+			)}
+
+			{backend.permissionModel === "sandbox" && (
+				<p className="mt-2 text-[11.5px] leading-relaxed text-amber-200/80">
+					Caret can't approve this backend's writes one at a time — it has no way to ask. A plan still can't touch your
+					app, but during an apply the "ask before app changes" setting has no effect here.
+				</p>
 			)}
 
 			<p className="mt-2 text-[11.5px] leading-relaxed text-shell-muted">{BILLING_NOTE[backend.id]}</p>

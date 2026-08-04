@@ -28,6 +28,8 @@ export interface Prefs {
 	backendId: "opencode" | "claude" | "codex" | "kimi" | null
 	/** Model in the backend's own namespace, e.g. `anthropic/claude-sonnet-5`. Empty = its default. */
 	backendModel: string
+	/** How hard the model thinks. Empty = the backend's own default. */
+	backendEffort: "" | "minimal" | "low" | "medium" | "high" | "xhigh"
 	/**
 	 * Projects where the user chose "don't ask again" for writes to their app's
 	 * own source. Per project rather than global: consent to rewrite one repo is
@@ -45,6 +47,7 @@ const DEFAULTS: Prefs = {
 	onboardingCompleted: false,
 	backendId: null,
 	backendModel: "",
+	backendEffort: "",
 	appWritesAllowed: [],
 }
 

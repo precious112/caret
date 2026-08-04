@@ -17,6 +17,7 @@ import {
 	type CodingBackend,
 	NoBackendError,
 	type PermissionDecision,
+	type ReasoningEffort,
 	type SessionMode,
 } from "./backend"
 import { type AppWritePolicy, rulePermission } from "./permissions"
@@ -59,6 +60,7 @@ export interface ConversationDeps {
 	/** The configured backend, or null when the user has not chosen one that works. */
 	resolveBackend(): Promise<CodingBackend | null>
 	model(): string | undefined
+	effort(): ReasoningEffort | undefined
 	appWrites(): AppWritePolicy
 	setAppWrites(policy: AppWritePolicy): Promise<void>
 	/** Foundations, authoring rules and the asset index, injected directly. */
@@ -155,6 +157,7 @@ export class AgentConversation {
 			workingDirectory: this.deps.projectPath,
 			mode: request.mode,
 			model: this.deps.model(),
+			effort: this.deps.effort(),
 			title: request.title,
 			resumeSessionId: request.resumeSessionId,
 			systemPrompt: await this.deps.systemPrompt(),

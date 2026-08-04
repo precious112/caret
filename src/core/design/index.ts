@@ -7,6 +7,8 @@ export {
 	type BackendSession,
 	type CodingBackend,
 	NoBackendError,
+	type PermissionModel,
+	type ReasoningEffort,
 	type SessionMode,
 	StructuredOutputError,
 	type StructuredRequest,

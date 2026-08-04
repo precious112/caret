@@ -19,12 +19,39 @@ export type BackendId = "opencode" | "claude" | "codex" | "kimi"
 /** What a session is allowed to do. Enforced by Caret, not by backend config. */
 export type SessionMode = "read-only" | "write"
 
+/**
+ * How hard the model should think.
+ *
+ * Named in the vocabulary the backends themselves use rather than Caret's own,
+ * because every one of them already has a spelling for this and inventing a
+ * fifth would mean a mapping table that is wrong for somebody. Backends without
+ * the concept ignore it — see each adapter.
+ */
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh"
+
+/**
+ * How a backend can be held to Caret's permission rules.
+ *
+ * - `ask` — it raises a request per action and obeys the answer, so Caret decides
+ *   every write individually and the per-project "ask before app writes" toggle
+ *   means what it says.
+ * - `sandbox` — it has no such callback. The boundary is a mode chosen before the
+ *   turn starts: a plan genuinely cannot write, but inside a write session Caret
+ *   cannot intercept individual files.
+ *
+ * This is a real difference in what the user is agreeing to, so it is on the
+ * interface and shown in the UI rather than left in a comment.
+ */
+export type PermissionModel = "ask" | "sandbox"
+
 export interface StartSessionOptions {
 	workingDirectory: string
 	/** `read-only` is the plan phase: the agent may read anything and write nothing. */
 	mode: SessionMode
 	/** Backend's own model namespace. Omitted means the backend's default. */
 	model?: string
+	/** Omitted means the backend's default, which is not always "some". */
+	effort?: ReasoningEffort
 	resumeSessionId?: string
 	title?: string
 	/** Prepended to the backend's own system prompt (foundations, rules, assets). */
@@ -74,6 +101,7 @@ export interface StructuredRequest {
 	/** JSON Schema. Enums in it are the anti-slop floor: a model cannot answer outside them. */
 	schema: Record<string, unknown>
 	model?: string
+	effort?: ReasoningEffort
 	systemPrompt?: string
 }
 
@@ -99,6 +127,7 @@ export interface AvailabilityReport {
 	ready: boolean
 	/** One line the user reads. Never a stack trace. */
 	detail: string
+	permissionModel: PermissionModel
 	/** What to do about it, when it is not ready. */
 	remedy?: { label: string; command?: string; url?: string }
 	/**
@@ -111,6 +140,7 @@ export interface AvailabilityReport {
 export interface CodingBackend {
 	readonly id: BackendId
 	readonly displayName: string
+	readonly permissionModel: PermissionModel
 	availability(): Promise<AvailabilityReport>
 	startSession(options: StartSessionOptions): Promise<BackendSession>
 	/** One-shot, JSON-schema-constrained. Carries the interview and recipe narrowing. */

@@ -34,10 +34,16 @@ const INSTALL_COMMAND = "npm install -g @moonshot-ai/kimi-cli"
 
 export class KimiBackend implements CodingBackend {
 	readonly id = "kimi" as const
+	readonly permissionModel = "ask" as const
 	readonly displayName = "Kimi"
 
 	async availability(): Promise<AvailabilityReport> {
-		const base = { id: this.id, displayName: this.displayName, untested: true } as const
+		const base = {
+			id: this.id,
+			displayName: this.displayName,
+			permissionModel: this.permissionModel,
+			untested: true,
+		} as const
 
 		const version = await runCommand("kimi", ["--version"])
 		if (version === null) {
@@ -79,6 +85,9 @@ export class KimiBackend implements CodingBackend {
 			model: options.model,
 			sessionId: options.resumeSessionId,
 		})
+		// Kimi has a thinking *switch*, not a scale, so the scale collapses onto it.
+		// Naming that here rather than pretending the five levels survive.
+		if (options.effort) session.thinking = options.effort !== "minimal" && options.effort !== "low"
 		if (options.mode === "read-only") await session.setPlanMode(true)
 		// The SDK's own `Session` type is structurally compatible with what this
 		// adapter uses, but its event union is nominal, so it is narrowed to the
@@ -187,6 +196,9 @@ class KimiSession implements BackendSession {
 				if (event.type === "done") return
 			}
 		} finally {
+			// Interrupting a turn that already ended is at best a no-op and at worst
+			// an error nobody is listening for — see the Codex adapter.
+			if (this.turn === turn) this.turn = null
 			for (const wait of this.pending.values()) wait.resolve("deny")
 			this.pending.clear()
 			await pump.catch(() => {})

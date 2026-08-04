@@ -57,23 +57,26 @@ function skip(name: string, reason: string): void {
 
 async function main(): Promise<void> {
 	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "caret-backend-"))
-	const backend = new OpencodeBackend()
-
-	await scenario("a. the bundled backend reports itself ready", async () => {
-		const report = await backend.availability()
-		assert(report.installed, `the binary was not found: ${report.detail}`)
-		assert(report.ready, `not ready: ${report.detail}`)
-		return report.detail
-	})
 
 	const model = await resolveVerifyModel()
+	// Whichever backend the run targets — the bundled one unless told otherwise.
+	const backend = model?.backend ?? new OpencodeBackend()
 	const MODEL = model?.id
+	const EFFORT = model?.effort
 	const inference = model ? scenario : (name: string, _run: () => Promise<string>) => void skip(name, NO_MODEL_REASON)
+
+	await scenario(`a. ${backend.displayName} reports itself ready`, async () => {
+		const report = await backend.availability()
+		assert(report.installed, `not installed: ${report.detail}`)
+		assert(report.ready, `not ready: ${report.detail}`)
+		return `${report.detail}${model ? ` — running ${model.id}${EFFORT ? ` at ${EFFORT} effort` : ""}` : ""}`
+	})
 
 	await inference("b. structured() answers inside the schema's enum", async () => {
 		const result = await backend.structured<{ pick: string }>({
 			workingDirectory: workspace,
 			model: MODEL,
+			effort: EFFORT,
 			prompt: "Which of these is a fruit that is yellow and curved? Answer with its id.",
 			schema: {
 				type: "object",
@@ -90,7 +93,7 @@ async function main(): Promise<void> {
 		const target = path.join(workspace, "hello.txt")
 		await fs.writeFile(target, "placeholder\n", "utf-8")
 
-		const session = await backend.startSession({ workingDirectory: workspace, mode: "write", model: MODEL })
+		const session = await backend.startSession({ workingDirectory: workspace, mode: "write", model: MODEL, effort: EFFORT })
 		const seen = await drain(
 			session.send({ text: `Replace the entire contents of hello.txt with exactly: pineapple` }),
 			(event) => (event.type === "permission" ? session.respondToPermission(event.requestId, "allow") : undefined),
@@ -106,27 +109,63 @@ async function main(): Promise<void> {
 		return `hello.txt = "pineapple"; events: ${summarise(seen)}`
 	})
 
-	await inference("d. a denied permission leaves the file alone", async () => {
+	/**
+	 * The boundary, asserted in the form the backend actually offers.
+	 *
+	 * These are not two versions of one test — they are two different guarantees,
+	 * and treating them as interchangeable is how a real difference in what the
+	 * user is agreeing to ends up buried in a comment. A backend that asks must
+	 * obey the answer. A backend that cannot ask must at least be unable to write
+	 * when Caret says the session is read-only, which is what makes the sync plan
+	 * phase safe there.
+	 */
+	await inference("d. Caret's write boundary holds, in whichever form this backend supports", async () => {
 		const target = path.join(workspace, "protected.txt")
 		await fs.writeFile(target, "untouched\n", "utf-8")
+		const instruction = `Replace the entire contents of protected.txt with exactly: changed`
 
-		const session = await backend.startSession({ workingDirectory: workspace, mode: "write", model: MODEL })
-		const seen = await drain(
-			session.send({ text: `Replace the entire contents of protected.txt with exactly: changed` }),
-			(event) => (event.type === "permission" ? session.respondToPermission(event.requestId, "deny") : undefined),
-		)
+		if (backend.permissionModel === "ask") {
+			const session = await backend.startSession({
+				workingDirectory: workspace,
+				mode: "write",
+				model: MODEL,
+				effort: EFFORT,
+			})
+			const seen = await drain(session.send({ text: instruction }), (event) =>
+				event.type === "permission" ? session.respondToPermission(event.requestId, "deny") : undefined,
+			)
+			await session.close()
+
+			const contents = (await fs.readFile(target, "utf-8")).trim()
+			assert(contents === "untouched", `a denied edit still landed: ${JSON.stringify(contents)}`)
+			assert(
+				seen.some((event) => event.type === "permission"),
+				"the backend never asked — Caret's boundary was never consulted",
+			)
+			return "asked, denied, file unchanged"
+		}
+
+		// No callback to answer. The guarantee here is the read-only session, and it
+		// is the one the sync plan phase depends on.
+		const session = await backend.startSession({
+			workingDirectory: workspace,
+			mode: "read-only",
+			model: MODEL,
+			effort: EFFORT,
+		})
+		await drain(session.send({ text: instruction }), () => undefined)
 		await session.close()
 
 		const contents = (await fs.readFile(target, "utf-8")).trim()
-		assert(contents === "untouched", `a denied edit still landed: ${JSON.stringify(contents)}`)
-		assert(
-			seen.some((event) => event.type === "permission"),
-			"the backend never asked — Caret's boundary was never consulted",
-		)
-		return "edit refused, file unchanged"
+		assert(contents === "untouched", `a read-only session wrote to the workspace: ${JSON.stringify(contents)}`)
+		return "no per-action callback here; a read-only session could not write"
 	})
 
 	await inference("e. sessions are listable for the history panel", async () => {
+		// Optional on the seam, and genuinely absent on some backends — Codex
+		// persists threads under `~/.codex/sessions` with no listing API. Absent is
+		// a different thing from broken, so it says which.
+		if (!backend.listSessions) return `${backend.displayName} has no session listing — the history panel is empty there`
 		const sessions = await backend.listSessions(workspace)
 		assert(sessions.length >= 2, `expected the sessions just run, got ${sessions.length}`)
 		return `${sessions.length} session(s)`

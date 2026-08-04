@@ -139,6 +139,8 @@ export type BackendIdWire = "opencode" | "claude" | "codex" | "kimi"
 export interface BackendReportWire {
 	id: BackendIdWire
 	displayName: string
+	/** `sandbox` means Caret cannot ask before individual writes on this backend. */
+	permissionModel: "ask" | "sandbox"
 	installed: boolean
 	authenticated: boolean
 	ready: boolean
