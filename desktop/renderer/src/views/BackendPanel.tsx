@@ -23,8 +23,7 @@ import { cn } from "../lib/utils"
 
 /** One line per backend about how it is paid for. Routes, not prices. */
 const BILLING_NOTE: Record<string, string> = {
-	opencode:
-		"Bring your own API key, an OpenCode subscription, or OpenCode credits. The free tier works with no account at all.",
+	opencode: "Bring your own API key, an OpenCode subscription, or OpenCode credits.",
 	claude: "Signing in here draws Claude's separate Agent SDK credit pool — not your usual Claude Code limits.",
 	codex: "Uses your Codex CLI sign-in, or a key in CODEX_API_KEY.",
 	kimi: "Uses your Kimi CLI sign-in.",

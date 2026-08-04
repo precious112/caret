@@ -1,8 +1,10 @@
 /**
  * The OpenCode adapter — the reference implementation of {@link CodingBackend}.
  *
- * Ships bundled and pinned, so a fresh install can do work before the user has
- * connected anything. Everything here is written against the shapes in
+ * Ships bundled and pinned so that connecting a provider is the *only* step —
+ * there is never an install to do first. It still needs one: a key, a
+ * subscription, or whatever the backend itself offers. Everything here is
+ * written against the shapes in
  * `protocol.ts`, which were pinned from the running binary's own OpenAPI
  * document rather than from the published SDK (see that file for why).
  *

@@ -479,9 +479,11 @@ implementing; the wire surfaces, event mappings and auth flows are specified the
       side they look identical to someone editing the file by hand, and Phase 7 mines that
       distinction to tell taste from machine output.
 
-**Certification — cold launch, click-only, no harness-supplied counterparts.** Runs against
-**OpenCode Zen's free tier, which needs no credentials**, so the loop is certified with real
-inference on a clean machine rather than asserted against a stub:
+**Certification — cold launch, click-only, no harness-supplied counterparts.** The scenarios
+that spend inference are pointed at a model deliberately (`CARET_VERIFY_MODEL`), fall back to a
+zero-cost model when the backend offers one, and **skip rather than fail** when neither exists —
+a Caret with no credentials is a supported state, and a red suite would call that broken. A run
+with skips never reports as certified:
 
 - [x] From a fresh profile with the bundled backend: type an instruction in the chat → the
       design source changes to exactly that, and the transcript records that Caret answered the

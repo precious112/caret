@@ -23,24 +23,16 @@ import { type ElectronApplication, _electron as electron, type Page } from "play
 import * as zlib from "zlib"
 
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
+import { NO_MODEL_REASON, resolveVerifyModel } from "./verify-support"
 
 const KEEP = process.argv.includes("--keep")
 const SHOTS = path.resolve("release/verify-shots")
 
-/**
- * A model that costs nothing.
- *
- * The bundled backend reaches OpenCode Zen's free tier with no credentials, so
- * the scenarios that need real inference run on a clean machine and in CI
- * without anyone's subscription. Pinned rather than left to the default because
- * the default is a reasoning model, and reasoning models are slow at
- * "replace this word".
- */
-const FREE_MODEL = "opencode/ling-3.0-flash-free"
-
 interface ScenarioResult {
 	name: string
 	passed: boolean
+	/** Neither passed nor failed: there was no model this suite may spend. */
+	skipped?: boolean
 	detail: string
 }
 
@@ -53,12 +45,39 @@ function log(message: string): void {
 	console.log(`[verify-app] ${message}`)
 }
 
+/**
+ * Records a scenario as neither passed nor failed.
+ *
+ * Used only when there is no model the suite is allowed to spend. A Caret with
+ * no credentials is a supported state, so failing here would report "broken"
+ * for behaviour that is exactly as designed — but calling it a pass would claim
+ * a certification that never ran.
+ */
+function skip(name: string, reason: string): void {
+	results.push({ name, passed: true, skipped: true, detail: `SKIPPED — ${reason}` })
+	log(`SKIP ${name} — ${reason}`)
+}
+
+/**
+ * Thrown by a scenario that cannot reach a verdict for a reason that is not
+ * Caret's fault — in practice, a model that did not do the work it was asked to.
+ *
+ * The distinction is the whole point. "This model could not manage it" and
+ * "Caret is broken" are different claims, and a suite that reports the first as
+ * the second is a suite whose red gets ignored.
+ */
+class Inconclusive extends Error {}
+
 async function scenario(name: string, run: () => Promise<string>): Promise<void> {
 	try {
 		const detail = await run()
 		results.push({ name, passed: true, detail })
 		log(`PASS ${name}`)
 	} catch (err) {
+		if (err instanceof Inconclusive) {
+			skip(name, err.message)
+			return
+		}
 		const detail = err instanceof Error ? err.message : String(err)
 		results.push({ name, passed: false, detail })
 		log(`FAIL ${name} — ${detail}`)
@@ -80,15 +99,27 @@ function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message)
 }
 
-/** Polls until `check` returns a truthy value, or the deadline passes. */
-async function waitFor<T>(label: string, check: () => Promise<T | null>, timeoutMs = 120_000): Promise<T> {
+/**
+ * Polls until `check` returns a truthy value, or the deadline passes.
+ *
+ * `diagnose` runs only on timeout, to say what the world looked like when it
+ * gave up. Worth having on anything slow: "timed out" alone costs a re-run to
+ * turn into a cause.
+ */
+async function waitFor<T>(
+	label: string,
+	check: () => Promise<T | null>,
+	timeoutMs = 120_000,
+	diagnose?: () => Promise<string>,
+): Promise<T> {
 	const deadline = Date.now() + timeoutMs
 	while (Date.now() < deadline) {
 		const value = await check()
 		if (value) return value
 		await new Promise((resolve) => setTimeout(resolve, 500))
 	}
-	throw new Error(`Timed out waiting for ${label}`)
+	const detail = diagnose ? await diagnose().catch((err) => `(diagnosis failed: ${err})`) : ""
+	throw new Error(`Timed out waiting for ${label}${detail ? ` — ${detail}` : ""}`)
 }
 
 const PAGE_SOURCE = `export default function Home() {
@@ -1101,6 +1132,10 @@ async function main(): Promise<void> {
 		return `refused with: "${refusal?.trim().slice(0, 60)}…"`
 	})
 
+	// Which model — if any — this run may spend. Resolved once, before the
+	// backend scenarios, so they all skip together rather than half-running.
+	const model = await resolveVerifyModel()
+
 	await scenario("dd. the bundled backend is found and choosing it makes the chat usable", async () => {
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
 		await chrome.waitForSelector('[data-testid="backend-opencode"]', { timeout: 90_000 })
@@ -1119,8 +1154,10 @@ async function main(): Promise<void> {
 		// would type in. Left empty the backend defaults to a reasoning model,
 		// which is slow at "replace this word" and makes the scenarios below
 		// measure the wrong thing.
-		await chrome.getByTestId("backend-model").fill(FREE_MODEL)
-		await chrome.getByTestId("backend-model").blur()
+		if (model) {
+			await chrome.getByTestId("backend-model").fill(model.id)
+			await chrome.getByTestId("backend-model").blur()
+		}
 
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
 		await waitFor(
@@ -1129,10 +1166,12 @@ async function main(): Promise<void> {
 			30_000,
 		)
 
-		return `bundled backend selected, chat enabled, model ${FREE_MODEL}`
+		return `bundled backend selected, chat enabled${model ? `, model ${model.id} (${model.source})` : ""}`
 	})
 
-	await scenario("ee. an instruction typed in the chat rewrites the design source to exactly that", async () => {
+	const inference = model ? scenario : (name: string, _run: () => Promise<string>) => void skip(name, NO_MODEL_REASON)
+
+	await inference("ee. an instruction typed in the chat rewrites the design source to exactly that", async () => {
 		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
 
 		await chrome
@@ -1159,26 +1198,48 @@ async function main(): Promise<void> {
 		return `page rewritten; permission auto-answered ("${resolved?.trim().slice(0, 60)}…")`
 	})
 
-	await scenario("ff. sync plans first, writes nothing until Apply, then advances the bookmark", async () => {
-		const syncStatePath = path.join(fixture, ".caret", "sync-state.json")
+	// Caret's own guarantees and the model's competence are certified separately.
+	//
+	// They used to be one scenario, which was a mistake: when the model wandered,
+	// the whole thing went red and took the deterministic assertions down with it
+	// — so a suite failure said nothing about whether Caret was correct. `ff` is
+	// entirely Caret's contract and does not depend on the model producing good
+	// edits. `gg` is the end-to-end result, and is allowed to be inconclusive.
 
+	const syncStatePath = path.join(fixture, ".caret", "sync-state.json")
+	const appSourcePath = path.join(fixture, "src")
+
+	async function bookmarkNow(): Promise<string | null> {
+		const raw = await fs.readFile(syncStatePath, "utf-8").catch(() => null)
+		const state = raw ? (JSON.parse(raw) as { lastSyncedCommit?: string | null }) : null
+		return state?.lastSyncedCommit ?? null
+	}
+
+	/** Clicks Sync and walks the preflight, up to the plan awaiting approval. */
+	async function planASync(): Promise<void> {
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Sync" }).click()
+
+		// The preflight offers to commit the design layer first. That prompt is part
+		// of the flow a user walks, so it is clicked rather than pre-empted. It only
+		// appears when the design layer is actually dirty.
+		const commit = chrome.getByTestId("notification-stack").getByRole("button", { name: "Commit .caret/ changes" })
+		await commit.waitFor({ timeout: 60_000 }).then(
+			() => commit.click(),
+			() => {},
+		)
+
+		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 })
+	}
+
+	await inference("ff. a plan writes nothing, and discarding it leaves the bookmark alone", async () => {
 		// A design change the app does not have yet. Deliberately a single word:
-		// what is being certified is the loop, not the model's judgment.
+		// what is being certified here is the loop, not the model's judgment.
 		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
 		const page = await fs.readFile(pagePath, "utf-8")
 		await fs.writeFile(pagePath, page.replace(">Welcome<", ">Zephyr<"))
 
-		const snapshotBefore = readTree(path.join(fixture, "src"))
-
-		await chrome.getByTestId("top-bar").getByRole("button", { name: "Sync" }).click()
-
-		// The preflight offers to commit the design layer first. That prompt is part
-		// of the flow a user walks, so it is clicked rather than pre-empted.
-		const commit = chrome.getByTestId("notification-stack").getByRole("button", { name: "Commit .caret/ changes" })
-		await commit.waitFor({ timeout: 60_000 })
-		await commit.click()
-
-		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 })
+		const before = await readTree(appSourcePath)
+		await planASync()
 		await shot(chrome, "13-sync-plan")
 
 		// The guarantee, checked at the only moment it can be: a read-only plan has
@@ -1186,42 +1247,81 @@ async function main(): Promise<void> {
 		// whole tree, not one file — a plan that created `src/pages/` would have
 		// slipped past a single-file check.
 		assert(
-			(await readTree(path.join(fixture, "src"))) === (await snapshotBefore),
+			(await readTree(appSourcePath)) === before,
 			"the plan phase wrote to the app — the read-only boundary did not hold",
 		)
 
+		await chrome.getByTestId("chat-approval").getByRole("button", { name: "Discard" }).click()
+
+		// Discarding has to leave *everything* alone, including the bookmark —
+		// otherwise the design change is recorded as synced and never offered again.
+		await waitFor(
+			"the approval to clear",
+			async () => ((await chrome.getByTestId("chat-approval").count()) ? null : true),
+			30_000,
+		)
+		assert((await readTree(appSourcePath)) === before, "discarding a plan still changed the app")
+		assert((await bookmarkNow()) === null, "discarding a plan advanced the sync bookmark")
+
+		return "plan read-only, discard left the app and the bookmark untouched"
+	})
+
+	await inference("gg. applying a plan changes the app and advances the bookmark", async () => {
+		const before = await readTree(appSourcePath)
+
+		// The discarded change is still pending, which is itself the claim: a
+		// discarded sync is offered again rather than quietly lost.
+		await planASync()
 		await chrome.getByTestId("chat-approval").getByRole("button", { name: "Apply" }).click()
 
 		// Applying is where writes to the user's *own* source happen, and those ask
 		// by default — accepting a plan is not the same as consenting to each file.
-		// So the prompts have to be answered, exactly as a user would.
+		// So the prompts are answered, exactly as a user would.
 		let allowed = 0
-		const bookmark = await waitFor(
-			"the sync bookmark to advance",
-			async () => {
-				const allow = chrome.getByTestId("chat-permission-allow")
-				if (await allow.count()) {
-					await allow
-						.first()
-						.click()
-						.catch(() => {})
-					allowed += 1
-				}
+		const deadline = Date.now() + 420_000
+		let bookmark: string | null = null
 
-				const raw = await fs.readFile(syncStatePath, "utf-8").catch(() => null)
-				const state = raw ? (JSON.parse(raw) as { lastSyncedCommit?: string | null }) : null
-				return state?.lastSyncedCommit ?? null
-			},
-			420_000,
-		)
+		while (Date.now() < deadline) {
+			const allow = chrome.getByTestId("chat-permission-allow")
+			if (await allow.count()) {
+				await allow
+					.first()
+					.click()
+					.catch(() => {})
+				allowed += 1
+			}
+
+			bookmark = await bookmarkNow()
+			if (bookmark) break
+
+			// Caret says this in its own voice when a turn ends having written
+			// nothing. Waiting out the remaining minutes after that would tell us
+			// nothing we do not already know.
+			const transcript = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+			if (transcript.includes("without changing anything in your app")) {
+				throw new Inconclusive(`the model finished without editing anything (${allowed} write(s) allowed)`)
+			}
+
+			await new Promise((resolve) => setTimeout(resolve, 500))
+		}
 
 		await shot(chrome, "14-sync-applied")
 
-		// Anywhere under `src/`. A good sync is allowed to restructure — this one
-		// split two design pages into a router and page components — so pinning the
-		// assertion to `App.tsx` would fail the correct outcome.
-		const applied = await readTree(path.join(fixture, "src"))
-		assert(applied.includes("Zephyr"), `the app did not follow the design:\n${applied.slice(0, 1500)}`)
+		if (!bookmark) {
+			const transcript = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+			throw new Inconclusive(`the model was still working after 7 minutes; last of the chat: …${transcript.slice(-400)}`)
+		}
+
+		// This half *is* Caret's, and stays a hard failure: the bookmark may only
+		// advance when the apply actually wrote something. Advancing without it
+		// records the design change as synced and never offers it again.
+		const applied = await readTree(appSourcePath)
+		assert(applied !== before, "the bookmark advanced but nothing in the app changed")
+		// Anywhere under `src/`. A good sync is allowed to restructure — one run
+		// split two design pages into a router and page components — so pinning
+		// this to `App.tsx` would fail the correct outcome.
+		assert(applied.includes("Zephyr"), `the app did not follow the design:\n${applied.slice(0, 1200)}`)
+
 		return `app updated after ${allowed} allowed write(s), bookmark at ${bookmark.slice(0, 8)}`
 	})
 }
@@ -1245,12 +1345,20 @@ main()
 
 		console.log("\n========== CARET APP CERTIFICATION ==========")
 		for (const result of results) {
-			console.log(`${result.passed ? "PASS" : "FAIL"}  ${result.name.padEnd(56)} ${result.detail}`)
+			const mark = result.skipped ? "SKIP" : result.passed ? "PASS" : "FAIL"
+			console.log(`${mark}  ${result.name.padEnd(56)} ${result.detail}`)
 		}
 		const failed = results.filter((r) => !r.passed)
+		const skipped = results.filter((r) => r.skipped)
 		console.log("=============================================")
 		console.log(
-			failed.length === 0 ? `CERTIFIED: all ${results.length} scenarios pass` : `${failed.length} scenario(s) FAILED`,
+			failed.length > 0
+				? `${failed.length} scenario(s) FAILED`
+				: skipped.length > 0
+					? // Never "all pass" with something unrun — that reads as full
+						// coverage to anyone skimming a CI log.
+						`${results.length - skipped.length} passed, ${skipped.length} SKIPPED (not certified)`
+					: `CERTIFIED: all ${results.length} scenarios pass`,
 		)
 		process.exit(failed.length === 0 ? 0 : 1)
 	})

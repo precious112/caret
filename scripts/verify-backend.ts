@@ -6,12 +6,14 @@
  * against a real model, and asserts on **disk** — an agent that says it wrote a
  * file and did not is the failure this exists to catch.
  *
- * Free models are used deliberately: the bundled backend reaches OpenCode Zen's
- * free tier with no credentials, so this runs on a clean machine and in CI
- * without anyone's subscription.
+ * Nothing paid is spent by accident. Set `CARET_VERIFY_MODEL` to run this
+ * against your own subscription; otherwise it uses a zero-cost model if the
+ * backend offers one, and skips rather than fails if it does not. A Caret with
+ * no credentials is a supported state, and a red suite would call that broken.
  *
  * Usage:
  *   npx tsx scripts/verify-backend.ts
+ *   CARET_VERIFY_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/verify-backend.ts
  */
 import * as fs from "fs/promises"
 import * as os from "os"
@@ -20,13 +22,12 @@ import * as path from "path"
 import type { BackendEvent } from "../src/core/design/agent/backend"
 import { OpencodeBackend } from "../src/core/design/agent/opencode"
 import { stopOpencodeServer } from "../src/core/design/agent/opencode/server"
-
-/** A small, fast, free model. Structured output on it is expected to emulate. */
-const MODEL = "opencode/ling-3.0-flash-free"
+import { NO_MODEL_REASON, resolveVerifyModel } from "./verify-support"
 
 interface Result {
 	name: string
 	passed: boolean
+	skipped?: boolean
 	detail: string
 }
 
@@ -49,6 +50,11 @@ async function scenario(name: string, run: () => Promise<string>): Promise<void>
 	}
 }
 
+function skip(name: string, reason: string): void {
+	results.push({ name, passed: true, skipped: true, detail: `SKIPPED — ${reason}` })
+	console.log(`[verify-backend] SKIP ${name} — ${reason}`)
+}
+
 async function main(): Promise<void> {
 	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "caret-backend-"))
 	const backend = new OpencodeBackend()
@@ -60,7 +66,11 @@ async function main(): Promise<void> {
 		return report.detail
 	})
 
-	await scenario("b. structured() answers inside the schema's enum", async () => {
+	const model = await resolveVerifyModel()
+	const MODEL = model?.id
+	const inference = model ? scenario : (name: string, _run: () => Promise<string>) => void skip(name, NO_MODEL_REASON)
+
+	await inference("b. structured() answers inside the schema's enum", async () => {
 		const result = await backend.structured<{ pick: string }>({
 			workingDirectory: workspace,
 			model: MODEL,
@@ -76,7 +86,7 @@ async function main(): Promise<void> {
 		return `pick=${result.value.pick}${result.emulated ? " (emulated)" : " (native)"}`
 	})
 
-	await scenario("c. a write session changes a file on disk to exactly what was asked", async () => {
+	await inference("c. a write session changes a file on disk to exactly what was asked", async () => {
 		const target = path.join(workspace, "hello.txt")
 		await fs.writeFile(target, "placeholder\n", "utf-8")
 
@@ -96,7 +106,7 @@ async function main(): Promise<void> {
 		return `hello.txt = "pineapple"; events: ${summarise(seen)}`
 	})
 
-	await scenario("d. a denied permission leaves the file alone", async () => {
+	await inference("d. a denied permission leaves the file alone", async () => {
 		const target = path.join(workspace, "protected.txt")
 		await fs.writeFile(target, "untouched\n", "utf-8")
 
@@ -116,7 +126,7 @@ async function main(): Promise<void> {
 		return "edit refused, file unchanged"
 	})
 
-	await scenario("e. sessions are listable for the history panel", async () => {
+	await inference("e. sessions are listable for the history panel", async () => {
 		const sessions = await backend.listSessions(workspace)
 		assert(sessions.length >= 2, `expected the sessions just run, got ${sessions.length}`)
 		return `${sessions.length} session(s)`
@@ -150,7 +160,8 @@ main()
 
 		console.log("\n========== CARET BACKEND CERTIFICATION ==========")
 		for (const result of results) {
-			console.log(`${result.passed ? "PASS" : "FAIL"}  ${result.name.padEnd(56)} ${result.detail}`)
+			const mark = result.skipped ? "SKIP" : result.passed ? "PASS" : "FAIL"
+			console.log(`${mark}  ${result.name.padEnd(56)} ${result.detail}`)
 		}
 		const failed = results.filter((r) => !r.passed)
 		console.log("================================================")
