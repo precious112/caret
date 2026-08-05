@@ -1316,7 +1316,17 @@ async function main(): Promise<void> {
 			// nothing we do not already know.
 			const transcript = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
 			if (transcript.includes("without changing anything in your app")) {
-				throw new Inconclusive(`the model finished without editing anything (${allowed} write(s) allowed)`)
+				// Say what it actually did. "Finished without editing" on its own has
+				// already sent me chasing the wrong cause twice; the tail of the chat
+				// and git's own view are what distinguish "the model declined" from
+				// "Caret failed to notice".
+				await shot(chrome, "14-sync-inconclusive")
+				const status = child_process.execSync("git status --porcelain", { cwd: fixture }).toString().trim()
+				throw new Inconclusive(
+					`the model finished without editing anything (${allowed} write(s) allowed).\n` +
+						`  git status: ${status.split("\n").slice(0, 8).join(" | ") || "(clean)"}\n` +
+						`  chat tail: …${transcript.slice(-700)}`,
+				)
 			}
 
 			await new Promise((resolve) => setTimeout(resolve, 500))

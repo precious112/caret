@@ -29,7 +29,28 @@ export interface BackendSyncRequest {
 	changedCount: number
 }
 
-const APPLY_PROMPT = `The plan is approved. Make those edits to the app now.
+/**
+ * The apply turn's prompt.
+ *
+ * It opens by **revoking the planning restriction**, and that is the load-bearing
+ * line rather than a courtesy. The apply resumes the same session, so the plan
+ * prompt — "RIGHT NOW YOU ARE PLANNING, NOT CHANGING ANYTHING… any write you
+ * attempt will be refused" — is still in context. Telling a model to edit while
+ * an earlier turn forbids it leaves the two instructions to fight, and the better
+ * the model is at following instructions the more likely the prohibition wins.
+ *
+ * That inversion was observed: a weak model applied eighteen files, while a
+ * stronger one announced it would map the changes "without modifying files" and
+ * touched nothing. Repeating "edit now" louder does not fix a contradiction; only
+ * withdrawing the earlier instruction does.
+ */
+const APPLY_PROMPT = `The planning phase is over, and the restriction you were given for it no
+longer applies. You were told you were planning, that you must not change anything, and that
+any write would be refused. **Disregard all of that from here on.** The user has read your plan
+and approved it. This turn is in write mode, your edits will be accepted, and producing another
+plan instead of edits is a failure.
+
+Make the edits to the app now.
 
 You have already read everything you need — that was the whole point of the planning turn.
 **Start editing immediately.** Do not re-list directories, re-read config files or look for
