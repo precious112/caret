@@ -17,7 +17,7 @@
 import { Check, ChevronRight, Copy, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
-import type { AgentClientConfig, BackendReportWire, ProjectState } from "../../../shared/ipc"
+import type { AgentClientConfig, BackendReportWire, ModelGroupWire, ProjectState } from "../../../shared/ipc"
 import { invoke } from "../ipc"
 import { cn } from "../lib/utils"
 
@@ -34,19 +34,22 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 	const [selected, setSelected] = useState<string | null>(null)
 	const [model, setModel] = useState("")
 	const [effort, setEffort] = useState("")
+	const [groups, setGroups] = useState<ModelGroupWire[] | null>(null)
 	const [busy, setBusy] = useState(false)
 
 	const refresh = useCallback(async () => {
 		setBusy(true)
-		const [reports, state, prefs] = await Promise.all([
+		const [reports, state, prefs, models] = await Promise.all([
 			invoke("agent:backends"),
 			invoke("agent:state", project.path),
 			invoke("prefs:get"),
+			invoke("agent:models"),
 		])
 		setBackends(reports)
 		setSelected(state?.backendId ?? null)
 		setModel(String(prefs.backendModel ?? ""))
 		setEffort(String(prefs.backendEffort ?? ""))
+		setGroups(models)
 		setBusy(false)
 	}, [project.path])
 
@@ -94,17 +97,45 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 
 				<label className="mt-4 block">
 					<span className="text-shell-muted">Model</span>
-					<input
-						className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none placeholder:text-shell-muted focus:border-caret-accent/60"
-						data-testid="backend-model"
-						onBlur={() => void invoke("prefs:set", { backendModel: model.trim() })}
-						onChange={(event) => setModel(event.target.value)}
-						placeholder="Leave empty for the backend's own default"
-						value={model}
-					/>
+					{groups && groups.length > 0 ? (
+						// Categories are providers, items are their models. One backend
+						// commonly reaches several providers — the bundled OpenCode sees
+						// both Go and Zen — and flattening them would hide which of them
+						// costs money.
+						<select
+							className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none focus:border-caret-accent/60"
+							data-testid="backend-model"
+							onChange={(event) => {
+								setModel(event.target.value)
+								void invoke("prefs:set", { backendModel: event.target.value })
+							}}
+							value={model}>
+							<option value="">Automatic — the provider's own default</option>
+							{groups.map((group) => (
+								<optgroup key={group.providerId} label={group.providerName}>
+									{group.models.map((option) => (
+										<option key={option.id} value={option.id}>
+											{option.label}
+											{option.free ? " · no cost" : ""}
+										</option>
+									))}
+								</optgroup>
+							))}
+						</select>
+					) : (
+						<input
+							className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none placeholder:text-shell-muted focus:border-caret-accent/60"
+							data-testid="backend-model"
+							onBlur={() => void invoke("prefs:set", { backendModel: model.trim() })}
+							onChange={(event) => setModel(event.target.value)}
+							placeholder="Leave empty for the backend's own default"
+							value={model}
+						/>
+					)}
 					<span className="mt-1 block text-[11.5px] leading-relaxed text-shell-muted">
-						In the backend's own naming, e.g. <code className="font-mono">anthropic/claude-sonnet-5</code>. Empty is
-						usually right.
+						{groups && groups.length > 0
+							? "Grouped by provider. Automatic follows whatever that provider considers current."
+							: "This backend can't list its models, so type an id in its own naming."}
 					</span>
 				</label>
 

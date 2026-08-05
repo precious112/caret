@@ -141,6 +141,8 @@ export interface BackendReportWire {
 	displayName: string
 	/** `sandbox` means Caret cannot ask before individual writes on this backend. */
 	permissionModel: "ask" | "sandbox"
+	/** Who serves this backend's models, for ids that do not say so themselves. */
+	providerName: string
 	installed: boolean
 	authenticated: boolean
 	ready: boolean
@@ -168,6 +170,7 @@ export type TranscriptEntryWire =
 export interface AgentStateWire {
 	backendId: BackendIdWire | null
 	backendName: string | null
+	providerName: string | null
 	ready: boolean
 	blocked: string | null
 	activity: { id: string; kind: string; title: string; mode: "read-only" | "write"; sessionId: string } | null
@@ -179,6 +182,15 @@ export interface AgentStateWire {
 	}
 	pendingApproval: { id: string; question: string; confirmLabel: string; cancelLabel: string } | null
 	appWrites: "ask" | "allow"
+	model: string | null
+	effort: string | null
+}
+
+/** A model and who serves it. Providers are the categories; models are the items. */
+export interface ModelGroupWire {
+	providerId: string
+	providerName: string
+	models: Array<{ id: string; label: string; free?: boolean }>
 }
 
 export interface AgentSessionWire {
@@ -278,6 +290,8 @@ export interface IpcRequests {
 	/** Availability of every backend, for the setup screen. Probed live. */
 	"agent:backends": () => BackendReportWire[]
 	"agent:selectBackend": (id: BackendIdWire | null) => void
+	/** Models the chosen backend can reach, grouped by provider. Empty = it cannot say. */
+	"agent:models": () => ModelGroupWire[]
 	"agent:sessions": (projectPath: string) => AgentSessionWire[]
 	"agent:replay": (projectPath: string, sessionId: string) => boolean
 

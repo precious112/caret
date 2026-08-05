@@ -21,6 +21,7 @@ import {
 	type BackendEvent,
 	type BackendSession,
 	type CodingBackend,
+	type ModelGroup,
 	type PermissionDecision,
 	type ReasoningEffort,
 	type SendInput,
@@ -48,11 +49,17 @@ function claudeEffort(effort: ReasoningEffort | undefined): "low" | "medium" | "
 
 export class ClaudeBackend implements CodingBackend {
 	readonly id = "claude" as const
+	readonly providerName = "Anthropic"
 	readonly permissionModel = "ask" as const
 	readonly displayName = "Claude Code"
 
 	async availability(): Promise<AvailabilityReport> {
-		const base = { id: this.id, displayName: this.displayName, permissionModel: this.permissionModel } as const
+		const base = {
+			id: this.id,
+			displayName: this.displayName,
+			permissionModel: this.permissionModel,
+			providerName: this.providerName,
+		} as const
 
 		const status = await probeClaudeAuth()
 		if (status.kind === "missing") {
@@ -88,6 +95,33 @@ export class ClaudeBackend implements CodingBackend {
 
 	async startSession(options: StartSessionOptions): Promise<BackendSession> {
 		return new ClaudeSession(options)
+	}
+
+	/**
+	 * The CLI's own model list.
+	 *
+	 * Reached through a `query` handle, which spawns the CLI but never sends a
+	 * turn — the iterator is not consumed, so nothing is billed. Aborted straight
+	 * after, and a failure here is reported as "cannot enumerate" rather than
+	 * being papered over with a hardcoded list that would drift.
+	 */
+	async listModels(): Promise<ModelGroup[]> {
+		const { query } = await import("@anthropic-ai/claude-agent-sdk")
+		const controller = new AbortController()
+
+		try {
+			const run = query({ prompt: "", options: { abortController: controller } })
+			const models = await run.supportedModels()
+			return [
+				{
+					providerId: "anthropic",
+					providerName: this.providerName,
+					models: models.map((model) => ({ id: model.value, label: model.displayName || model.value })),
+				},
+			]
+		} finally {
+			controller.abort()
+		}
 	}
 
 	async structured<T>(req: StructuredRequest): Promise<StructuredResult<T>> {

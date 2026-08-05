@@ -44,6 +44,8 @@ export interface PendingApproval {
 export interface ConversationState {
 	backendId: BackendId | null
 	backendName: string | null
+	/** Who serves this backend's models, for ids that do not name a provider. */
+	providerName: string | null
 	ready: boolean
 	/** Why it is not ready, when it is not. */
 	blocked: string | null
@@ -53,6 +55,16 @@ export interface ConversationState {
 	pendingApproval: PendingApproval | null
 	/** Whether app-path writes still prompt in this project. */
 	appWrites: AppWritePolicy
+	/**
+	 * The chosen model and effort, as configured.
+	 *
+	 * Pushed rather than read by the renderer. The chat panel used to fetch these
+	 * from preferences itself, keyed on the backend id — so changing the *model*
+	 * never re-ran the fetch and the composer showed a stale value forever. State
+	 * the user can change belongs on one path out of main, not two.
+	 */
+	model: string | null
+	effort: string | null
 }
 
 export interface ConversationDeps {
@@ -112,6 +124,7 @@ export class AgentConversation {
 	private approvalResolver: ((ok: boolean) => void) | null = null
 	private backendId: BackendId | null = null
 	private backendName: string | null = null
+	private providerName: string | null = null
 	private blocked: string | null = null
 	private pushTimer: NodeJS.Timeout | null = null
 
@@ -121,6 +134,7 @@ export class AgentConversation {
 		return {
 			backendId: this.backendId,
 			backendName: this.backendName,
+			providerName: this.providerName,
 			ready: this.backendId !== null && this.blocked === null,
 			blocked: this.blocked,
 			activity: this.activity,
@@ -128,6 +142,8 @@ export class AgentConversation {
 			transcript: this.transcript,
 			pendingApproval: this.pendingApproval,
 			appWrites: this.deps.appWrites(),
+			model: this.deps.model() ?? null,
+			effort: this.deps.effort() ?? null,
 		}
 	}
 
@@ -258,6 +274,11 @@ export class AgentConversation {
 		this.push(true)
 	}
 
+	/** Re-pushes state after something outside the conversation changed it. */
+	touch(): void {
+		this.push(true)
+	}
+
 	note(text: string): void {
 		addNote(this.transcript, text)
 		this.push(true)
@@ -294,10 +315,12 @@ export class AgentConversation {
 			const backend = await this.deps.resolveBackend()
 			this.backendId = backend?.id ?? null
 			this.backendName = backend?.displayName ?? null
+			this.providerName = backend?.providerName ?? null
 			this.blocked = backend ? null : new NoBackendError("chat").message
 		} catch (err) {
 			this.backendId = null
 			this.backendName = null
+			this.providerName = null
 			this.blocked = err instanceof Error ? err.message : String(err)
 		}
 		this.push(true)
@@ -313,6 +336,7 @@ export class AgentConversation {
 		}
 		this.backendId = backend.id
 		this.backendName = backend.displayName
+		this.providerName = backend.providerName
 		this.blocked = null
 		return backend
 	}

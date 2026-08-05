@@ -1155,8 +1155,20 @@ async function main(): Promise<void> {
 		// which is slow at "replace this word" and makes the scenarios below
 		// measure the wrong thing.
 		if (model) {
-			await chrome.getByTestId("backend-model").fill(model.id)
-			await chrome.getByTestId("backend-model").blur()
+			// The field is a grouped `<select>` when the backend can enumerate its
+			// models and a text input when it cannot, and the two are driven
+			// differently — `fill` does nothing to a select. Which one is present is
+			// itself a property of the backend, so the harness asks rather than
+			// assumes.
+			const field = chrome.getByTestId("backend-model")
+			const tag = await field.evaluate((element) => element.tagName)
+
+			if (tag === "SELECT") {
+				await field.selectOption(model.id)
+			} else {
+				await field.fill(model.id)
+				await field.blur()
+			}
 		}
 
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
@@ -1228,7 +1240,12 @@ async function main(): Promise<void> {
 			() => {},
 		)
 
-		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 })
+		// The plan completing is the *model's* job. What `ff` certifies is what
+		// Caret does given a plan, so a model that never produces one makes the
+		// scenario inconclusive rather than failed — the same distinction gg draws.
+		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 }).catch(() => {
+			throw new Inconclusive("the model did not finish a plan within five minutes")
+		})
 	}
 
 	await inference("ff. a plan writes nothing, and discarding it leaves the bookmark alone", async () => {

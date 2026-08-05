@@ -22,6 +22,7 @@ import {
 	type BackendSession,
 	type BackendSessionSummary,
 	type CodingBackend,
+	type ModelGroup,
 	type PermissionDecision,
 	type SendInput,
 	type StartSessionOptions,
@@ -76,11 +77,17 @@ const FILE_TOOLS = new Set(["edit", "write", "patch", "multiedit"])
 
 export class OpencodeBackend implements CodingBackend {
 	readonly id = "opencode" as const
+	readonly providerName = "OpenCode"
 	readonly permissionModel = "ask" as const
 	readonly displayName = "OpenCode (bundled)"
 
 	async availability(): Promise<AvailabilityReport> {
-		const base = { id: this.id, displayName: this.displayName, permissionModel: this.permissionModel } as const
+		const base = {
+			id: this.id,
+			displayName: this.displayName,
+			permissionModel: this.permissionModel,
+			providerName: this.providerName,
+		} as const
 
 		const binary = resolveOpencodeBinary()
 		if (!binary) {
@@ -111,9 +118,7 @@ export class OpencodeBackend implements CodingBackend {
 			}
 
 			return {
-				id: this.id,
-				displayName: this.displayName,
-				permissionModel: this.permissionModel,
+				...base,
 				installed: true,
 				authenticated: true,
 				ready: true,
@@ -121,9 +126,7 @@ export class OpencodeBackend implements CodingBackend {
 			}
 		} catch (err) {
 			return {
-				id: this.id,
-				displayName: this.displayName,
-				permissionModel: this.permissionModel,
+				...base,
 				installed: true,
 				authenticated: false,
 				ready: false,
@@ -218,6 +221,32 @@ export class OpencodeBackend implements CodingBackend {
 				query: { directory: req.workingDirectory },
 			}).catch(() => {})
 		}
+	}
+
+	/**
+	 * Every provider the running server can reach, with its models.
+	 *
+	 * Ids carry the provider (`opencode-go/gpt-5.6-luna`) because that is what the
+	 * prompt route wants, and because it is the only way the free tier and the
+	 * paid one stay distinguishable once a model is chosen.
+	 */
+	async listModels(): Promise<ModelGroup[]> {
+		const server = await this.server()
+		const providers = await request<OpencodeProvidersResponse>(server, "/config/providers")
+
+		return providers.providers
+			.map((provider) => ({
+				providerId: provider.id,
+				providerName: provider.name ?? provider.id,
+				models: Object.entries(provider.models ?? {})
+					.map(([id, model]) => ({
+						id: `${provider.id}/${id}`,
+						label: model.name ?? id,
+						free: model.cost?.input === 0 && model.cost?.output === 0,
+					}))
+					.sort((a, b) => a.label.localeCompare(b.label)),
+			}))
+			.filter((group) => group.models.length > 0)
 	}
 
 	async listSessions(workingDirectory: string): Promise<BackendSessionSummary[]> {

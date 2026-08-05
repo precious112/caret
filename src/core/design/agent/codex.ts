@@ -35,6 +35,7 @@ const INSTALL_COMMAND = "npm install -g @openai/codex"
 
 export class CodexBackend implements CodingBackend {
 	readonly id = "codex" as const
+	readonly providerName = "OpenAI"
 	readonly permissionModel = "sandbox" as const
 	readonly displayName = "Codex"
 
@@ -43,6 +44,7 @@ export class CodexBackend implements CodingBackend {
 			id: this.id,
 			displayName: this.displayName,
 			permissionModel: this.permissionModel,
+			providerName: this.providerName,
 			untested: true,
 		} as const
 

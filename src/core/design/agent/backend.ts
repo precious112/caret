@@ -44,6 +44,30 @@ export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh"
  */
 export type PermissionModel = "ask" | "sandbox"
 
+/**
+ * A model, and who serves it.
+ *
+ * The distinction is not pedantry. A *backend* is the agent loop Caret drives —
+ * OpenCode, Claude Code, Codex. A *provider* is who serves the weights, and one
+ * backend commonly reaches several: the bundled OpenCode alone sees OpenCode Go
+ * and OpenCode Zen, which differ in whether they cost money. Collapsing the two
+ * is how a backend's name ends up displayed where a model's belongs.
+ */
+export interface ModelOption {
+	/** What Caret persists and sends, in the backend's own namespace. */
+	id: string
+	/** What the user reads, without the provider prefix. */
+	label: string
+	/** Free at the provider. Worth showing; a bill is not a nice surprise. */
+	free?: boolean
+}
+
+export interface ModelGroup {
+	providerId: string
+	providerName: string
+	models: ModelOption[]
+}
+
 export interface StartSessionOptions {
 	workingDirectory: string
 	/** `read-only` is the plan phase: the agent may read anything and write nothing. */
@@ -128,6 +152,7 @@ export interface AvailabilityReport {
 	/** One line the user reads. Never a stack trace. */
 	detail: string
 	permissionModel: PermissionModel
+	providerName: string
 	/** What to do about it, when it is not ready. */
 	remedy?: { label: string; command?: string; url?: string }
 	/**
@@ -140,11 +165,24 @@ export interface AvailabilityReport {
 export interface CodingBackend {
 	readonly id: BackendId
 	readonly displayName: string
+	/**
+	 * Who serves this backend's models when their ids do not say so themselves.
+	 * OpenCode's ids are already `provider/model`; Claude's are bare.
+	 */
+	readonly providerName: string
 	readonly permissionModel: PermissionModel
 	availability(): Promise<AvailabilityReport>
 	startSession(options: StartSessionOptions): Promise<BackendSession>
 	/** One-shot, JSON-schema-constrained. Carries the interview and recipe narrowing. */
 	structured<T>(request: StructuredRequest): Promise<StructuredResult<T>>
+	/**
+	 * Models this backend can reach, grouped by provider.
+	 *
+	 * Optional because not every backend can answer it — Codex has no
+	 * enumeration API at all — and a made-up list is worse than none. Absent
+	 * means the UI asks the user to type an id.
+	 */
+	listModels?(): Promise<ModelGroup[]>
 	/** Sessions previously run in this project, newest first. */
 	listSessions?(workingDirectory: string): Promise<BackendSessionSummary[]>
 	/**

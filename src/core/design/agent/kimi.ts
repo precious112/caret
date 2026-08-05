@@ -20,6 +20,7 @@ import {
 	type BackendSession,
 	type BackendSessionSummary,
 	type CodingBackend,
+	type ModelGroup,
 	type PermissionDecision,
 	type SendInput,
 	type StartSessionOptions,
@@ -34,6 +35,7 @@ const INSTALL_COMMAND = "npm install -g @moonshot-ai/kimi-cli"
 
 export class KimiBackend implements CodingBackend {
 	readonly id = "kimi" as const
+	readonly providerName = "Moonshot"
 	readonly permissionModel = "ask" as const
 	readonly displayName = "Kimi"
 
@@ -42,6 +44,7 @@ export class KimiBackend implements CodingBackend {
 			id: this.id,
 			displayName: this.displayName,
 			permissionModel: this.permissionModel,
+			providerName: this.providerName,
 			untested: true,
 		} as const
 
@@ -94,6 +97,22 @@ export class KimiBackend implements CodingBackend {
 		// shape actually read rather than imported wholesale — a version bump that
 		// adds an event member must not become a compile error here.
 		return new KimiSession(session as unknown as KimiSessionHandle, options)
+	}
+
+	/** From the CLI's own config on disk. No network, no turn. */
+	async listModels(): Promise<ModelGroup[]> {
+		const { parseConfig } = await import("@moonshot-ai/kimi-agent-sdk")
+		const config = parseConfig()
+		const models = (config.models ?? []) as Array<{ id?: string; name?: string }>
+		return [
+			{
+				providerId: "moonshot",
+				providerName: this.providerName,
+				models: models
+					.filter((model) => model.id)
+					.map((model) => ({ id: model.id as string, label: model.name ?? (model.id as string) })),
+			},
+		]
 	}
 
 	/** No native schema mode — always prompt, parse and validate. */

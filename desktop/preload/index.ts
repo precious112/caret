@@ -52,6 +52,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"agent:reset": true,
 	"agent:backends": true,
 	"agent:selectBackend": true,
+	"agent:models": true,
 	"agent:sessions": true,
 	"agent:replay": true,
 	"prefs:get": true,

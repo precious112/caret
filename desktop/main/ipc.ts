@@ -290,6 +290,23 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		await Promise.all(windows.list().map((window) => window.getAgent().conversation.refreshBackend()))
 	})
 
+	/**
+	 * Models grouped by provider, for the chosen backend.
+	 *
+	 * Empty when the backend cannot enumerate — Codex has no such API — which the
+	 * panel renders as "type an id" rather than as an empty list that looks broken.
+	 */
+	ipcMain.handle("agent:models", async () => {
+		const id = getPrefs().backendId
+		if (!id) return []
+		try {
+			return (await getBackend(id).listModels?.()) ?? []
+		} catch (err) {
+			Logger.warn(`[ipc] could not list ${id} models: ${err}`)
+			return []
+		}
+	})
+
 	ipcMain.handle("agent:sessions", async (_event, projectPath: string) => {
 		const id = getPrefs().backendId
 		if (!id) return []
@@ -307,6 +324,9 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("prefs:set", async (_event, patch: Record<string, unknown>) => {
 		await setPrefs(patch)
+		// The chat composer names the model and effort, and both live here. Without
+		// this the panel writes the preference and nothing on screen moves.
+		for (const window of windows.list()) window.getAgent().conversation.touch()
 	})
 
 	// ── canvas + chrome plumbing ──────────────────────────────────────────────

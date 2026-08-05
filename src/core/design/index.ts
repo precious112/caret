@@ -6,6 +6,8 @@ export {
 	type BackendId,
 	type BackendSession,
 	type CodingBackend,
+	type ModelGroup,
+	type ModelOption,
 	NoBackendError,
 	type PermissionModel,
 	type ReasoningEffort,

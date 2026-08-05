@@ -40,7 +40,6 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 	const [state, setState] = useState<AgentStateWire | null>(null)
 	const [draft, setDraft] = useState("")
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
-	const [model, setModel] = useState<{ model: string; effort: string }>({ model: "", effort: "" })
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -50,14 +49,6 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 			if (path === project.path) setState(next)
 		})
 	}, [project.path])
-
-	// What the composer names. Read here rather than passed down because it is
-	// display for a control that lives in another surface.
-	useEffect(() => {
-		void invoke("prefs:get").then((prefs) =>
-			setModel({ model: String(prefs.backendModel ?? ""), effort: String(prefs.backendEffort ?? "") }),
-		)
-	}, [state?.backendId])
 
 	// Sticks to the bottom while a turn streams. Checked against the scroll
 	// position first: yanking the view back down while someone is reading an
@@ -86,8 +77,8 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 		send,
 		streaming,
 		ready: state?.ready ?? false,
-		model: shortModel(model.model) || state?.backendName || "no model set",
-		effort: model.effort,
+		model: describeModel(state?.model ?? "", state?.providerName),
+		effort: state?.effort ?? "",
 		inputRef,
 		onOpenBackendSetup,
 		onStop: () => void invoke("agent:abort", project.path),
@@ -265,7 +256,7 @@ function Composer(props: ComposerProps) {
 					<IconButton label="Reference an asset" onClick={props.onReferenceAsset}>
 						<Paperclip size={13} />
 					</IconButton>
-					<Pill label={props.model} onClick={props.onOpenBackendSetup} />
+					<Pill grow label={props.model} onClick={props.onOpenBackendSetup} />
 					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
 					<div className="flex-1" />
 					<SendButton {...props} />
@@ -302,10 +293,13 @@ function SendButton(props: ComposerProps) {
 	)
 }
 
-function Pill({ label, onClick }: { label: string; onClick(): void }) {
+function Pill({ label, onClick, grow }: { label: string; onClick(): void; grow?: boolean }) {
 	return (
 		<button
-			className="flex max-w-[45%] items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-shell-muted transition-colors hover:bg-white/5 hover:text-shell-text"
+			className={cn(
+				"flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-shell-muted transition-colors hover:bg-white/5 hover:text-shell-text",
+				grow && "shrink",
+			)}
 			onClick={onClick}
 			type="button">
 			<span className="truncate">{label}</span>
@@ -438,7 +432,7 @@ function Permission({
 		return (
 			<p className="text-[11.5px] text-shell-muted" data-testid="chat-permission-resolved">
 				{entry.status === "allowed" ? "Allowed" : "Refused"}
-				{entry.automatic ? ` — ${entry.automatic}` : ""}
+				{entry.automatic ? `: ${entry.automatic}` : ""}
 			</p>
 		)
 	}
@@ -501,8 +495,22 @@ function IconButton({ children, label, onClick }: { children: React.ReactNode; l
 	)
 }
 
-/** `opencode-go/gpt-5.6-luna` reads as `gpt-5.6-luna` in a 380px column. */
-function shortModel(model: string): string {
+/**
+ * A model, named as `model (provider)`.
+ *
+ * This slot used to render the *backend's* display name, so the composer said
+ * "OpenCode (bundled)" as though that were a model. It is not: OpenCode is the
+ * agent loop Caret drives, and it reaches several providers, one of which is
+ * free and one of which is not. When Caret hosts its own inference it becomes a
+ * provider on the same footing.
+ *
+ * OpenCode's ids already carry the provider (`opencode-go/gpt-5.6-luna`); the
+ * other backends' are bare, so the provider comes from the backend itself.
+ */
+function describeModel(model: string, providerName: string | null | undefined): string {
+	if (!model) return "default model"
+
 	const slash = model.lastIndexOf("/")
-	return slash === -1 ? model : model.slice(slash + 1)
+	if (slash === -1) return providerName ? `${model} (${providerName})` : model
+	return `${model.slice(slash + 1)} (${model.slice(0, slash)})`
 }
