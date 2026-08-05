@@ -7,10 +7,27 @@
  * matching `NO_PROXY` would send loopback traffic to the proxy and fail, which
  * is the opposite of what that rule is for.
  */
-import { fetch } from "undici"
+import { Agent, fetch } from "undici"
 
 import { BackendError } from "../backend"
 import type { RunningServer } from "./server"
+
+/**
+ * A dispatcher with the clock turned off.
+ *
+ * undici gives up after five minutes without response headers, which is a sane
+ * default for a web request and wrong for this one: the synchronous prompt route
+ * holds the connection open for the *whole turn*, and a model reasoning hard can
+ * exceed that easily. Hitting it surfaces as `UND_ERR_HEADERS_TIMEOUT`, which
+ * names undici rather than the actual situation ("the model is still thinking").
+ *
+ * Long, not infinite. Disabling the deadline outright was tried and is worse: a
+ * backend that dies mid-turn then hangs the caller forever with nothing to show
+ * for it. Half an hour is longer than any real turn and still eventually admits
+ * that something is wrong.
+ */
+const TURN_DEADLINE_MS = 30 * 60_000
+const dispatcher = new Agent({ headersTimeout: TURN_DEADLINE_MS, bodyTimeout: TURN_DEADLINE_MS, keepAliveTimeout: 60_000 })
 
 export interface RequestOptions {
 	method?: "GET" | "POST" | "DELETE"
@@ -33,6 +50,7 @@ export async function rawRequest(server: RunningServer, path: string, options: R
 	}
 
 	const response = await fetch(url, {
+		dispatcher,
 		method: options.method ?? "GET",
 		headers: {
 			authorization: server.authorization,

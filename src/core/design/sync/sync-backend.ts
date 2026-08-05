@@ -18,7 +18,8 @@
  */
 import { Logger } from "@/shared/services/Logger"
 import type { AgentConversation } from "../agent/conversation"
-import { clearPendingSync, completeSync } from "./sync-completion"
+import { clearPendingSync, completeSync, readPendingSync } from "./sync-completion"
+import { diffCountAgainstSnapshot } from "./sync-snapshot"
 
 export interface BackendSyncRequest {
 	cwd: string
@@ -86,8 +87,6 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 			return
 		}
 
-		const before = plan.filesChanged.length
-
 		const applied = await conversation.run({
 			kind: "sync-apply",
 			title: "Sync design → app",
@@ -104,12 +103,23 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 			return
 		}
 
-		// A turn can end cleanly having written nothing — an agent that spends its
-		// budget exploring and then stops is the common shape of that. Advancing
-		// the bookmark there would be the worst possible outcome: the design change
-		// is never offered again, so it is silently dropped rather than retried.
-		// "It finished" is not "it did it".
-		if (applied.filesChanged.length <= before) {
+		// Did anything actually change? **Ask git, not the transcript.**
+		//
+		// This used to count `file-changed` events, which an adapter only emits for
+		// tools whose *name* it recognises — `edit`, `write`, `patch`. A model that
+		// reaches for any other tool edits the app while Caret sees nothing, and the
+		// bookmark then fails to advance on a sync that genuinely happened, so the
+		// same changes are re-offered forever. Caret already took a snapshot before
+		// the agent touched anything; that is the authoritative answer and it does
+		// not care what the tool was called.
+		//
+		// The point stands either way: a turn can end cleanly having written
+		// nothing, and advancing there silently drops the design change rather than
+		// retrying it. "It finished" is not "it did it".
+		const pending = await readPendingSync(cwd)
+		const changed = pending?.preSyncSnapshot ? await diffCountAgainstSnapshot(cwd, pending.preSyncSnapshot) : 0
+
+		if (changed === 0) {
 			conversation.note(
 				"The agent finished without changing anything in your app, so this sync hasn't been recorded — the same design changes will be offered again next time. Try again, or use a stronger model.",
 			)
@@ -120,7 +130,7 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 		const outcome = await completeSync(cwd, syncId)
 		conversation.note(
 			outcome === "advanced"
-				? "Synced. The next sync will only report changes made from here."
+				? `Synced — ${changed} app file${changed === 1 ? "" : "s"} changed. The next sync will only report changes made from here.`
 				: `Applied, but the sync bookmark didn't advance (${outcome}). The next sync will re-report these files.`,
 		)
 	} catch (err) {
