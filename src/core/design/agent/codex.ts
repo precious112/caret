@@ -18,11 +18,16 @@
  * The consequence is honest and worth stating in the UI: on this backend the
  * per-write "ask" toggle does nothing, because the boundary is the sandbox.
  */
+import * as fs from "fs/promises"
+import * as os from "os"
+import * as path from "path"
+
 import {
 	type AvailabilityReport,
 	type BackendEvent,
 	type BackendSession,
 	type CodingBackend,
+	type ModelGroup,
 	type SendInput,
 	type StartSessionOptions,
 	StructuredOutputError,
@@ -32,6 +37,17 @@ import {
 import { runCommand } from "./claude"
 
 const INSTALL_COMMAND = "npm install -g @openai/codex"
+
+/** Only the fields Caret reads. The file carries about thirty more per model. */
+interface CodexModelCache {
+	models?: Array<{
+		slug?: string
+		display_name?: string
+		/** `list` or `hide`; the CLI keeps its own internal models out of its picker. */
+		visibility?: string
+		priority?: number
+	}>
+}
 
 export class CodexBackend implements CodingBackend {
 	readonly id = "codex" as const
@@ -73,6 +89,44 @@ export class CodexBackend implements CodingBackend {
 
 	async startSession(options: StartSessionOptions): Promise<BackendSession> {
 		return new CodexSession(options)
+	}
+
+	/**
+	 * The CLI's own model catalogue, read from its cache.
+	 *
+	 * Codex exposes no enumeration API — no `models` subcommand, nothing on the
+	 * SDK — but it does not need one: the CLI fetches the catalogue from OpenAI
+	 * (ETag and all) and writes it to `models_cache.json`, which is where its own
+	 * picker reads from. Caret reads the same file.
+	 *
+	 * The alternative was a hardcoded list, and that is wrong for a reason worth
+	 * stating: it would mean shipping a Caret release every time OpenAI ships a
+	 * model. This way the list arrives on its own — the day the CLI refreshes its
+	 * cache, Caret sees the new model.
+	 *
+	 * Two honest limits. It is a *cache*, so it is as fresh as the user's last
+	 * Codex run rather than live. And it is an internal file, so if it moves this
+	 * returns nothing and the UI falls back to a text field — which is the same
+	 * place we were before, not a breakage.
+	 */
+	async listModels(): Promise<ModelGroup[]> {
+		const home = process.env.CODEX_HOME || path.join(os.homedir(), ".codex")
+
+		let cache: CodexModelCache
+		try {
+			cache = JSON.parse(await fs.readFile(path.join(home, "models_cache.json"), "utf-8"))
+		} catch {
+			return []
+		}
+
+		const models = (cache.models ?? [])
+			// `hide` is how the CLI keeps internal entries out of its own picker —
+			// `codex-auto-review` is one — and they have no business in ours either.
+			.filter((model): model is { slug: string } & typeof model => Boolean(model.slug) && model.visibility !== "hide")
+			.sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
+			.map((model) => ({ id: model.slug, label: model.display_name || model.slug }))
+
+		return models.length > 0 ? [{ providerId: "openai", providerName: this.providerName, models }] : []
 	}
 
 	async structured<T>(req: StructuredRequest): Promise<StructuredResult<T>> {

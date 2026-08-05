@@ -18,7 +18,7 @@ import { resolveOpencodeBinary } from "../src/core/design/agent/opencode/binary"
 import { request } from "../src/core/design/agent/opencode/http"
 import type { OpencodeProvidersResponse } from "../src/core/design/agent/opencode/protocol"
 import { ensureOpencodeServer, stopOpencodeServer } from "../src/core/design/agent/opencode/server"
-import { probeBackends } from "../src/core/design/agent/registry"
+import { getBackend, probeBackends } from "../src/core/design/agent/registry"
 
 async function main(): Promise<void> {
 	console.log("Backends\n")
@@ -43,6 +43,20 @@ async function main(): Promise<void> {
 	}
 
 	console.log(`\nBundled backend: ${binary}`)
+
+	// Every backend that can name its models, so "is my subscription detected"
+	// and "can Caret see the model I want" are answered in one place.
+	for (const id of ["opencode", "claude", "codex", "kimi"] as const) {
+		const groups = await getBackend(id)
+			.listModels?.()
+			.catch(() => [])
+		if (!groups?.length) continue
+		console.log(`\n${getBackend(id).displayName} models`)
+		for (const group of groups) {
+			console.log(`  ${group.providerName}`)
+			for (const model of group.models) console.log(`      ${model.id.padEnd(30)} ${model.free ? "no cost" : ""}`)
+		}
+	}
 
 	const server = await ensureOpencodeServer(CARET_SERVER_CONFIG)
 	const providers = await request<OpencodeProvidersResponse>(server, "/config/providers")
