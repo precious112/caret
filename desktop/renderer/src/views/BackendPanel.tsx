@@ -95,7 +95,7 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 					{backends === null && <p className="text-shell-muted">Looking for backends…</p>}
 				</div>
 
-				<label className="mt-4 block">
+				<label className="mt-4 block" htmlFor="backend-model">
 					<span className="text-shell-muted">Model</span>
 					{groups && groups.length > 0 ? (
 						// Categories are providers, items are their models. One backend
@@ -105,6 +105,7 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 						<select
 							className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none focus:border-caret-accent/60"
 							data-testid="backend-model"
+							id="backend-model"
 							onChange={(event) => {
 								setModel(event.target.value)
 								void invoke("prefs:set", { backendModel: event.target.value })
@@ -126,6 +127,7 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 						<input
 							className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none placeholder:text-shell-muted focus:border-caret-accent/60"
 							data-testid="backend-model"
+							id="backend-model"
 							onBlur={() => void invoke("prefs:set", { backendModel: model.trim() })}
 							onChange={(event) => setModel(event.target.value)}
 							placeholder="Leave empty for the backend's own default"
@@ -139,11 +141,12 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 					</span>
 				</label>
 
-				<label className="mt-3 block">
+				<label className="mt-3 block" htmlFor="backend-effort">
 					<span className="text-shell-muted">Reasoning effort</span>
 					<select
 						className="mt-1 w-full rounded-lg border border-shell-border bg-shell-panel px-2.5 py-1.5 outline-none focus:border-caret-accent/60"
 						data-testid="backend-effort"
+						id="backend-effort"
 						onChange={(event) => {
 							setEffort(event.target.value)
 							void invoke("prefs:set", { backendEffort: event.target.value })
