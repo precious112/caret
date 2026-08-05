@@ -413,7 +413,10 @@ implementing; the wire surfaces, event mappings and auth flows are specified the
 **Chat surface:**
 
 - [x] Collapsible chat sidebar: streamed text, collapsed thinking, tool-call lines, file-change
-      list, permission prompts, stop (= abort). Dismissible at will.
+      list, permission prompts, stop (= abort). Dismissible at will. Treatment settled 2026-08-05
+      against three alternatives built and compared at real width — see §4.4's three rules:
+      the composer holds its own controls, colour is reserved for what is waiting on an answer,
+      and turns group.
 - [x] Chat history: sessions listed per project, and an old session **replayed through the same
       reducer that built it live** — a history panel with its own parser is a second
       implementation that eventually disagrees with the first.

@@ -10,9 +10,18 @@
  * draft message. The transcript is built once, in the design core, by the same
  * reducer that rebuilds old sessions — so what you see replayed is what you saw
  * live.
+ *
+ * **Two rules this panel is held to**, both of which it broke in its first form:
+ *
+ * 1. *Colour is reserved.* The shell exists to frame the user's design work, and
+ *    accent-tinted chrome makes their own colours hard to judge. Accent appears
+ *    on exactly one thing: something waiting on an answer.
+ * 2. *Turns group.* Uniform spacing between every entry means a user message, a
+ *    thinking block, four tool lines and the reply all read as one undifferentiated
+ *    column. The gap between turns is what makes a transcript scannable.
  */
 
-import { AlertTriangle, Check, ChevronDown, ChevronRight, History, Plus, Send, Square, Wrench, X } from "lucide-react"
+import { AlertTriangle, ChevronDown, ChevronRight, History, Paperclip, Plus, Send, Square, Wrench, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { AgentSessionWire, AgentStateWire, ProjectState, TranscriptEntryWire } from "../../../shared/ipc"
@@ -31,7 +40,9 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 	const [state, setState] = useState<AgentStateWire | null>(null)
 	const [draft, setDraft] = useState("")
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
+	const [model, setModel] = useState<{ model: string; effort: string }>({ model: "", effort: "" })
 	const scrollRef = useRef<HTMLDivElement>(null)
+	const inputRef = useRef<HTMLTextAreaElement>(null)
 
 	useEffect(() => {
 		void invoke("agent:state", project.path).then(setState)
@@ -39,6 +50,14 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 			if (path === project.path) setState(next)
 		})
 	}, [project.path])
+
+	// What the composer names. Read here rather than passed down because it is
+	// display for a control that lives in another surface.
+	useEffect(() => {
+		void invoke("prefs:get").then((prefs) =>
+			setModel({ model: String(prefs.backendModel ?? ""), effort: String(prefs.backendEffort ?? "") }),
+		)
+	}, [state?.backendId])
 
 	// Sticks to the bottom while a turn streams. Checked against the scroll
 	// position first: yanking the view back down while someone is reading an
@@ -52,12 +71,30 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 
 	const entries = state?.transcript.entries ?? []
 	const streaming = state?.streaming ?? false
+	const turns = useMemo(() => groupIntoTurns(entries), [entries])
 
 	const send = () => {
 		const text = draft.trim()
 		if (!text || streaming) return
 		setDraft("")
 		void invoke("agent:send", project.path, text)
+	}
+
+	const composer = {
+		draft,
+		setDraft,
+		send,
+		streaming,
+		ready: state?.ready ?? false,
+		model: shortModel(model.model) || state?.backendName || "no model set",
+		effort: model.effort,
+		inputRef,
+		onOpenBackendSetup,
+		onStop: () => void invoke("agent:abort", project.path),
+		onReferenceAsset: () => {
+			setDraft(draft.endsWith("@") || draft.endsWith(" ") || draft === "" ? `${draft}@` : `${draft} @`)
+			inputRef.current?.focus()
+		},
 	}
 
 	return (
@@ -109,45 +146,49 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 				/>
 			)}
 
-			<div className="flex-1 overflow-y-auto px-3 py-3" data-testid="chat-transcript" ref={scrollRef}>
+			<div className="flex-1 overflow-y-auto px-3.5 py-4" data-testid="chat-transcript" ref={scrollRef}>
 				{!state?.ready && <NoBackend detail={state?.blocked} onOpenBackendSetup={onOpenBackendSetup} />}
 
 				{entries.length === 0 && state?.ready && (
-					<p className="px-1 py-6 text-center text-[12px] leading-relaxed text-shell-muted">
+					<p className="px-1 py-8 text-center text-[12px] leading-relaxed text-shell-muted">
 						Ask for a change, or describe what you want to build.
 						<br />
 						Caret can see this project's foundations and assets.
 					</p>
 				)}
 
-				<div className="flex flex-col gap-2.5">
-					{entries.map((entry) => (
-						<Entry
-							entry={entry}
-							key={entry.id}
-							onRespond={(requestId, decision) =>
-								void invoke("agent:permission", project.path, requestId, decision)
-							}
-						/>
-					))}
-				</div>
+				{turns.map((turn, index) => (
+					// The gap between turns is six times the gap inside one. That ratio
+					// is the whole reason a long transcript stays readable.
+					<div className={cn("flex flex-col gap-1.5", index > 0 && "mt-7")} key={turn[0]?.id ?? index}>
+						{turn.map((entry) => (
+							<Entry
+								entry={entry}
+								key={entry.id}
+								onRespond={(requestId, decision) =>
+									void invoke("agent:permission", project.path, requestId, decision)
+								}
+							/>
+						))}
+					</div>
+				))}
 
 				<FileChanges files={state?.transcript.files ?? []} />
 			</div>
 
 			{state?.pendingApproval && (
-				<div className="border-t border-caret-accent/30 bg-caret-accent/10 px-3 py-3" data-testid="chat-approval">
+				<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-approval">
 					<p className="mb-2.5 leading-relaxed">{state.pendingApproval.question}</p>
 					<div className="flex gap-2">
 						<button
 							className="rounded-lg bg-caret-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-caret-accent-hover"
-							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval!.id, true)}
+							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", true)}
 							type="button">
 							{state.pendingApproval.confirmLabel}
 						</button>
 						<button
-							className="rounded-lg bg-white/5 px-3 py-1.5 transition-colors hover:bg-white/10"
-							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval!.id, false)}
+							className="rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"
+							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", false)}
 							type="button">
 							{state.pendingApproval.cancelLabel}
 						</button>
@@ -155,58 +196,142 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 				</div>
 			)}
 
-			<footer className="shrink-0 border-t border-shell-border p-2.5">
-				<div className="flex items-end gap-2">
-					<textarea
-						className="max-h-40 min-h-[38px] flex-1 resize-none rounded-lg border border-shell-border bg-shell-bg px-2.5 py-2 leading-relaxed outline-none placeholder:text-shell-muted focus:border-caret-accent/60"
-						data-testid="chat-input"
-						disabled={!state?.ready}
-						onChange={(event) => setDraft(event.target.value)}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" && !event.shiftKey) {
-								event.preventDefault()
-								send()
-							}
-						}}
-						placeholder={state?.ready ? "Describe a change…" : "No backend connected"}
-						rows={1}
-						value={draft}
-					/>
-
-					{streaming ? (
-						<button
-							className="flex size-[38px] items-center justify-center rounded-lg bg-white/5 transition-colors hover:bg-white/10"
-							data-testid="chat-stop"
-							onClick={() => void invoke("agent:abort", project.path)}
-							title="Stop"
-							type="button">
-							<Square size={13} />
-						</button>
-					) : (
-						<button
-							className="flex size-[38px] items-center justify-center rounded-lg bg-caret-accent text-white transition-colors hover:bg-caret-accent-hover disabled:opacity-40"
-							data-testid="chat-send"
-							disabled={!state?.ready || draft.trim().length === 0}
-							onClick={send}
-							title="Send"
-							type="button">
-							<Send size={13} />
-						</button>
-					)}
-				</div>
-
-				<Usage state={state} />
-			</footer>
+			<Composer {...composer} />
 		</aside>
 	)
 }
 
+// ── composers ───────────────────────────────────────────────────────────────
+
+interface ComposerProps {
+	draft: string
+	setDraft(value: string): void
+	send(): void
+	streaming: boolean
+	ready: boolean
+	model: string
+	effort: string
+	onOpenBackendSetup(): void
+	onReferenceAsset(): void
+	onStop(): void
+	inputRef: React.RefObject<HTMLTextAreaElement | null>
+}
+
+const PLACEHOLDER = "Ask for a change, @ for an asset…"
+
+function useComposerKeys(send: () => void) {
+	return (event: React.KeyboardEvent) => {
+		if (event.key === "Enter" && !event.shiftKey) {
+			event.preventDefault()
+			send()
+		}
+	}
+}
+
+/**
+ * The composer: one surface that holds its own controls.
+ *
+ * Two other arrangements were built and looked at side by side at real size —
+ * a calmer one with the controls above the box, and a single-row one. Both lost
+ * to this for the same reason: they put the model and the effort *below or above*
+ * the box as a caption, and a caption is a label where this needs a control. The
+ * thing you most want to vary per message should not be a click away in another
+ * surface, which is what the first version of this panel did.
+ */
+function Composer(props: ComposerProps) {
+	const onKeyDown = useComposerKeys(props.send)
+	return (
+		<footer className="shrink-0 p-2.5">
+			<div className="rounded-xl border border-shell-border bg-shell-bg focus-within:border-white/20">
+				<textarea
+					className="max-h-40 min-h-[46px] w-full resize-none bg-transparent px-3 pt-2.5 leading-relaxed outline-none placeholder:text-shell-muted"
+					data-testid="chat-input"
+					disabled={!props.ready}
+					onChange={(event) => props.setDraft(event.target.value)}
+					onKeyDown={onKeyDown}
+					placeholder={props.ready ? PLACEHOLDER : "No backend connected"}
+					ref={props.inputRef}
+					rows={1}
+					value={props.draft}
+				/>
+				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
+					{/*
+					 * Types the `@` rather than opening a picker, because the picker is
+					 * Phase 6.6 and does not exist yet. The expansion behind it *does* —
+					 * `@tag` resolves to a real asset before any instruction reaches an
+					 * agent — so this is a shortcut to something that works, not a stub
+					 * for something that does not.
+					 */}
+					<IconButton label="Reference an asset" onClick={props.onReferenceAsset}>
+						<Paperclip size={13} />
+					</IconButton>
+					<Pill label={props.model} onClick={props.onOpenBackendSetup} />
+					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
+					<div className="flex-1" />
+					<SendButton {...props} />
+				</div>
+			</div>
+		</footer>
+	)
+}
+
+/** Neutral, not accent: sending is the expected act, not the urgent one. */
+function SendButton(props: ComposerProps) {
+	if (props.streaming) {
+		return (
+			<button
+				className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/10 transition-colors hover:bg-white/15"
+				data-testid="chat-stop"
+				onClick={props.onStop}
+				title="Stop"
+				type="button">
+				<Square size={12} />
+			</button>
+		)
+	}
+	return (
+		<button
+			className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/10 transition-colors hover:bg-white/20 disabled:opacity-30"
+			data-testid="chat-send"
+			disabled={!props.ready || props.draft.trim().length === 0}
+			onClick={props.send}
+			title="Send"
+			type="button">
+			<Send size={12} />
+		</button>
+	)
+}
+
+function Pill({ label, onClick }: { label: string; onClick(): void }) {
+	return (
+		<button
+			className="flex max-w-[45%] items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-shell-muted transition-colors hover:bg-white/5 hover:text-shell-text"
+			onClick={onClick}
+			type="button">
+			<span className="truncate">{label}</span>
+			<ChevronDown className="shrink-0" size={10} />
+		</button>
+	)
+}
+
+// ── transcript ──────────────────────────────────────────────────────────────
+
+/** Splits a flat transcript into turns, each beginning at what the user said. */
+function groupIntoTurns(entries: TranscriptEntryWire[]): TranscriptEntryWire[][] {
+	const turns: TranscriptEntryWire[][] = []
+	for (const entry of entries) {
+		if (entry.kind === "user" || turns.length === 0) turns.push([])
+		turns[turns.length - 1].push(entry)
+	}
+	return turns
+}
+
 function NoBackend({ detail, onOpenBackendSetup }: { detail?: string | null; onOpenBackendSetup(): void }) {
 	return (
-		<div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3" data-testid="chat-no-backend">
+		<div className="mb-3 border-l-2 border-amber-500/60 pl-3" data-testid="chat-no-backend">
 			<p className="leading-relaxed text-amber-200">{detail ?? "No coding backend is set up yet."}</p>
 			<button
-				className="mt-2.5 rounded-lg bg-white/5 px-2.5 py-1.5 transition-colors hover:bg-white/10"
+				className="mt-2 text-shell-muted underline underline-offset-2 transition-colors hover:text-shell-text"
 				onClick={onOpenBackendSetup}
 				type="button">
 				Open backend settings
@@ -245,7 +370,7 @@ function Entry({
 	switch (entry.kind) {
 		case "user":
 			return (
-				<div className="fade-in self-end rounded-xl rounded-br-sm bg-caret-accent/15 px-3 py-2 leading-relaxed whitespace-pre-wrap">
+				<div className="fade-in mb-1 max-w-[82%] self-end rounded-xl rounded-br-sm bg-white/[0.07] px-3 py-2 leading-relaxed whitespace-pre-wrap">
 					{entry.text}
 				</div>
 			)
@@ -269,15 +394,19 @@ function Entry({
 			return <Permission entry={entry} onRespond={onRespond} />
 
 		case "error":
+			// A rule, not a filled card. At this width a stack of tinted boxes reads
+			// as noise, and the text is the part that matters.
 			return (
-				<div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-2.5 py-2 text-red-200">
+				<div className="flex items-start gap-2 border-l-2 border-red-500/60 pl-3 text-red-200">
 					<AlertTriangle className="mt-0.5 shrink-0" size={13} />
 					<span className="leading-relaxed">{entry.message}</span>
 				</div>
 			)
 
 		case "note":
-			return <p className="text-[11.5px] leading-relaxed text-shell-muted italic">{entry.text}</p>
+			return (
+				<p className="border-l-2 border-shell-border pl-3 text-[11.5px] leading-relaxed text-shell-muted">{entry.text}</p>
+			)
 	}
 }
 
@@ -314,25 +443,26 @@ function Permission({
 		)
 	}
 
+	// The one place accent is spent: something is waiting on an answer.
 	return (
-		<div className="fade-in rounded-xl border border-amber-500/30 bg-amber-500/5 p-3" data-testid="chat-permission">
-			<p className="mb-2.5 leading-relaxed">{entry.summary}</p>
-			<div className="flex flex-wrap gap-2">
+		<div className="fade-in border-l-2 border-caret-accent py-0.5 pl-3" data-testid="chat-permission">
+			<p className="mb-2 leading-relaxed">{entry.summary}</p>
+			<div className="flex flex-wrap gap-1.5">
 				<button
-					className="rounded-lg bg-caret-accent px-2.5 py-1.5 font-medium text-white transition-colors hover:bg-caret-accent-hover"
+					className="rounded-lg bg-white/10 px-2.5 py-1 font-medium transition-colors hover:bg-white/20"
 					data-testid="chat-permission-allow"
 					onClick={() => onRespond(entry.requestId, "allow")}
 					type="button">
 					Allow
 				</button>
 				<button
-					className="rounded-lg bg-white/5 px-2.5 py-1.5 transition-colors hover:bg-white/10"
+					className="rounded-lg px-2.5 py-1 text-shell-muted transition-colors hover:bg-white/5"
 					onClick={() => onRespond(entry.requestId, "allow-always")}
 					type="button">
-					Always for this project
+					Always
 				</button>
 				<button
-					className="rounded-lg bg-white/5 px-2.5 py-1.5 transition-colors hover:bg-white/10"
+					className="rounded-lg px-2.5 py-1 text-shell-muted transition-colors hover:bg-white/5"
 					data-testid="chat-permission-deny"
 					onClick={() => onRespond(entry.requestId, "deny")}
 					type="button">
@@ -346,11 +476,12 @@ function Permission({
 function FileChanges({ files }: { files: string[] }) {
 	if (files.length === 0) return null
 	return (
-		<div className="mt-4 rounded-xl border border-shell-border p-2.5" data-testid="chat-files">
-			<p className="mb-1.5 text-[11px] tracking-wide text-shell-muted uppercase">Changed</p>
+		<div className="mt-7 border-t border-shell-border pt-2.5" data-testid="chat-files">
+			<p className="mb-1.5 text-[11px] tracking-wide text-shell-muted uppercase">
+				Changed {files.length > 1 ? `· ${files.length}` : ""}
+			</p>
 			{files.map((file) => (
-				<p className="flex items-center gap-1.5 truncate text-[11.5px]" key={file} title={file}>
-					<Check className="shrink-0 text-emerald-400" size={11} />
+				<p className="truncate text-[11.5px] text-shell-muted" key={file} title={file}>
 					{file.split("/").slice(-2).join("/")}
 				</p>
 			))}
@@ -358,33 +489,20 @@ function FileChanges({ files }: { files: string[] }) {
 	)
 }
 
-function Usage({ state }: { state: AgentStateWire | null }) {
-	const summary = useMemo(() => {
-		if (!state) return null
-		const { inputTokens, outputTokens, costUsd } = state.transcript.usage
-		if (inputTokens + outputTokens === 0) return null
-		const tokens = `${Math.round((inputTokens + outputTokens) / 1000)}k tokens`
-		return costUsd > 0 ? `${tokens} · $${costUsd.toFixed(3)}` : tokens
-	}, [state])
-
-	if (!summary && !state?.backendName) return null
-
-	return (
-		<p className="mt-1.5 px-0.5 text-[10.5px] text-shell-muted">
-			{state?.backendName}
-			{summary ? ` · ${summary}` : ""}
-		</p>
-	)
-}
-
 function IconButton({ children, label, onClick }: { children: React.ReactNode; label: string; onClick(): void }) {
 	return (
 		<button
-			className="flex size-6 items-center justify-center rounded transition-colors hover:bg-white/10"
+			className="flex size-7 shrink-0 items-center justify-center rounded-lg text-shell-muted transition-colors hover:bg-white/10 hover:text-shell-text"
 			onClick={onClick}
 			title={label}
 			type="button">
 			{children}
 		</button>
 	)
+}
+
+/** `opencode-go/gpt-5.6-luna` reads as `gpt-5.6-luna` in a 380px column. */
+function shortModel(model: string): string {
+	const slash = model.lastIndexOf("/")
+	return slash === -1 ? model : model.slice(slash + 1)
 }

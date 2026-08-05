@@ -634,6 +634,22 @@ request itself and the rule holds regardless of which agent or subagent asked:
 - Collapsible chat sidebar (UX reference: OpenCode's desktop app): streamed text, collapsed
   thinking, tool-call lines, a file-change list, permission prompts, a stop button (= abort).
   Dismissible at will; available in design mode for brainstorming, not only during sync.
+- **Three rules the panel is held to**, settled 2026-08-05 by building three treatments and
+  looking at them side by side at real width:
+  1. *The composer is one surface that holds its own controls* — model, effort, attach and send
+     inside the box. The two rejected treatments both put model and effort above or below it,
+     and a caption is a label where this needs a control. The thing most worth varying per
+     message must not live a click away in another surface, which is what the first version did.
+  2. *Colour is reserved.* The shell frames the user's design work, and accent-tinted chrome
+     makes their own colours hard to judge. Accent appears on exactly one thing: something
+     waiting on an answer. Filled status cards become hairline rules — at 380px a stack of
+     tinted boxes reads as noise and the text is the part that matters.
+  3. *Turns group.* Uniform spacing between entries makes a user message, a thinking block, four
+     tool lines and the reply read as one undifferentiated column. The gap between turns is
+     roughly six times the gap within one.
+- What does **not** transfer from the reference: its generous margins and content at ~60% width
+  belong to a full window whose main surface is the chat. Caret's is a 380px panel beside a
+  canvas that has to stay visible, so density is a difference in constraint, not a shortcoming.
 - **What the model is sent and what the chat shows are separate.** Caret's own prompts are
   instruction blocks — the sync worklist is a page of `<explicit_instructions>` — and pasting
   one into the transcript as though the user had typed it makes the chat unreadable at the
