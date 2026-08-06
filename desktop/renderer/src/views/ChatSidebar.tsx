@@ -27,6 +27,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { AgentSessionWire, AgentStateWire, ProjectState, TranscriptEntryWire } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
+import { Markdown } from "./Markdown"
 
 export const CHAT_SIDEBAR_WIDTH = 380
 
@@ -370,7 +371,7 @@ function Entry({
 			)
 
 		case "assistant":
-			return <div className="fade-in leading-relaxed whitespace-pre-wrap">{entry.text}</div>
+			return <Markdown className="fade-in leading-relaxed" text={entry.text} />
 
 		case "thinking":
 			return <Thinking text={entry.text} />
@@ -416,7 +417,9 @@ function Thinking({ text }: { text: string }) {
 				{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
 				Thinking
 			</button>
-			{open && <p className="mt-1 pl-4 leading-relaxed whitespace-pre-wrap">{text}</p>}
+			{/* Reasoning is markdown too — models bold their conclusions in it, and
+			    those are the words you're opening this to find. */}
+			{open && <Markdown className="mt-1 pl-4 leading-relaxed" text={text} />}
 		</div>
 	)
 }
