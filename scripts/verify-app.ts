@@ -1481,11 +1481,17 @@ async function main(): Promise<void> {
 		await chrome.click('[data-testid="wizard-begin"]')
 
 		// The first question is a whole model turn composing UI; give it the same
-		// patience as any inference scenario.
+		// patience as any inference scenario — and a model that cannot produce one
+		// in time is the model's failure, not Caret's, same as ff's five-minute
+		// rule. A free model has been observed doing this in 90s on one run and
+		// blowing 240s on the next.
 		const first = await Promise.race([
-			chrome.waitForSelector('[data-testid="wizard-question"]', { timeout: 240_000 }).then(() => "question" as const),
-			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 240_000 }).then(() => "error" as const),
-		])
+			chrome.waitForSelector('[data-testid="wizard-question"]', { timeout: 300_000 }).then(() => "question" as const),
+			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 300_000 }).then(() => "error" as const),
+		]).catch(() => "timeout" as const)
+		if (first === "timeout") {
+			throw new Inconclusive("the model did not compose a first question within five minutes")
+		}
 		if (first === "error") {
 			const message = (await chrome.textContent('[data-testid="wizard-error"]'))?.trim() ?? ""
 			throw new Inconclusive(`the model never produced a renderable question: ${message.slice(0, 200)}`)
@@ -1502,18 +1508,24 @@ async function main(): Promise<void> {
 		await chrome.click(continueEnabled ? '[data-testid="wizard-continue"]' : '[data-testid="wizard-skip"]')
 
 		// Then stop the interview and make it construct from what it has.
-		await chrome.waitForSelector(
-			'[data-testid="wizard-finish-now"], [data-testid="wizard-finish"], [data-testid="wizard-error"]',
-			{ timeout: 240_000 },
-		)
+		await chrome
+			.waitForSelector('[data-testid="wizard-finish-now"], [data-testid="wizard-finish"], [data-testid="wizard-error"]', {
+				timeout: 300_000,
+			})
+			.catch(() => {
+				throw new Inconclusive("the model did not produce a second turn within five minutes")
+			})
 		if (await chrome.getByTestId("wizard-finish-now").count()) {
 			await chrome.click('[data-testid="wizard-finish-now"]')
 		}
 
 		const finished = await Promise.race([
-			chrome.waitForSelector('[data-testid="wizard-finish"]', { timeout: 240_000 }).then(() => "finish" as const),
-			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 240_000 }).then(() => "error" as const),
-		])
+			chrome.waitForSelector('[data-testid="wizard-finish"]', { timeout: 300_000 }).then(() => "finish" as const),
+			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 300_000 }).then(() => "error" as const),
+		]).catch(() => "timeout" as const)
+		if (finished === "timeout") {
+			throw new Inconclusive("the model did not construct a foundation within five minutes")
+		}
 		if (finished === "error") {
 			const message = (await chrome.textContent('[data-testid="wizard-error"]'))?.trim() ?? ""
 			throw new Inconclusive(`the model could not construct a valid foundation: ${message.slice(0, 200)}`)
