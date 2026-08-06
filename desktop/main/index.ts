@@ -24,6 +24,23 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 Logger.subscribe((line) => console.log(`[caret] ${line}`))
 
 /**
+ * `--user-data-dir` must actually work, and must be applied before anything
+ * touches preferences or the single-instance lock — both live under userData.
+ *
+ * Electron does not honour this flag by itself, and the certification harness
+ * relies on it completely: without it every test run shares the developer's
+ * real profile, which means test runs overwrite their preferences and recents,
+ * session restore reopens temp fixtures in their own app, and — because the
+ * instance lock is per-profile — the user opening Caret while a test runs
+ * makes the two instances kill each other. All of that was observed, at length,
+ * before this block existed.
+ */
+const userDataArg = process.argv.find((arg) => arg.startsWith("--user-data-dir="))
+if (userDataArg) {
+	app.setPath("userData", userDataArg.slice("--user-data-dir=".length))
+}
+
+/**
  * One instance owns the recents list and the session file. A second instance
  * would race both, and its windows would write over the first's idea of what is
  * open, so the second is asked to hand its arguments over and exit.

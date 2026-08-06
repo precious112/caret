@@ -1227,6 +1227,10 @@ async function main(): Promise<void> {
 		// The wizard is genuinely AI-run, so without a model it must not pretend —
 		// it says what it needs and hands the user the presets tab or the editor,
 		// rather than dead-ending or faking an interview.
+		//
+		// Navigate first: hh's commit flipped the surface back to the canvas, so
+		// the foundation tabs are no longer on screen.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
 		await chrome.click('[data-testid="foundation-tab-interview"]')
 		await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 20_000 })
 		await chrome.fill('[data-testid="wizard-describe"]', "A quiet reading app for long-form essays")
