@@ -129,6 +129,61 @@ export type InterviewPromptWire =
 	  }
 
 /**
+ * The **in-app** foundation interview, which Caret runs itself.
+ *
+ * Distinct from `InterviewPromptWire` above, and deliberately so: that one is
+ * the external-agent path, where an agent pushes a question and blocks on a
+ * tool call. Here Caret owns the sequence, so the renderer asks for a step and
+ * gets one back — no agent to keep waiting, and nothing to recover if the
+ * window closes mid-flow.
+ */
+export interface RankedOptionWire {
+	id: string
+	name: string
+	summary: string
+	/** Why this one, in the user's terms. Absent on the deterministic path. */
+	reason?: string
+	/** Everything needed to render it as a specimen rather than a label. */
+	specimen: SpecimenWire
+}
+
+/** What a specimen needs to look like the thing it would produce. */
+export interface SpecimenWire {
+	fontUrl: string
+	displayFamily: string
+	displayFallback: string
+	bodyFamily: string
+	bodyFallback: string
+	surface: "light" | "dark"
+	brandColor: string
+	neutralCharacter: string
+	radius: number[]
+	spacingUnit: number
+	baseSize: number
+}
+
+export interface InterviewStepWire {
+	stepId: string
+	title: string
+	subtitle: string
+	/** 1-based, for "2 of 4". */
+	step: number
+	total: number
+	options: RankedOptionWire[]
+	/** False when the deterministic order produced these — the UI must not imply otherwise. */
+	reasoned: boolean
+	degradedBecause?: string
+	/** What the user already settled, so the UI can render Back without its own copy. */
+	decisions: Record<string, string>
+}
+
+/** The whole interview, as the renderer sees it. */
+export type InterviewStateWire =
+	| { phase: "describe"; description: string }
+	| { phase: "step"; description: string; current: InterviewStepWire }
+	| { phase: "summary"; description: string; decisions: Record<string, string>; preview: SpecimenWire; name: string }
+
+/**
  * The coding backend Caret drives, as the renderer sees it.
  *
  * Structural mirrors of the core types, like every other `*Wire` here, so a
@@ -318,6 +373,23 @@ export interface IpcRequests {
 	"interview:library": () => unknown
 	/** Whatever prompt is waiting, so a late-mounting renderer can recover it. */
 	"interview:pending": () => InterviewPromptWire | null
+
+	/**
+	 * The in-app interview Caret runs itself.
+	 *
+	 * Request/response rather than pushed state: each step costs a real model
+	 * call, so the renderer asking for one is what keeps a re-render from
+	 * spending the user's quota.
+	 */
+	"foundation:resume": (projectPath: string) => InterviewStateWire | null
+	"foundation:start": (projectPath: string, description: string) => InterviewStateWire
+	/** Answers the current step. `optionId` null means "none of these" was overridden elsewhere. */
+	"foundation:answer": (projectPath: string, stepId: string, optionId: string) => InterviewStateWire
+	"foundation:back": (projectPath: string) => InterviewStateWire
+	/** Writes `foundation.json` and the rules files. Returns the confirmation line. */
+	"foundation:commit": (projectPath: string) => { name: string; rule: string }
+	/** Throws the interview away, scratch included. */
+	"foundation:abandon": (projectPath: string) => void
 }
 
 /** Main → renderer. Each entry is an `ipcRenderer.on` channel. */

@@ -42,6 +42,9 @@ const IGNORED = [
 	"**/.caret/.sync-pending.json",
 	"**/.caret/.provenance.jsonl",
 	"**/.caret/.mcp.json",
+	// Caret's own scratch, rewritten on every interview step. Not design content,
+	// and waking the healer once per answered question is work for nothing.
+	"**/.caret/.interview.json",
 	"**/*.tmp",
 ]
 

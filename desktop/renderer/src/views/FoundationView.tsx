@@ -1,14 +1,15 @@
 /**
  * The foundation surface — two ways in, one `foundation.json` out.
  *
- * **Interview** is the default when an agent is connected: plain questions, then
- * specimens to point at. It exists because a form assumes you already know what
- * to put in it, which is exactly what Caret's user does not.
+ * **Interview** is the default: describe what you're building, then point at
+ * specimens. Caret runs it on its own backend, which is why it is no longer
+ * gated on an agent being connected — the old gate made the highest-leverage
+ * screen in the product unreachable for exactly the user it was built for. With
+ * no backend it still runs, ordering the same curated options deterministically
+ * instead of with a model's reasoning.
  *
  * **By hand** is the token editor, unchanged. A designer who knows what they
- * want should not have to sit through five questions to get to it, and it is
- * also the no-agent path — so the fallback is the full editor rather than a
- * degraded interview.
+ * want should not have to sit through four screens to get to it.
  *
  * Both write the same file, so neither is a lesser mode.
  */
@@ -19,9 +20,11 @@ import { TokenWizard } from "../components/design-wizard/TokenWizard"
 import { on } from "../ipc"
 import { cn } from "../lib/utils"
 import { setActiveProject } from "../services/design-client"
+import { FoundationInterview } from "./FoundationInterview"
 import { InterviewView } from "./InterviewView"
 
-type Mode = "interview" | "manual"
+/** `agent` is only ever entered by an external agent pushing a question. */
+type Mode = "interview" | "manual" | "agent"
 
 export function FoundationView({
 	project,
@@ -32,20 +35,16 @@ export function FoundationView({
 	onDone(): void
 	onInterviewAnswered?(): void
 }) {
-	// Without an agent there is nobody to run the interview, so the editor is the
-	// only honest default.
-	const [mode, setMode] = useState<Mode>(project.agentConnected ? "interview" : "manual")
+	// Caret runs the interview itself now, so it is the default regardless of
+	// backend state — it degrades rather than disappearing.
+	const [mode, setMode] = useState<Mode>("interview")
 
 	// The wizard's data layer is module-scoped to one project per window.
 	useEffect(() => setActiveProject(project.path), [project.path])
 
-	useEffect(() => {
-		if (!project.agentConnected) setMode("manual")
-	}, [project.agentConnected])
-
-	// A question arriving while the token editor is open has to win — the agent
-	// is blocked on it.
-	useEffect(() => on("interview:prompt", () => setMode("interview")), [])
+	// An *agent's* question still wins over whatever is on screen: unlike Caret's
+	// own interview, there is a tool call blocked on it.
+	useEffect(() => on("interview:prompt", () => setMode("agent")), [])
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden bg-shell-bg">
@@ -60,20 +59,18 @@ export function FoundationView({
 
 			<div className="flex items-center gap-1 border-b border-shell-border px-8 py-2">
 				<ModeTab
-					active={mode === "interview"}
-					disabled={!project.agentConnected}
+					active={mode === "interview" || mode === "agent"}
 					label="Answer a few questions"
 					onClick={() => setMode("interview")}
-					title={project.agentConnected ? undefined : "Connect an agent to run the interview"}
 				/>
 				<ModeTab active={mode === "manual"} label="Set them by hand" onClick={() => setMode("manual")} />
 			</div>
 
-			{mode === "interview" ? (
-				<InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode("manual")} />
-			) : (
-				<TokenWizard onDone={onDone} />
+			{mode === "agent" && <InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode("manual")} />}
+			{mode === "interview" && (
+				<FoundationInterview onCommitted={onDone} onSwitchToManual={() => setMode("manual")} projectPath={project.path} />
 			)}
+			{mode === "manual" && <TokenWizard onDone={onDone} />}
 		</div>
 	)
 }

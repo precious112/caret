@@ -64,6 +64,12 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"interview:respond": true,
 	"interview:library": true,
 	"interview:pending": true,
+	"foundation:resume": true,
+	"foundation:start": true,
+	"foundation:answer": true,
+	"foundation:back": true,
+	"foundation:commit": true,
+	"foundation:abandon": true,
 }
 
 const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {

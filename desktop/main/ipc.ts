@@ -37,6 +37,7 @@ import {
 import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
+import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
@@ -354,6 +355,19 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("interview:library", () => fullLibrary())
 
 	ipcMain.handle("interview:pending", () => currentPrompt())
+
+	// The in-app interview Caret runs itself. Separate from the three above,
+	// which are the external-agent path.
+	ipcMain.handle("foundation:resume", (_event, projectPath: string) => resumeInterview(projectPath))
+	ipcMain.handle("foundation:start", (_event, projectPath: string, description: string) =>
+		startInterview(projectPath, description),
+	)
+	ipcMain.handle("foundation:answer", (_event, projectPath: string, stepId: string, optionId: string) =>
+		answerStep(projectPath, stepId, optionId),
+	)
+	ipcMain.handle("foundation:back", (_event, projectPath: string) => stepBack(projectPath))
+	ipcMain.handle("foundation:commit", (_event, projectPath: string) => commitInterview(projectPath))
+	ipcMain.handle("foundation:abandon", (_event, projectPath: string) => abandonInterview(projectPath))
 }
 
 /**

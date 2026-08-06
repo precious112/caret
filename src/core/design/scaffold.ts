@@ -64,6 +64,8 @@ const CARET_PACKAGE_JSON = {
  * `.mcp.json` holds the MCP bearer token and must never be committed;
  * `.provenance.jsonl` is local observation about how someone works, would
  * conflict on every branch, and is not theirs to publish by accident.
+ * `.interview.json` is a half-finished interview — scratch that exists so a
+ * crash resumes where it stopped, and is deleted the moment it commits.
  */
 const CARET_GITIGNORE = `node_modules/
 vite.log
@@ -72,6 +74,7 @@ canvas-layout.json
 .sync-pending.json
 .mcp.json
 .provenance.jsonl
+.interview.json
 `
 
 /**

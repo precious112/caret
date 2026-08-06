@@ -32,7 +32,7 @@
 		"verify:design-shell": "npx tsx scripts/verify-design-shell.ts",
 		"backends": "npx tsx scripts/backends.ts",
 		"verify:backend": "npx tsx scripts/verify-backend.ts",
-		"verify:app": "npx tsx scripts/verify-app.ts",
+		"verify:app": "npm run build && npx tsx scripts/verify-app.ts",
 		"package": "npm run build && electron-builder --publish never",
 		"package:mac": "npm run build && electron-builder --mac --publish never",
 		"package:win": "npm run build && electron-builder --win --publish never",

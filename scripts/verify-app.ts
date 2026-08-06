@@ -68,6 +68,17 @@ function skip(name: string, reason: string): void {
  */
 class Inconclusive extends Error {}
 
+/**
+ * When the app process went away, if it did.
+ *
+ * Playwright reports a dead app as "Target page, context or browser has been
+ * closed" on whatever call happened to be next — so the scenario that *reports*
+ * the failure is rarely the one that caused it, and every scenario after it
+ * fails the same opaque way. Recording the moment of death turns that into a
+ * pointer at the right place in `main.log`.
+ */
+let appDiedAt: string | null = null
+
 async function scenario(name: string, run: () => Promise<string>): Promise<void> {
 	try {
 		const detail = await run()
@@ -78,7 +89,10 @@ async function scenario(name: string, run: () => Promise<string>): Promise<void>
 			skip(name, err.message)
 			return
 		}
-		const detail = err instanceof Error ? err.message : String(err)
+		let detail = err instanceof Error ? err.message : String(err)
+		if (appDiedAt && /has been closed/.test(detail)) {
+			detail = `the app exited at ${appDiedAt} — this scenario only found the corpse. See release/verify-shots/main.log around that time.`
+		}
 		results.push({ name, passed: false, detail })
 		log(`FAIL ${name} — ${detail}`)
 	}
@@ -330,6 +344,15 @@ async function main(): Promise<void> {
 	const mainLog = await fs.open(path.join(SHOTS, "main.log"), "w")
 	app.process().stdout?.on("data", (chunk) => void mainLog.write(chunk))
 	app.process().stderr?.on("data", (chunk) => void mainLog.write(chunk))
+
+	// The app dying mid-suite is otherwise invisible until the next call fails
+	// with a message that names neither the time nor the reason.
+	app.on("close", () => {
+		if (!appDiedAt) {
+			appDiedAt = new Date().toLocaleTimeString()
+			void mainLog.write(`\n[verify-app] the app process exited at ${appDiedAt}\n`)
+		}
+	})
 
 	await scenario("a. app launches and the window is named after the project", async () => {
 		const window = await app!.firstWindow({ timeout: 60_000 })
@@ -1132,6 +1155,81 @@ async function main(): Promise<void> {
 		return `refused with: "${refusal?.trim().slice(0, 60)}…"`
 	})
 
+	await scenario("hh. the foundation interview runs to a committed file with no backend at all", async () => {
+		// The guarantee this pins: the interview degrades, it does not disappear.
+		// The old surface was gated on an agent being connected, which made the
+		// highest-leverage screen in the product unreachable for exactly the user
+		// it exists for. Runs here deliberately — before any backend is chosen.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+		await chrome.click('[data-testid="foundation-tab-interview"]')
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+
+		await chrome.fill(
+			'[data-testid="foundation-describe"]',
+			"A dashboard for technical support teams who triage tickets all day",
+		)
+		await chrome.click('[data-testid="foundation-begin"]')
+		await chrome.waitForSelector('[data-testid="foundation-step"]', { timeout: 30_000 })
+
+		// It must say the options were ordered rather than reasoned about. A screen
+		// implying a model weighed in when none did is the dishonest failure.
+		await chrome.waitForSelector('[data-testid="foundation-degraded"]', { timeout: 10_000 })
+		await shot(chrome, "12-interview-step-no-backend")
+
+		let steps = 0
+		for (; steps < 8; steps++) {
+			if (await chrome.getByTestId("foundation-summary").count()) break
+
+			// The recommendation is preselected: pressing straight through has to
+			// yield a real foundation, which is the entire promise of the flow.
+			const preselected = await chrome.locator('[data-testid="foundation-option"][data-selected="true"]').count()
+			assert(preselected === 1, `expected exactly one option preselected, found ${preselected}`)
+
+			await chrome.click('[data-testid="foundation-continue"]')
+			await chrome.waitForTimeout(300)
+		}
+
+		await chrome.waitForSelector('[data-testid="foundation-summary"]', { timeout: 30_000 })
+		await shot(chrome, "13-interview-summary")
+
+		const before = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
+		await chrome.click('[data-testid="foundation-commit"]')
+
+		const tokens = await waitFor(
+			"the interview to write foundation.json",
+			async () => {
+				const raw = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
+				return raw !== before ? JSON.parse(raw) : null
+			},
+			30_000,
+		)
+
+		assert(tokens.typography?.fontFamily, "the committed foundation has no typeface")
+		assert(tokens.color?.brand?.seed, "the committed foundation has no brand colour")
+		assert(
+			Object.keys(tokens.typography.scale ?? {}).length > 0,
+			"the type scale was never generated — the model was expected to supply it, which it must never do",
+		)
+
+		// Scratch is a resume point for an *unfinished* interview. Left behind, the
+		// next visit offers to resume decisions the user already committed.
+		//
+		// Waited for rather than read once: the commit writes the tokens first and
+		// clears scratch after regenerating the rules files, so an immediate read
+		// races a commit that is still finishing — which is exactly what it did.
+		await waitFor(
+			"the interview's scratch state to be cleared",
+			async () =>
+				fs
+					.access(path.join(fixture, ".caret", ".interview.json"))
+					.then(() => null)
+					.catch(() => true),
+			20_000,
+		)
+
+		return `${steps} step(s) with no backend → ${tokens.typography.fontFamily}, seed ${tokens.color.brand.seed}`
+	})
+
 	// Which model — if any — this run may spend. Resolved once, before the
 	// backend scenarios, so they all skip together rather than half-running.
 	const model = await resolveVerifyModel()
@@ -1350,6 +1448,54 @@ async function main(): Promise<void> {
 		assert(applied.includes("Zephyr"), `the app did not follow the design:\n${applied.slice(0, 1200)}`)
 
 		return `app updated after ${allowed} allowed write(s), bookmark at ${bookmark.slice(0, 8)}`
+	})
+
+	await inference("ii. with a backend, the interview explains its recommendation in the user's terms", async () => {
+		// `hh` proved the flow survives without a model. This proves the model
+		// actually adds the thing it is there for — a reason grounded in what the
+		// user described — and that it cannot answer outside the curated library.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+		await chrome.click('[data-testid="foundation-tab-interview"]')
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+
+		await chrome.fill(
+			'[data-testid="foundation-describe"]',
+			"A quiet reading app for long-form essays. People sit with it for an hour at a time.",
+		)
+		await chrome.click('[data-testid="foundation-begin"]')
+
+		// The ranking is a real model call on the whole curated set, so it gets the
+		// same patience as any other inference scenario.
+		await chrome.waitForSelector('[data-testid="foundation-step"]', { timeout: 180_000 })
+
+		const reasoned = await chrome.getByTestId("foundation-reason").count()
+		if (reasoned === 0) {
+			const note =
+				(await chrome
+					.getByTestId("foundation-degraded")
+					.textContent()
+					.catch(() => null)) ?? "(no note)"
+			throw new Inconclusive(`the model produced no usable ranking, so the screen degraded: ${note.trim().slice(0, 200)}`)
+		}
+
+		const reason = (await chrome.getByTestId("foundation-reason").first().textContent())?.trim() ?? ""
+		assert(reason.length > 15, `the reason is too short to be one: "${reason}"`)
+		await shot(chrome, "15-interview-reasoned")
+
+		// Every option on screen must still be a library id. This is the anti-slop
+		// floor — the schema enum — observed from the outside.
+		const offered = await chrome
+			.locator('[data-testid="foundation-option"]')
+			.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-option-id") ?? ""))
+		assert(offered.length >= 2, `only ${offered.length} option(s) rendered`)
+		const library = await chrome.evaluate(() =>
+			(window as unknown as { caret: { invoke(c: string): Promise<unknown> } }).caret.invoke("interview:library"),
+		)
+		const known = new Set((library as { typefaces: Array<{ id: string }> }).typefaces.map((t) => t.id))
+		const invented = offered.filter((id) => !known.has(id))
+		assert(invented.length === 0, `an option outside the curated library reached the user: ${invented.join(", ")}`)
+
+		return `reasoned: "${reason.slice(0, 70)}…" over ${offered.length} curated options`
 	})
 }
 

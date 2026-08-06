@@ -524,30 +524,39 @@ explains its recommendation in the user's terms. Engineering detail in
 
 **The in-app interview (new build):**
 
-- [ ] Entry: one field — *"Describe what you're trying to build"* — the only typing in the
-      flow. Reachable from launch with zero setup beyond a backend.
-- [ ] Caret owns the step sequence. Per step, `structured()` sends the description, decisions
+- [x] Entry: one field — *"Describe what you're trying to build"* — the only typing in the
+      flow. Reachable from launch with **zero setup at all**; the old "interview disabled until
+      an agent connects" gate is gone, since Caret runs it itself.
+- [x] Caret owns the step sequence. Per step, `structured()` sends the description, decisions
       so far, and the step's full curated candidate set; the schema's **`enum` is the candidate
       ids**, so a model cannot introduce a font or hex at the request level. Post-validation
-      stays (schema-valid ≠ semantically valid).
-- [ ] The model returns a ranking of 3 with one plain-language reason each, grounded in the
+      stays (schema-valid ≠ semantically valid) — unit-tested against invented ids, repeats,
+      and ids belonging to another step.
+- [x] The model returns a ranking of 3 with one plain-language reason each, grounded in the
       description. The top recommendation renders **preselected** — pressing through the whole
       interview yields a good foundation, not a default one.
-- [ ] Steps: typeface pairing · colour direction · brand colour · density/spacing · corner
-      character · border-and-elevation weight. (Adding steps is a user decision — question
-      fatigue is the failure mode; the description should carry inference so steps only ask
-      what genuinely cannot be inferred.)
+- [~] Steps: **typeface pairing · colour direction · brand colour · spacing-and-corners**.
+      Four, not the six first sketched, and the two differences are library facts rather than
+      scope cuts:
+      - *density/spacing* and *corner character* ship as **one** step because the library
+        refuses to separate them — a preset's own rationale reads "larger radii need larger
+        spacing or the rounding eats the padding." Splitting them lets a user assemble round
+        corners with tight spacing, the exact pairing curation exists to prevent.
+      - *border-and-elevation weight* has **nowhere to be written**: `FoundationTokens` has no
+        such field and the library has no such axis. It needs a token change plus curated
+        content, so it waits on the curation session below.
 - [ ] **"None of these" is the user's override, never the model's**: full Google Fonts list
       for type, a picker for colour. After an override, later steps pair around the user's
       choice.
-- [ ] Every answer persists per step (scratch state under `.caret/`, gitignored, cleared on
-      commit); a crash at step 5 resumes at step 5
-- [ ] Fallback: `structured()` failure or **no backend at all** degrades that step to the
+- [x] Every answer persists per step (`.caret/.interview.json`, gitignored, cleared on
+      commit); a crash mid-flow resumes at the step it stopped on
+- [x] Fallback: `structured()` failure or **no backend at all** degrades that step to the
       deterministic tag-based narrowing — same screens, no grounded reasoning line. The
-      interview never dead-ends on backend state.
-- [ ] Final screen: a real page rendered with the chosen foundation — not a swatch sheet —
+      interview never dead-ends on backend state. A screen that has no reasoning **says so**
+      rather than inventing a line, including when an emulated backend returns blank reasons.
+- [x] Final screen: a real page rendered with the chosen foundation — not a swatch sheet —
       confirm or step back
-- [ ] Commit builds `foundation.json` locally from curated pieces + `generateTokenScale`; the
+- [x] Commit builds `foundation.json` locally from curated pieces + `generateTokenScale`; the
       model never writes the file
 - [ ] Re-runnable with blast radius shown — the *proposal* half needs Phase 7's live
       bindings to compute what a token change would affect. Re-running today overwrites,

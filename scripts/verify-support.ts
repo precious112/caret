@@ -106,7 +106,48 @@ async function freeModel(): Promise<string | null> {
 		}
 	}
 
-	return PREFERRED_FREE_MODELS.find((preferred) => free.includes(preferred)) ?? free[0] ?? null
+	// Preferred first, then whatever else the catalogue calls free.
+	const ordered = [
+		...PREFERRED_FREE_MODELS.filter((id) => free.includes(id)),
+		...free.filter((id) => !PREFERRED_FREE_MODELS.includes(id)),
+	]
+
+	// **Advertised free is not the same as usable.** A provider can retire a model
+	// from its free tier while still listing it as zero-cost — observed: an id
+	// this list preferred began answering `[404] This model is unavailable for
+	// free` mid-afternoon, and the suite spent twenty minutes waiting on turns
+	// that could never finish before reporting failures that had nothing to do
+	// with Caret. So each candidate is asked one trivial question, and the first
+	// that actually answers is the one the suite spends.
+	for (const id of ordered) {
+		if (await modelAnswers(server, id)) return id
+		console.log(`[verify] ${id} is advertised as free but does not answer — trying the next`)
+	}
+	return null
+}
+
+/** One trivial round-trip. Cheap enough to be worth it, real enough to prove the model runs. */
+async function modelAnswers(server: Awaited<ReturnType<typeof ensureOpencodeServer>>, model: string): Promise<boolean> {
+	const slash = model.indexOf("/")
+	if (slash <= 0) return false
+
+	try {
+		const session = await request<{ id: string }>(server, "/session", {
+			method: "POST",
+			body: { title: "verify: model check" },
+		})
+		const response = await request<{ info?: { error?: unknown } }>(server, `/session/${session.id}/message`, {
+			method: "POST",
+			body: {
+				parts: [{ type: "text", text: "Reply with the single word: ok" }],
+				model: { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) },
+				tools: { bash: false, edit: false, write: false, webfetch: false },
+			},
+		})
+		return !response.info?.error
+	} catch {
+		return false
+	}
 }
 
 /** One line explaining what was skipped and how to run it for real. */

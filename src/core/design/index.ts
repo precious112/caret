@@ -78,7 +78,11 @@ export {
 	candidateFontUrl,
 	countRecognisedTags,
 	type FoundationCandidate,
+	findPairing,
+	findPreset,
+	findRecipe,
 	fullLibrary,
+	googleFontsUrl,
 	INTERVIEW_QUESTIONS,
 	type InterviewQuestion,
 	LIBRARY_TAGS,
@@ -94,6 +98,26 @@ export {
 } from "./foundation-library"
 export { type FontOption, searchGoogleFonts } from "./google-fonts"
 export { type DesignHost, type NotifyLevel, nullDesignHost } from "./host"
+export {
+	buildFoundation,
+	type CommittedFoundation,
+	clearScratch,
+	type Decisions,
+	INTERVIEW_STEPS,
+	IncompleteInterviewError,
+	type InterviewScratch,
+	type InterviewStep,
+	RANKED_COUNT,
+	type RankedOption,
+	rankStep,
+	readScratch,
+	type StepId,
+	type StepOption,
+	type StepRanking,
+	stepAt,
+	tagsFromDescription,
+	writeScratch,
+} from "./interview"
 export { listPages, readPageMeta, validatePageMeta, writePageMeta } from "./page-meta"
 export { RenderingShell } from "./rendering-shell"
 export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-shell/messages"
