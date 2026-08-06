@@ -141,8 +141,6 @@ export interface RankedOptionWire {
 	id: string
 	name: string
 	summary: string
-	/** Why this one, in the user's terms. Absent on the deterministic path. */
-	reason?: string
 	/** Everything needed to render it as a specimen rather than a label. */
 	specimen: SpecimenWire
 }
@@ -170,18 +168,117 @@ export interface InterviewStepWire {
 	step: number
 	total: number
 	options: RankedOptionWire[]
-	/** False when the deterministic order produced these — the UI must not imply otherwise. */
-	reasoned: boolean
-	degradedBecause?: string
 	/** What the user already settled, so the UI can render Back without its own copy. */
 	decisions: Record<string, string>
 }
 
-/** The whole interview, as the renderer sees it. */
+/** The whole presets flow, as the renderer sees it. */
 export type InterviewStateWire =
 	| { phase: "describe"; description: string }
 	| { phase: "step"; description: string; current: InterviewStepWire }
 	| { phase: "summary"; description: string; decisions: Record<string, string>; preview: SpecimenWire; name: string }
+
+/**
+ * The AI-run token wizard — the Foundation surface's default door.
+ *
+ * The model composes every question from a fixed widget vocabulary; these are
+ * the wire mirrors of those shapes. The renderer's job is to have a real,
+ * well-made component for each `kind`, including the escape hatches ("other"):
+ * a colour picker + hex field + eyedropper on colour questions, Google Fonts
+ * search on font questions, free text where the model allows it.
+ */
+export interface WizardSpecWire {
+	displayFamily?: string
+	bodyFamily?: string
+	surface?: "light" | "dark"
+	accent?: string
+	neutral?: string
+	radius?: number
+	spacingUnit?: number
+	baseSize?: number
+}
+
+export type WizardKindWire = "options" | "color" | "font" | "scale" | "chips" | "text" | "boolean" | "assumptions"
+
+export interface WizardOptionWire {
+	id: string
+	label: string
+	reason?: string
+	hex?: string
+	spec?: WizardSpecWire
+}
+
+export interface WizardQuestionWire {
+	id: string
+	kind: WizardKindWire
+	question: string
+	why?: string
+	options?: WizardOptionWire[]
+	recommendedId?: string
+	other?: "color" | "font" | "text"
+	leftLabel?: string
+	rightLabel?: string
+	steps?: Array<{ label: string; spec?: WizardSpecWire }>
+	defaultStep?: number
+	placeholder?: string
+	multiline?: boolean
+}
+
+export interface WizardAnswerWire {
+	questionId: string
+	question: string
+	kind: WizardKindWire
+	value: string
+	label?: string
+	wasOther?: boolean
+	skipped?: boolean
+}
+
+export interface WizardQAWire {
+	question: WizardQuestionWire
+	answer: WizardAnswerWire
+}
+
+export interface FoundationProposalWire {
+	displayFamily: string
+	displayFallback?: string
+	bodyFamily: string
+	bodyFallback?: string
+	scaleRatio: number
+	baseSize: number
+	brand: string
+	neutral: "warm" | "cool" | "true" | "slight-tint"
+	surface: "light" | "dark"
+	semantic?: { success?: string; warning?: string; error?: string; info?: string }
+	spacingUnit: number
+	radiusCharacter: "sharp" | "soft" | "round" | "pill"
+	rule: string
+	vibeTags?: string[]
+	summary: string
+}
+
+export type WizardStateWire =
+	| { phase: "needs-backend"; detail: string }
+	| { phase: "describe"; description: string }
+	| {
+			phase: "question"
+			description: string
+			current: WizardQuestionWire
+			/** Questions answered so far, and the hard cap — for "question 3". */
+			asked: number
+			cap: number
+			history: WizardQAWire[]
+	  }
+	| {
+			phase: "finish"
+			description: string
+			proposal: FoundationProposalWire
+			name: string
+			rule: string
+			summary: string
+			history: WizardQAWire[]
+	  }
+	| { phase: "error"; description: string; message: string; canFinish: boolean }
 
 /**
  * The coding backend Caret drives, as the renderer sees it.
@@ -390,6 +487,21 @@ export interface IpcRequests {
 	"foundation:commit": (projectPath: string) => { name: string; rule: string }
 	/** Throws the interview away, scratch included. */
 	"foundation:abandon": (projectPath: string) => void
+
+	/**
+	 * The AI-run token wizard. Request/response like the presets flow: every
+	 * `answer` costs a real model turn, so nothing here is pushed or polled.
+	 */
+	"wizard:resume": (projectPath: string) => WizardStateWire | null
+	"wizard:start": (projectPath: string, description: string) => WizardStateWire
+	"wizard:answer": (projectPath: string, answer: WizardAnswerWire) => WizardStateWire
+	/** "Just finish" — the model constructs from whatever has been answered. */
+	"wizard:finishNow": (projectPath: string) => WizardStateWire
+	/** Re-runs a failed turn without recording a new answer. */
+	"wizard:retry": (projectPath: string) => WizardStateWire
+	"wizard:back": (projectPath: string) => WizardStateWire
+	"wizard:commit": (projectPath: string) => { name: string; rule: string }
+	"wizard:abandon": (projectPath: string) => void
 }
 
 /** Main → renderer. Each entry is an `ipcRenderer.on` channel. */

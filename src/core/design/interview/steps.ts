@@ -170,3 +170,21 @@ export function tagsFromDescription(description: string): string[] {
 	const text = description.toLowerCase()
 	return LIBRARY_TAGS.filter((tag) => new RegExp(`\\b${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text))
 }
+
+/**
+ * The Presets tab's ordering: the step's tag-ranked fallback, topped up from
+ * the full option set so a screen is never thin. Deterministic on purpose —
+ * this tab is for someone who wants full control and zero model involvement,
+ * and it must produce the same screens on every machine, every time.
+ */
+export function deterministicOptions(step: InterviewStep, decisions: Decisions, tags: string[], count = 3): StepOption[] {
+	const ranked = step.fallback(decisions, tags)
+	const seen = new Set(ranked.map((option) => option.id))
+	for (const option of step.options(decisions)) {
+		if (ranked.length >= count) break
+		if (seen.has(option.id)) continue
+		seen.add(option.id)
+		ranked.push(option)
+	}
+	return ranked.slice(0, count)
+}

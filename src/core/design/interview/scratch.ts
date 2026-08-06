@@ -1,28 +1,33 @@
 /**
- * A half-finished interview, on disk.
+ * A half-finished wizard, on disk.
  *
- * The interview asks a model to rank each step, which takes seconds and costs
- * the user's own quota. Losing four of those to a crash, a closed window, or a
- * backend that went away at step three is not a small annoyance — it is the
- * whole reason someone abandons the flow and ships without foundations.
+ * Every answered question cost a real model call, and the answers are the
+ * user's own judgment — losing either to a crash or a closed window is how
+ * someone abandons the flow and ships without foundations. So the whole state
+ * (description, transcript, the question currently on screen, a finished
+ * proposal awaiting confirmation) is written after every change, and reopening
+ * resumes exactly where it stopped — with no model call, because the current
+ * question is stored too.
  *
- * So every answer is written as it is given, and reopening resumes at the step
- * that was in progress. Gitignored, because a half-finished interview is not a
- * design decision anyone should review; deleted on commit, because the moment
- * `foundation.json` exists the scratch is a stale copy of a real file.
+ * Gitignored: a half-finished interview is not a design decision anyone should
+ * review. Deleted on commit: once `foundation.json` exists, the scratch is a
+ * stale copy of a real file, and "resume" into it would re-propose decisions
+ * the user already committed.
  */
 import * as fs from "fs/promises"
 import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
-import type { Decisions } from "./steps"
+import type { FoundationProposal, StoredQA, WizardQuestion } from "./widgets"
 
-export interface InterviewScratch {
-	/** What the user typed at the entry screen — the only typing in the flow. */
+export interface WizardScratch {
 	description: string
-	decisions: Decisions
-	/** Index into `INTERVIEW_STEPS`; equal to the length when the interview is at the summary. */
-	stepIndex: number
+	/** Answered questions, in order. */
+	history: StoredQA[]
+	/** On screen but not yet answered, so resume re-renders it for free. */
+	pending?: WizardQuestion
+	/** Present once the model finished; the user is at the confirm screen. */
+	proposal?: FoundationProposal
 	updatedAt: number
 }
 
@@ -30,38 +35,38 @@ function scratchPath(projectPath: string): string {
 	return path.join(projectPath, ".caret", ".interview.json")
 }
 
-export async function readScratch(projectPath: string): Promise<InterviewScratch | null> {
+export async function readWizardScratch(projectPath: string): Promise<WizardScratch | null> {
 	try {
 		const raw = await fs.readFile(scratchPath(projectPath), "utf8")
-		const parsed = JSON.parse(raw) as Partial<InterviewScratch>
-		// A description is what every later step is grounded in; without one there
-		// is nothing to resume, and offering to resume an empty interview is worse
-		// than starting cleanly.
+		const parsed = JSON.parse(raw) as Partial<WizardScratch>
+		// No description → nothing to ground a resume in. This also quietly
+		// discards scratch from the pre-wizard flow, whose shape had no history.
 		if (typeof parsed.description !== "string" || !parsed.description.trim()) return null
+		if (!Array.isArray(parsed.history)) return null
 		return {
 			description: parsed.description,
-			decisions: parsed.decisions ?? {},
-			stepIndex: typeof parsed.stepIndex === "number" ? parsed.stepIndex : 0,
+			history: parsed.history,
+			pending: parsed.pending,
+			proposal: parsed.proposal,
 			updatedAt: parsed.updatedAt ?? 0,
 		}
 	} catch {
-		// Absent or unparseable are the same thing to a caller: nothing to resume.
 		return null
 	}
 }
 
-export async function writeScratch(projectPath: string, scratch: Omit<InterviewScratch, "updatedAt">): Promise<void> {
+export async function writeWizardScratch(projectPath: string, scratch: Omit<WizardScratch, "updatedAt">): Promise<void> {
 	try {
 		const file = scratchPath(projectPath)
 		await fs.mkdir(path.dirname(file), { recursive: true })
 		await fs.writeFile(file, `${JSON.stringify({ ...scratch, updatedAt: Date.now() }, null, 2)}\n`)
 	} catch (err) {
-		// Scratch is a convenience, never a precondition. An unwritable project
-		// should cost the user their resume point, not their interview.
-		Logger.warn(`[interview] could not save progress: ${err}`)
+		// Scratch is a convenience, never a precondition: an unwritable project
+		// costs the resume point, not the interview.
+		Logger.warn(`[wizard] could not save progress: ${err}`)
 	}
 }
 
-export async function clearScratch(projectPath: string): Promise<void> {
+export async function clearWizardScratch(projectPath: string): Promise<void> {
 	await fs.rm(scratchPath(projectPath), { force: true }).catch(() => {})
 }

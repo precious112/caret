@@ -70,6 +70,14 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"foundation:back": true,
 	"foundation:commit": true,
 	"foundation:abandon": true,
+	"wizard:resume": true,
+	"wizard:start": true,
+	"wizard:answer": true,
+	"wizard:finishNow": true,
+	"wizard:retry": true,
+	"wizard:back": true,
+	"wizard:commit": true,
+	"wizard:abandon": true,
 }
 
 const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {

@@ -504,70 +504,49 @@ subscription or key once, or uses the bundled default, and never opens a termina
 
 ## [~] Phase 6.5: The foundation interview (token wizard v2)
 
-**Re-scoped 2026-08-03.** The interview is a **Caret-owned state machine running on the Phase
-6.4 backend** — not an agent-led flow an external agent must initiate, which nothing in the
-product can trigger. Caret sequences the steps; the model only ranks curated candidates and
-explains its recommendation in the user's terms. Engineering detail in
-[CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.5.
+**Re-scoped 2026-08-06 — the model runs the interview.** The 2026-08-03 shape (Caret-owned
+fixed steps, model confined to ranking a curated enum) was built, certified, and rejected at
+review: fixed questions cannot tailor themselves to what the user is building, and the point
+of the interview is that every question and option is informed by the description. The
+inversion: **the AI decides what to ask; Caret decides what a question is allowed to look
+like.** The curated library is demoted to reference material in the prompt.
 
-**Kept from the first build (done, certified):**
+**The widget vocabulary is the contract.** Every question the model composes must be one of a
+fixed set of kinds, each with a purpose-built surface: `options` (specimen cards), `color`
+(swatches + **colour picker, hex field, eyedropper** as the built-in escape hatch), `font`
+(type specimens + Google Fonts search), `scale` (two poles, stepped, the specimen morphs
+live), `chips`, `text`, `boolean`, `assumptions` (inferences confirmed in one screen instead
+of asked one by one). Freedom over content, none over presentation.
 
-- [x] Curated foundation library (`src/core/design/foundation-library/`): 8 typeface
-      pairings, 5 palette recipes, 5 shape/density presets. **Every typeface licence was
-      verified from the family's own source repository** — all SIL OFL 1.1.
-- [x] Options displayed as live specimens — the real typeface loaded, the palette applied
-      to a heading, body copy and one accented button. No hex codes, no scale ratios.
-- [x] Pro path: a tab switches to direct token editing at any point; same `foundation.json`
-- [x] Interview MCP tools (`present_question`, `present_options`, `commit_foundation`) —
-      **repositioned as the external-agent path only.** They stay certified and stay refusing
-      non-library ids; the in-app interview below does not use them.
+- [x] Conductor: one `structured()` call per turn → `ask` (a widget payload) or `finish`
+      (parameters). Malformed turns are retried **once, quoting the validator's complaint**;
+      then an honest error screen with retry / finish-now / presets.
+- [x] Question budget: aim 4–7, hard cap 10; "Just finish it" available to the user from the
+      second question on; skip ("you decide") on every question.
+- [x] Recommended option preselected on every question; reasons grounded in the user's own
+      description, rendered under the cards.
+- [x] Finish is **parameters, never a file**: families, brand hex, neutral, surface, ratio,
+      base size, spacing unit, radius character, restraint rule. `finalizeProposal` validates,
+      clamps, and derives every scale with `generateTokenScale` — the committed
+      `foundation.json` has exactly the token editor's shape. `TypographyTokens` gained
+      optional `displayFamily`/`displayFallback` for the heading face.
+- [x] Scratch (`.caret/.interview.json`, gitignored, healer-ignored): description, transcript,
+      the question currently on screen, a finished proposal — resume is free, no model call.
+      Cleared on commit.
+- [x] No backend → the wizard says so and offers the other doors; it does not fake an
+      interview it cannot run.
+- [x] Three tabs on the Foundation surface: **Interview** (the wizard, default) ·
+      **Presets** (the 2026-08-03 deterministic flow, kept for full-control users) ·
+      **By hand** (token editor). The MCP interview tools stay as the external-agent path.
+- [ ] Re-runnable with blast radius shown — needs Phase 7's live bindings; re-running today
+      overwrites, so the surface warns before the first commit rather than after.
 
-**The in-app interview (new build):**
-
-- [x] Entry: one field — *"Describe what you're trying to build"* — the only typing in the
-      flow. Reachable from launch with **zero setup at all**; the old "interview disabled until
-      an agent connects" gate is gone, since Caret runs it itself.
-- [x] Caret owns the step sequence. Per step, `structured()` sends the description, decisions
-      so far, and the step's full curated candidate set; the schema's **`enum` is the candidate
-      ids**, so a model cannot introduce a font or hex at the request level. Post-validation
-      stays (schema-valid ≠ semantically valid) — unit-tested against invented ids, repeats,
-      and ids belonging to another step.
-- [x] The model returns a ranking of 3 with one plain-language reason each, grounded in the
-      description. The top recommendation renders **preselected** — pressing through the whole
-      interview yields a good foundation, not a default one.
-- [~] Steps: **typeface pairing · colour direction · brand colour · spacing-and-corners**.
-      Four, not the six first sketched, and the two differences are library facts rather than
-      scope cuts:
-      - *density/spacing* and *corner character* ship as **one** step because the library
-        refuses to separate them — a preset's own rationale reads "larger radii need larger
-        spacing or the rounding eats the padding." Splitting them lets a user assemble round
-        corners with tight spacing, the exact pairing curation exists to prevent.
-      - *border-and-elevation weight* has **nowhere to be written**: `FoundationTokens` has no
-        such field and the library has no such axis. It needs a token change plus curated
-        content, so it waits on the curation session below.
-- [ ] **"None of these" is the user's override, never the model's**: full Google Fonts list
-      for type, a picker for colour. After an override, later steps pair around the user's
-      choice.
-- [x] Every answer persists per step (`.caret/.interview.json`, gitignored, cleared on
-      commit); a crash mid-flow resumes at the step it stopped on
-- [x] Fallback: `structured()` failure or **no backend at all** degrades that step to the
-      deterministic tag-based narrowing — same screens, no grounded reasoning line. The
-      interview never dead-ends on backend state. A screen that has no reasoning **says so**
-      rather than inventing a line, including when an emulated backend returns blank reasons.
-- [x] Final screen: a real page rendered with the chosen foundation — not a swatch sheet —
-      confirm or step back
-- [x] Commit builds `foundation.json` locally from curated pieces + `generateTokenScale`; the
-      model never writes the file
-- [ ] Re-runnable with blast radius shown — the *proposal* half needs Phase 7's live
-      bindings to compute what a token change would affect. Re-running today overwrites,
-      which is why the surface warns before the first commit rather than after.
-
-**Gate (working-agreement exception 2):** the user runs the interview on a real project and
-rates the output before this phase closes.
+**Gate (working-agreement exception 2):** the user runs the wizard on a real project and rates
+the output before this phase closes.
 
 **Deliverable:** a developer with no design vocabulary describes what they're building, answers
-a handful of guided steps, and lands on foundations worth protecting — with every option on
-screen coming from the curated library.
+a handful of questions composed *for that description*, and lands on foundations worth
+protecting — with an escape hatch on every question that is a real control, never a prompt box.
 
 ---
 

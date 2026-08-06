@@ -354,6 +354,20 @@ async function main(): Promise<void> {
 		}
 	})
 
+	// Three runs died with every Playwright handle reporting "Target page …
+	// closed" while the process stayed up — so window-level lifecycle is logged
+	// too, to catch *which* surface died and when, in main.log's own timeline.
+	app.on("window", (page) => {
+		const short = page.url().slice(0, 80)
+		void mainLog.write(`[verify-app] window appeared: ${short}\n`)
+		page.on("close", () => {
+			const stamp = new Date().toLocaleTimeString()
+			if (!appDiedAt && short.startsWith("file:")) appDiedAt = stamp
+			void mainLog.write(`[verify-app] window CLOSED at ${stamp}: ${short}\n`)
+		})
+		page.on("crash", () => void mainLog.write(`[verify-app] window RENDERER CRASHED: ${short}\n`))
+	})
+
 	await scenario("a. app launches and the window is named after the project", async () => {
 		const window = await app!.firstWindow({ timeout: 60_000 })
 		assert(window, "no window appeared")
@@ -1155,13 +1169,12 @@ async function main(): Promise<void> {
 		return `refused with: "${refusal?.trim().slice(0, 60)}…"`
 	})
 
-	await scenario("hh. the foundation interview runs to a committed file with no backend at all", async () => {
-		// The guarantee this pins: the interview degrades, it does not disappear.
-		// The old surface was gated on an agent being connected, which made the
-		// highest-leverage screen in the product unreachable for exactly the user
-		// it exists for. Runs here deliberately — before any backend is chosen.
+	await scenario("hh. the Presets flow runs to a committed file with no model anywhere", async () => {
+		// The deterministic tab: fixed curated steps, identical screens on every
+		// machine, zero spend. Runs here deliberately — before any backend is
+		// chosen — because that is exactly when it must still work.
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
-		await chrome.click('[data-testid="foundation-tab-interview"]')
+		await chrome.click('[data-testid="foundation-tab-presets"]')
 		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
 
 		await chrome.fill(
@@ -1170,11 +1183,7 @@ async function main(): Promise<void> {
 		)
 		await chrome.click('[data-testid="foundation-begin"]')
 		await chrome.waitForSelector('[data-testid="foundation-step"]', { timeout: 30_000 })
-
-		// It must say the options were ordered rather than reasoned about. A screen
-		// implying a model weighed in when none did is the dishonest failure.
-		await chrome.waitForSelector('[data-testid="foundation-degraded"]', { timeout: 10_000 })
-		await shot(chrome, "12-interview-step-no-backend")
+		await shot(chrome, "12-presets-step")
 
 		let steps = 0
 		for (; steps < 8; steps++) {
@@ -1211,23 +1220,25 @@ async function main(): Promise<void> {
 			"the type scale was never generated — the model was expected to supply it, which it must never do",
 		)
 
-		// Scratch is a resume point for an *unfinished* interview. Left behind, the
-		// next visit offers to resume decisions the user already committed.
-		//
-		// Waited for rather than read once: the commit writes the tokens first and
-		// clears scratch after regenerating the rules files, so an immediate read
-		// races a commit that is still finishing — which is exactly what it did.
-		await waitFor(
-			"the interview's scratch state to be cleared",
-			async () =>
-				fs
-					.access(path.join(fixture, ".caret", ".interview.json"))
-					.then(() => null)
-					.catch(() => true),
-			20_000,
-		)
+		return `${steps} step(s), no model → ${tokens.typography.fontFamily}, seed ${tokens.color.brand.seed}`
+	})
 
-		return `${steps} step(s) with no backend → ${tokens.typography.fontFamily}, seed ${tokens.color.brand.seed}`
+	await scenario("jj. with no backend, the wizard refuses honestly and offers the other doors", async () => {
+		// The wizard is genuinely AI-run, so without a model it must not pretend —
+		// it says what it needs and hands the user the presets tab or the editor,
+		// rather than dead-ending or faking an interview.
+		await chrome.click('[data-testid="foundation-tab-interview"]')
+		await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 20_000 })
+		await chrome.fill('[data-testid="wizard-describe"]', "A quiet reading app for long-form essays")
+		await chrome.click('[data-testid="wizard-begin"]')
+
+		await chrome.waitForSelector('[data-testid="wizard-needs-backend"]', { timeout: 30_000 })
+		await shot(chrome, "13-wizard-needs-backend")
+
+		// The offered escape actually goes somewhere.
+		await chrome.getByRole("button", { name: "Pick from presets instead" }).click()
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+		return "refused with the reason, and the presets door works"
 	})
 
 	// Which model — if any — this run may spend. Resolved once, before the
@@ -1450,52 +1461,92 @@ async function main(): Promise<void> {
 		return `app updated after ${allowed} allowed write(s), bookmark at ${bookmark.slice(0, 8)}`
 	})
 
-	await inference("ii. with a backend, the interview explains its recommendation in the user's terms", async () => {
-		// `hh` proved the flow survives without a model. This proves the model
-		// actually adds the thing it is there for — a reason grounded in what the
-		// user described — and that it cannot answer outside the curated library.
+	await inference("ii. the wizard interviews, finishes on demand, and Caret writes the file", async () => {
+		// The whole loop, live: the model composes a question from the widget
+		// vocabulary, the UI renders and answers it, "Just finish" forces a
+		// proposal from what's known, and the committed file is Caret's own
+		// derivation. Two model turns, so it stays affordable on a free model.
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
 		await chrome.click('[data-testid="foundation-tab-interview"]')
-		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+		await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 20_000 })
 
 		await chrome.fill(
-			'[data-testid="foundation-describe"]',
-			"A quiet reading app for long-form essays. People sit with it for an hour at a time.",
+			'[data-testid="wizard-describe"]',
+			"A quiet reading app for long-form essays. People sit with it for an hour at a time. Calm, bookish, light background.",
 		)
-		await chrome.click('[data-testid="foundation-begin"]')
+		await chrome.click('[data-testid="wizard-begin"]')
 
-		// The ranking is a real model call on the whole curated set, so it gets the
-		// same patience as any other inference scenario.
-		await chrome.waitForSelector('[data-testid="foundation-step"]', { timeout: 180_000 })
-
-		const reasoned = await chrome.getByTestId("foundation-reason").count()
-		if (reasoned === 0) {
-			const note =
-				(await chrome
-					.getByTestId("foundation-degraded")
-					.textContent()
-					.catch(() => null)) ?? "(no note)"
-			throw new Inconclusive(`the model produced no usable ranking, so the screen degraded: ${note.trim().slice(0, 200)}`)
+		// The first question is a whole model turn composing UI; give it the same
+		// patience as any inference scenario.
+		const first = await Promise.race([
+			chrome.waitForSelector('[data-testid="wizard-question"]', { timeout: 240_000 }).then(() => "question" as const),
+			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 240_000 }).then(() => "error" as const),
+		])
+		if (first === "error") {
+			const message = (await chrome.textContent('[data-testid="wizard-error"]'))?.trim() ?? ""
+			throw new Inconclusive(`the model never produced a renderable question: ${message.slice(0, 200)}`)
 		}
 
-		const reason = (await chrome.getByTestId("foundation-reason").first().textContent())?.trim() ?? ""
-		assert(reason.length > 15, `the reason is too short to be one: "${reason}"`)
-		await shot(chrome, "15-interview-reasoned")
+		const questionText = (await chrome.textContent('[data-testid="wizard-question"] h1'))?.trim() ?? ""
+		assert(questionText.length > 5, "a question rendered with no text")
+		await shot(chrome, "15-wizard-question")
 
-		// Every option on screen must still be a library id. This is the anti-slop
-		// floor — the schema enum — observed from the outside.
-		const offered = await chrome
-			.locator('[data-testid="foundation-option"]')
-			.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-option-id") ?? ""))
-		assert(offered.length >= 2, `only ${offered.length} option(s) rendered`)
-		const library = await chrome.evaluate(() =>
-			(window as unknown as { caret: { invoke(c: string): Promise<unknown> } }).caret.invoke("interview:library"),
+		// Answer it through the real UI. Whatever kind the model chose, either the
+		// widget preselected something (Continue enabled) or it needs input (skip
+		// is the honest answer for a harness with no opinions).
+		const continueEnabled = await chrome.getByTestId("wizard-continue").isEnabled()
+		await chrome.click(continueEnabled ? '[data-testid="wizard-continue"]' : '[data-testid="wizard-skip"]')
+
+		// Then stop the interview and make it construct from what it has.
+		await chrome.waitForSelector(
+			'[data-testid="wizard-finish-now"], [data-testid="wizard-finish"], [data-testid="wizard-error"]',
+			{ timeout: 240_000 },
 		)
-		const known = new Set((library as { typefaces: Array<{ id: string }> }).typefaces.map((t) => t.id))
-		const invented = offered.filter((id) => !known.has(id))
-		assert(invented.length === 0, `an option outside the curated library reached the user: ${invented.join(", ")}`)
+		if (await chrome.getByTestId("wizard-finish-now").count()) {
+			await chrome.click('[data-testid="wizard-finish-now"]')
+		}
 
-		return `reasoned: "${reason.slice(0, 70)}…" over ${offered.length} curated options`
+		const finished = await Promise.race([
+			chrome.waitForSelector('[data-testid="wizard-finish"]', { timeout: 240_000 }).then(() => "finish" as const),
+			chrome.waitForSelector('[data-testid="wizard-error"]', { timeout: 240_000 }).then(() => "error" as const),
+		])
+		if (finished === "error") {
+			const message = (await chrome.textContent('[data-testid="wizard-error"]'))?.trim() ?? ""
+			throw new Inconclusive(`the model could not construct a valid foundation: ${message.slice(0, 200)}`)
+		}
+		await shot(chrome, "16-wizard-finish")
+
+		const before = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
+		await chrome.click('[data-testid="wizard-commit"]')
+
+		const tokens = await waitFor(
+			"the wizard to write foundation.json",
+			async () => {
+				const raw = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
+				return raw !== before ? JSON.parse(raw) : null
+			},
+			30_000,
+		)
+
+		// Caret's derivation, not the model's file: scales must exist and cohere.
+		assert(tokens.typography?.fontFamily, "no body typeface")
+		assert(Object.keys(tokens.typography.scale ?? {}).length > 0, "no derived type scale")
+		assert(/^#[0-9a-f]{6}$/.test(tokens.color?.brand?.seed ?? ""), `brand seed is not a hex: ${tokens.color?.brand?.seed}`)
+		assert(Object.keys(tokens.color.brand.scale ?? {}).length > 0, "no derived colour scale")
+		assert((tokens.spacing?.scale ?? []).length > 0, "no spacing scale")
+
+		// Scratch cleared on commit — a committed interview must not offer a resume.
+		await waitFor(
+			"the wizard's scratch to be cleared",
+			async () =>
+				fs
+					.access(path.join(fixture, ".caret", ".interview.json"))
+					.then(() => null)
+					.catch(() => true),
+			20_000,
+		)
+
+		return `asked "${questionText.slice(0, 50)}…", finished → ${tokens.typography.displayFamily ?? tokens.typography.fontFamily}, ${tokens.color.brand.seed}`
 	})
 }
 

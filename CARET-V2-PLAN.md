@@ -738,6 +738,26 @@ way to call.
 
 ## 4.5 The foundation interview (Phase 6.5)
 
+**Mechanism re-decided 2026-08-06 — the model runs the interview.** The 2026-08-03 design
+below (Caret-owned fixed steps, model confined to ranking a curated enum) was built and
+rejected at review: fixed questions cannot tailor themselves to the product being described,
+and tailoring is the feature. Standing decision now:
+
+- **The AI decides what to ask** — which questions, their wording, their options, when to
+  stop — from the description and the answers so far, one `structured()` turn at a time.
+- **Caret decides what a question may look like**: a fixed widget vocabulary (`options` /
+  `color` / `font` / `scale` / `chips` / `text` / `boolean` / `assumptions`), each with a
+  purpose-built surface and a built-in escape hatch — colour picker + hex + eyedropper on
+  colour, Google Fonts search on type. Malformed turns are retried once against the
+  validator's complaint, then an honest error screen.
+- **Finish is parameters, never a file.** Caret validates, clamps, and derives every scale
+  itself; the curated library becomes reference material in the prompt.
+- The 2026-08-03 deterministic flow survives as the **Presets** tab for full-control users;
+  the token editor stays as **By hand**. See CARET-PHASES.md §6.5 for the shipped checklist.
+
+**Superseded design (2026-08-03), kept for the reasoning that still holds** — the persona
+argument, the specimen rules, and the MCP tools' repositioning are unchanged:
+
 **Decided 2026-08-01; mechanism re-decided 2026-08-03.** The token wizard stops being a form
 the user fills in and becomes a **guided interview rendered natively in Caret's chrome, run by
 Caret on the §4.4 backend**. Rationale: the wizard is the single moment Caret can inject taste

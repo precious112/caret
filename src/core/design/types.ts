@@ -37,6 +37,13 @@ export interface ColorTokens {
 export interface TypographyTokens {
 	fontFamily: string
 	fallback: string
+	/**
+	 * The heading face, when it differs from the body. Optional and additive —
+	 * foundations written before the wizard existed have only `fontFamily`, and
+	 * everything that reads tokens treats the display pair as body-when-absent.
+	 */
+	displayFamily?: string
+	displayFallback?: string
 	scaleRatio: number
 	baseSize: number
 	scale: Record<string, number>

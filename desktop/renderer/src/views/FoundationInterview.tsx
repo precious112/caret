@@ -1,26 +1,16 @@
 /**
- * The foundation interview, as the user meets it.
+ * The Presets tab: the deterministic curated flow.
  *
- * One typed sentence, then four screens of pointing. That shape is the whole
- * argument: a form assumes you already know what to put in it, and Caret's user
- * is a developer who knows what they are building and not what a humanist sans
- * is. Describing is easy; choosing between three pictures is easy; naming a
- * typeface is not.
+ * One typed sentence, then four screens of pointing — fixed steps, options
+ * ordered by the description's tags, every combination one somebody approved.
+ * No model anywhere, which is the point of this tab: identical screens on
+ * every machine, full control, zero spend. The AI-run wizard next door is the
+ * default; this is for the user who wants the machine out of the room.
  *
- * Rules this surface is held to:
- *
- * - **No design vocabulary, anywhere.** No hex codes, no scale ratios, no
- *   "x-height". Someone who wants those has the token editor.
- * - **Specimens, not labels.** Every option renders in the real typeface with
- *   the real colours, and the three cards on a screen differ in exactly the
- *   thing being asked about — so the comparison is the answer.
- * - **The recommendation is preselected.** Pressing straight through yields a
- *   good foundation rather than a default one, which is what makes this
- *   survivable for someone who does not want to think about any of it.
- * - **Never claim reasoning we do not have.** When the deterministic order
- *   produced the options, the screen says so instead of inventing a line.
+ * Held to the same rules as every foundation surface: no design vocabulary,
+ * specimens over labels, and a preselected pick on every screen.
  */
-import { ArrowLeft, Check, Loader2, Sparkles } from "lucide-react"
+import { ArrowLeft, Check, Loader2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import type { InterviewStateWire, RankedOptionWire, SpecimenWire } from "../../../shared/ipc"
@@ -227,8 +217,6 @@ function StepScreen({
 
 	useFonts(state.options.map((option) => option.specimen.fontUrl))
 
-	const chosen = state.options.find((option) => option.id === selected)
-
 	return (
 		<div className="fade-in" data-testid="foundation-step">
 			<div className="flex items-center justify-between">
@@ -261,23 +249,6 @@ function StepScreen({
 					/>
 				))}
 			</div>
-
-			{/* The reason sits under the choice rather than on the card: it is about
-			    the one the user is actually considering, and three reasons at once is
-			    an essay nobody reads. */}
-			{chosen?.reason && (
-				<p className="mt-4 flex items-start gap-2 leading-relaxed text-shell-muted" data-testid="foundation-reason">
-					<Sparkles className="mt-1 shrink-0 text-caret-accent" size={12} />
-					{chosen.reason}
-				</p>
-			)}
-
-			{!state.reasoned && (
-				<p className="mt-4 text-[11.5px] leading-relaxed text-shell-muted" data-testid="foundation-degraded">
-					These are ordered by what you described{state.degradedBecause ? `, because ${state.degradedBecause}` : ""}.
-					They're all from the same curated set either way — you just don't get a note on why each one fits.
-				</p>
-			)}
 
 			<button
 				className="mt-7 flex items-center gap-2 rounded-lg bg-caret-accent px-4 py-2 font-medium text-white transition-colors hover:bg-caret-accent-hover disabled:opacity-40"

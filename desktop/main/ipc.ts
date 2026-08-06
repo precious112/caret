@@ -32,6 +32,7 @@ import {
 	rollbackSync,
 	searchGoogleFonts,
 	validateFoundationTokens,
+	type WizardAnswer,
 	writeFoundationTokens,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
@@ -41,6 +42,16 @@ import { abandonInterview, answerStep, commitInterview, resumeInterview, startIn
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
+import {
+	abandonWizard,
+	answerWizard,
+	commitWizard,
+	finishWizard,
+	resumeWizard,
+	retryWizard,
+	startWizard,
+	wizardBack,
+} from "./token-wizard"
 import type { DesignInboundMessage } from "./types"
 import type { WindowManager } from "./window-manager"
 
@@ -356,8 +367,8 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("interview:pending", () => currentPrompt())
 
-	// The in-app interview Caret runs itself. Separate from the three above,
-	// which are the external-agent path.
+	// The deterministic Presets flow. Separate from the three above, which are
+	// the external-agent path.
 	ipcMain.handle("foundation:resume", (_event, projectPath: string) => resumeInterview(projectPath))
 	ipcMain.handle("foundation:start", (_event, projectPath: string, description: string) =>
 		startInterview(projectPath, description),
@@ -368,6 +379,16 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("foundation:back", (_event, projectPath: string) => stepBack(projectPath))
 	ipcMain.handle("foundation:commit", (_event, projectPath: string) => commitInterview(projectPath))
 	ipcMain.handle("foundation:abandon", (_event, projectPath: string) => abandonInterview(projectPath))
+
+	// The AI-run token wizard — the Foundation surface's default door.
+	ipcMain.handle("wizard:resume", (_event, projectPath: string) => resumeWizard(projectPath))
+	ipcMain.handle("wizard:start", (_event, projectPath: string, description: string) => startWizard(projectPath, description))
+	ipcMain.handle("wizard:answer", (_event, projectPath: string, answer: WizardAnswer) => answerWizard(projectPath, answer))
+	ipcMain.handle("wizard:finishNow", (_event, projectPath: string) => finishWizard(projectPath))
+	ipcMain.handle("wizard:retry", (_event, projectPath: string) => retryWizard(projectPath))
+	ipcMain.handle("wizard:back", (_event, projectPath: string) => wizardBack(projectPath))
+	ipcMain.handle("wizard:commit", (_event, projectPath: string) => commitWizard(projectPath))
+	ipcMain.handle("wizard:abandon", (_event, projectPath: string) => abandonWizard(projectPath))
 }
 
 /**

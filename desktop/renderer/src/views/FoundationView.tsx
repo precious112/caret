@@ -1,17 +1,19 @@
 /**
- * The foundation surface — two ways in, one `foundation.json` out.
+ * The foundation surface — three doors, one `foundation.json` out.
  *
- * **Interview** is the default: describe what you're building, then point at
- * specimens. Caret runs it on its own backend, which is why it is no longer
- * gated on an agent being connected — the old gate made the highest-leverage
- * screen in the product unreachable for exactly the user it was built for. With
- * no backend it still runs, ordering the same curated options deterministically
- * instead of with a model's reasoning.
+ * **Interview** (default): the AI-run token wizard. The model reads the
+ * project description, decides what to ask, and constructs the tokens; every
+ * question renders through Caret's own widget components. Built for the
+ * developer who is not design-savvy — which is the user this product is for.
  *
- * **By hand** is the token editor, unchanged. A designer who knows what they
- * want should not have to sit through four screens to get to it.
+ * **Presets**: the deterministic curated flow. Same describe-then-point shape,
+ * fixed steps, no model anywhere — for someone who wants full control and
+ * identical screens every time.
  *
- * Both write the same file, so neither is a lesser mode.
+ * **By hand**: the token editor, unchanged, for a pro who knows exactly what
+ * they want.
+ *
+ * All three write the same file, so none is a lesser mode.
  */
 import { useEffect, useState } from "react"
 
@@ -22,9 +24,10 @@ import { cn } from "../lib/utils"
 import { setActiveProject } from "../services/design-client"
 import { FoundationInterview } from "./FoundationInterview"
 import { InterviewView } from "./InterviewView"
+import { WizardView } from "./WizardView"
 
 /** `agent` is only ever entered by an external agent pushing a question. */
-type Mode = "interview" | "manual" | "agent"
+type Mode = "wizard" | "presets" | "manual" | "agent"
 
 export function FoundationView({
 	project,
@@ -35,15 +38,13 @@ export function FoundationView({
 	onDone(): void
 	onInterviewAnswered?(): void
 }) {
-	// Caret runs the interview itself now, so it is the default regardless of
-	// backend state — it degrades rather than disappearing.
-	const [mode, setMode] = useState<Mode>("interview")
+	const [mode, setMode] = useState<Mode>("wizard")
 
 	// The wizard's data layer is module-scoped to one project per window.
 	useEffect(() => setActiveProject(project.path), [project.path])
 
-	// An *agent's* question still wins over whatever is on screen: unlike Caret's
-	// own interview, there is a tool call blocked on it.
+	// An *external* agent's question wins over whatever is on screen: unlike
+	// Caret's own flows, there is a tool call blocked on it.
 	useEffect(() => on("interview:prompt", () => setMode("agent")), [])
 
 	return (
@@ -59,15 +60,35 @@ export function FoundationView({
 
 			<div className="flex items-center gap-1 border-b border-shell-border px-8 py-2">
 				<ModeTab
-					active={mode === "interview" || mode === "agent"}
+					active={mode === "wizard" || mode === "agent"}
 					label="Answer a few questions"
-					onClick={() => setMode("interview")}
+					onClick={() => setMode("wizard")}
+					testid="foundation-tab-interview"
 				/>
-				<ModeTab active={mode === "manual"} label="Set them by hand" onClick={() => setMode("manual")} />
+				<ModeTab
+					active={mode === "presets"}
+					label="Pick from presets"
+					onClick={() => setMode("presets")}
+					testid="foundation-tab-presets"
+				/>
+				<ModeTab
+					active={mode === "manual"}
+					label="Set them by hand"
+					onClick={() => setMode("manual")}
+					testid="foundation-tab-manual"
+				/>
 			</div>
 
 			{mode === "agent" && <InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode("manual")} />}
-			{mode === "interview" && (
+			{mode === "wizard" && (
+				<WizardView
+					onCommitted={onDone}
+					onSwitchToManual={() => setMode("manual")}
+					onSwitchToPresets={() => setMode("presets")}
+					projectPath={project.path}
+				/>
+			)}
+			{mode === "presets" && (
 				<FoundationInterview onCommitted={onDone} onSwitchToManual={() => setMode("manual")} projectPath={project.path} />
 			)}
 			{mode === "manual" && <TokenWizard onDone={onDone} />}
@@ -75,30 +96,15 @@ export function FoundationView({
 	)
 }
 
-function ModeTab({
-	active,
-	label,
-	onClick,
-	disabled,
-	title,
-}: {
-	active: boolean
-	label: string
-	onClick(): void
-	disabled?: boolean
-	title?: string
-}) {
+function ModeTab({ active, label, onClick, testid }: { active: boolean; label: string; onClick(): void; testid: string }) {
 	return (
 		<button
 			className={cn(
 				"rounded-lg px-3 py-1.5 transition-colors",
 				active ? "bg-caret-accent/15 text-caret-accent" : "text-shell-muted hover:bg-white/5",
-				disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
 			)}
-			data-testid={`foundation-tab-${label.includes("questions") ? "interview" : "manual"}`}
-			disabled={disabled}
+			data-testid={testid}
 			onClick={onClick}
-			title={title}
 			type="button">
 			{label}
 		</button>

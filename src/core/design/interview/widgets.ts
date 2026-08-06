@@ -1,0 +1,278 @@
+/**
+ * The wizard's widget vocabulary — the contract between the model and the UI.
+ *
+ * The model runs the interview: it reads the project description and decides
+ * what to ask, in its own words, with its own options. What it does *not* get
+ * to invent is how a question appears on screen. Every question must be one of
+ * the kinds below, each of which has a purpose-built surface in the renderer —
+ * specimens for typefaces, swatches plus a real colour picker for colour, a
+ * morphing preview for density. A model free to ask anything but bound to
+ * render through real components is the whole design: freedom over *what*,
+ * none over *how it looks*.
+ *
+ * Everything here is a wire shape. Validation lives in `conductor.ts` (a turn
+ * that is malformed is retried against the validator's own complaint) and in
+ * `finalize.ts` (a finish that names impossible values is bounced the same
+ * way).
+ */
+
+export type WidgetKind =
+	| "options" // cards with live previews — the general-purpose pick
+	| "color" // swatches + the real picker/hex/eyedropper as "other"
+	| "font" // type specimens + Google Fonts search as "other"
+	| "scale" // two poles, stepped, specimen morphs live — density, rounding, loudness
+	| "chips" // multi-select facts: which surfaces exist, what states matter
+	| "text" // one free input, for facts only the user knows
+	| "boolean" // two mini-mocks side by side
+	| "assumptions" // things inferred from the description, confirmed in one screen
+
+/**
+ * What a preview card needs to draw itself. All optional: anything absent is
+ * filled from the answers so far, so a colour question previews in the typeface
+ * the user already picked.
+ */
+export interface SpecimenParams {
+	displayFamily?: string
+	bodyFamily?: string
+	surface?: "light" | "dark"
+	/** Accent hex, e.g. the brand colour this option proposes. */
+	accent?: string
+	neutral?: "warm" | "cool" | "true" | "slight-tint"
+	/** Card/button radius in px. */
+	radius?: number
+	spacingUnit?: number
+	baseSize?: number
+}
+
+export interface WizardOption {
+	id: string
+	/** For `font` questions this is the family name, verbatim. */
+	label: string
+	/** Why this fits *their* product — grounded in the description, no jargon. */
+	reason?: string
+	/** For `color` options: the colour itself. */
+	hex?: string
+	spec?: SpecimenParams
+}
+
+export interface ScaleStep {
+	label: string
+	spec?: SpecimenParams
+}
+
+export interface WizardQuestion {
+	/** Model-chosen slug, unique within the interview. */
+	id: string
+	kind: WidgetKind
+	/** Plain language, addressed to the user. */
+	question: string
+	/** One line on why this is being asked / what it affects. */
+	why?: string
+	options?: WizardOption[]
+	/** Preselected. Pressing straight through must yield a good foundation. */
+	recommendedId?: string
+	/**
+	 * Which escape hatch the renderer offers beyond the listed options.
+	 * `color` → picker + hex + eyedropper; `font` → Google Fonts search;
+	 * `text` → free input. Absent means the options are exhaustive.
+	 */
+	other?: "color" | "font" | "text"
+	/** `scale` only. */
+	leftLabel?: string
+	rightLabel?: string
+	steps?: ScaleStep[]
+	defaultStep?: number
+	/** `text` only. */
+	placeholder?: string
+	multiline?: boolean
+}
+
+export interface WizardAnswer {
+	questionId: string
+	/** Echoed so the model's transcript reads without a lookup. */
+	question: string
+	kind: WidgetKind
+	/**
+	 * The pick: an option id, a hex, a family name, a step label, free text, or
+	 * a comma-joined list for chips. For assumptions: `id=yes` / `id=<correction>`
+	 * pairs, one per line.
+	 */
+	value: string
+	/** The human label of what was picked, when it differs from the value. */
+	label?: string
+	/** True when the user went through the escape hatch rather than an option. */
+	wasOther?: boolean
+	/** True when the user said "you decide". */
+	skipped?: boolean
+}
+
+export interface StoredQA {
+	question: WizardQuestion
+	answer: WizardAnswer
+}
+
+/**
+ * What the model hands over when it is done deciding.
+ *
+ * Parameters, never files: the model names families, hexes and characters, and
+ * Caret derives every scale itself (`finalize.ts`), so the committed
+ * `foundation.json` has exactly the shape the token editor edits.
+ */
+export interface FoundationProposal {
+	displayFamily: string
+	displayFallback?: string
+	bodyFamily: string
+	bodyFallback?: string
+	scaleRatio: number
+	baseSize: number
+	/** Brand hex. */
+	brand: string
+	neutral: "warm" | "cool" | "true" | "slight-tint"
+	surface: "light" | "dark"
+	semantic?: { success?: string; warning?: string; error?: string; info?: string }
+	spacingUnit: number
+	radiusCharacter: "sharp" | "soft" | "round" | "pill"
+	/** The restraint rule this foundation adopts — carried into the rules files. */
+	rule: string
+	vibeTags?: string[]
+	/** Two or three sentences to the user on what was built and why. */
+	summary: string
+}
+
+export type WizardTurn = { action: "ask"; question: WizardQuestion } | { action: "finish"; foundation: FoundationProposal }
+
+/**
+ * The schema handed to `structured()`.
+ *
+ * Deliberately looser than the types above: enums pin what enums can pin, and
+ * everything cross-field — "a scale question needs steps", "recommendedId must
+ * name an option" — is enforced in `validateTurn`, where a violation produces a
+ * sentence the retry prompt can quote. A schema strict enough to catch those
+ * would reject with a message only a JSON Schema implementer could love.
+ */
+/**
+ * Inlined everywhere it appears rather than `$ref`'d: the schema travels to
+ * whichever provider the backend has, and `$ref` support is exactly the kind of
+ * corner that varies between them.
+ */
+const SPEC_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		displayFamily: { type: "string" },
+		bodyFamily: { type: "string" },
+		surface: { enum: ["light", "dark"] },
+		accent: { type: "string" },
+		neutral: { enum: ["warm", "cool", "true", "slight-tint"] },
+		radius: { type: "number" },
+		spacingUnit: { type: "number" },
+		baseSize: { type: "number" },
+	},
+} as const
+
+export const WIZARD_TURN_SCHEMA: Record<string, unknown> = {
+	type: "object",
+	required: ["action"],
+	additionalProperties: false,
+	properties: {
+		action: { enum: ["ask", "finish"] },
+		question: {
+			type: "object",
+			required: ["id", "kind", "question"],
+			additionalProperties: false,
+			properties: {
+				id: { type: "string" },
+				kind: { enum: ["options", "color", "font", "scale", "chips", "text", "boolean", "assumptions"] },
+				question: { type: "string" },
+				why: { type: "string" },
+				recommendedId: { type: "string" },
+				other: { enum: ["color", "font", "text"] },
+				leftLabel: { type: "string" },
+				rightLabel: { type: "string" },
+				defaultStep: { type: "number" },
+				placeholder: { type: "string" },
+				multiline: { type: "boolean" },
+				options: {
+					type: "array",
+					maxItems: 6,
+					items: {
+						type: "object",
+						required: ["id", "label"],
+						additionalProperties: false,
+						properties: {
+							id: { type: "string" },
+							label: { type: "string" },
+							reason: { type: "string" },
+							hex: { type: "string" },
+							spec: SPEC_SCHEMA,
+						},
+					},
+				},
+				steps: {
+					type: "array",
+					maxItems: 7,
+					items: {
+						type: "object",
+						required: ["label"],
+						additionalProperties: false,
+						properties: { label: { type: "string" }, spec: SPEC_SCHEMA },
+					},
+				},
+			},
+		},
+		foundation: {
+			type: "object",
+			required: [
+				"displayFamily",
+				"bodyFamily",
+				"scaleRatio",
+				"baseSize",
+				"brand",
+				"neutral",
+				"surface",
+				"spacingUnit",
+				"radiusCharacter",
+				"rule",
+				"summary",
+			],
+			additionalProperties: false,
+			properties: {
+				displayFamily: { type: "string" },
+				displayFallback: { type: "string" },
+				bodyFamily: { type: "string" },
+				bodyFallback: { type: "string" },
+				scaleRatio: { type: "number" },
+				baseSize: { type: "number" },
+				brand: { type: "string" },
+				neutral: { enum: ["warm", "cool", "true", "slight-tint"] },
+				surface: { enum: ["light", "dark"] },
+				spacingUnit: { type: "number" },
+				radiusCharacter: { enum: ["sharp", "soft", "round", "pill"] },
+				rule: { type: "string" },
+				vibeTags: { type: "array", items: { type: "string" } },
+				summary: { type: "string" },
+				semantic: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						success: { type: "string" },
+						warning: { type: "string" },
+						error: { type: "string" },
+						info: { type: "string" },
+					},
+				},
+			},
+		},
+	},
+}
+
+const HEX = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
+
+/** `#abc` and `abc123` become `#aabbcc` / `#abc123`; anything else is null. */
+export function normalizeHex(value: string | undefined): string | null {
+	if (!value) return null
+	const match = HEX.exec(value.trim())
+	if (!match) return null
+	const hex = match[1].toLowerCase()
+	return `#${hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex}`
+}

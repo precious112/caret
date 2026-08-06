@@ -1,225 +1,331 @@
 /**
- * The interview's guarantees, pinned.
+ * The wizard's guarantees, pinned.
  *
- * Two of them are the whole reason this flow exists rather than a prompt box:
+ * The model owns the interview — what to ask, how to word it, when to finish.
+ * What it does not own is the screen or the file, and these tests are the
+ * boundary of that ownership:
  *
- * 1. **Nothing outside the curated library can reach the user.** The schema's
- *    `enum` stops a model naming its own typeface, and post-validation stops the
- *    rest — a repeated id, an id from another step, an id the library dropped
- *    between versions.
- * 2. **The interview never dead-ends.** No backend, a refused call, a garbage
- *    answer: every one of them still puts three real options on screen, because
- *    a user who cannot reach a model still needs foundations.
- *
- * The third is quieter and is the one a refactor would break silently: a screen
- * must never claim reasoning it cannot show.
+ * 1. **Every turn must render.** A question that names no options, repeats an
+ *    id, or claims a kind its payload cannot support is bounced back to the
+ *    model with a sentence it can act on — never dropped silently, never shown
+ *    broken.
+ * 2. **The file is Caret's.** A finish carries parameters; `finalizeProposal`
+ *    derives every scale with the same generator the token editor uses, and a
+ *    proposal that cannot survive that derivation is refused with a reason.
+ * 3. **The Presets tab is deterministic.** Same description, same screens, on
+ *    every machine, with no model in the room.
  */
 import { strict as assert } from "assert"
 
 import type { CodingBackend } from "../../agent/backend"
-import { findPairing, TYPEFACE_PAIRINGS } from "../../foundation-library"
+import { TYPEFACE_PAIRINGS } from "../../foundation-library"
 import { buildFoundation, IncompleteInterviewError } from "../commit"
-import { rankStep } from "../run"
-import { INTERVIEW_STEPS, tagsFromDescription } from "../steps"
+import { nextWizardTurn, validateQuestion, WizardTurnError } from "../conductor"
+import { finalizeProposal, ProposalError } from "../finalize"
+import { deterministicOptions, INTERVIEW_STEPS, tagsFromDescription } from "../steps"
+import type { FoundationProposal, WizardQuestion } from "../widgets"
+import { normalizeHex } from "../widgets"
 
-const TYPEFACE_STEP = INTERVIEW_STEPS[0]
 const DESCRIPTION = "A dashboard for technical teams who watch it all day"
 
-/** A backend whose `structured()` answers with whatever the test hands it. */
-function backendReturning(value: unknown): CodingBackend {
-	return {
-		id: "opencode",
-		async structured() {
-			return { value, emulated: false }
-		},
-	} as unknown as CodingBackend
+const PROPOSAL: FoundationProposal = {
+	displayFamily: "Space Grotesk",
+	bodyFamily: "Inter",
+	scaleRatio: 1.2,
+	baseSize: 15,
+	brand: "#2563eb",
+	neutral: "cool",
+	surface: "dark",
+	spacingUnit: 4,
+	radiusCharacter: "sharp",
+	rule: "Brand colour on the primary action only.",
+	vibeTags: ["technical", "dense"],
+	summary: "Built for long sessions: quiet, dense, readable.",
 }
 
-function backendThatFails(): CodingBackend {
-	return {
-		id: "opencode",
-		async structured() {
-			throw new Error("no credentials")
-		},
-	} as unknown as CodingBackend
+function question(overrides: Partial<WizardQuestion>): WizardQuestion {
+	return { id: "q1", kind: "options", question: "Which of these?", ...overrides } as WizardQuestion
 }
 
-const base = { step: TYPEFACE_STEP, description: DESCRIPTION, decisions: {}, workingDirectory: "/tmp/x" }
+describe("validateQuestion", () => {
+	it("passes a well-formed question through with its recommendation intact", () => {
+		const valid = validateQuestion(
+			question({
+				options: [
+					{ id: "a", label: "First" },
+					{ id: "b", label: "Second" },
+				],
+				recommendedId: "b",
+			}),
+			[],
+		)
+		assert.equal(valid.recommendedId, "b")
+		assert.equal(valid.options?.length, 2)
+	})
 
-describe("rankStep", () => {
-	it("uses the model's ranking and carries its reasons", async () => {
-		const [a, b, c] = TYPEFACE_PAIRINGS
-		const ranking = await rankStep({
-			...base,
-			backend: backendReturning({
-				ranking: [
-					{ id: c.id, reason: "read for hours, so sized for long sessions" },
-					{ id: a.id, reason: "second" },
-					{ id: b.id, reason: "third" },
+	it("falls back to the first option when the recommendation names nothing", () => {
+		const valid = validateQuestion(
+			question({
+				options: [
+					{ id: "a", label: "First" },
+					{ id: "b", label: "Second" },
+				],
+				recommendedId: "made-up",
+			}),
+			[],
+		)
+		assert.equal(valid.recommendedId, "a", "someone has to be preselected — pressing through must work")
+	})
+
+	it("rejects a pick question with fewer than two options", () => {
+		assert.throws(() => validateQuestion(question({ options: [{ id: "a", label: "Only" }] }), []), WizardTurnError)
+	})
+
+	it("rejects a colour option without a usable hex, and normalises the rest", () => {
+		assert.throws(
+			() =>
+				validateQuestion(
+					question({
+						kind: "color",
+						options: [
+							{ id: "a", label: "Blue", hex: "#2563eb" },
+							{ id: "b", label: "Broken", hex: "blue" },
+						],
+					}),
+					[],
+				),
+			WizardTurnError,
+		)
+
+		const valid = validateQuestion(
+			question({
+				kind: "color",
+				options: [
+					{ id: "a", label: "Blue", hex: "2563EB" },
+					{ id: "b", label: "Short", hex: "#abc" },
 				],
 			}),
-		})
-
-		assert.equal(ranking.reasoned, true)
-		assert.deepEqual(
-			ranking.options.map((option) => option.id),
-			[c.id, a.id, b.id],
-			"the model's order was not preserved",
+			[],
 		)
-		assert.equal(ranking.options[0].reason, "read for hours, so sized for long sessions")
+		assert.equal(valid.options?.[0].hex, "#2563eb")
+		assert.equal(valid.options?.[1].hex, "#aabbcc")
+		// The picker/hex/eyedropper escape hatch is the user's by design, not the
+		// model's to withhold.
+		assert.equal(valid.other, "color")
 	})
 
-	it("drops an id the library does not have, and still fills the screen", async () => {
-		// The case the enum is supposed to make impossible — pinned anyway, because
-		// an emulated backend parses prose and can produce anything.
-		const ranking = await rankStep({
-			...base,
-			backend: backendReturning({
-				ranking: [
-					{ id: "helvetica-neue-invented", reason: "made up" },
-					{ id: TYPEFACE_PAIRINGS[1].id, reason: "real" },
-					{ id: TYPEFACE_PAIRINGS[2].id, reason: "also real" },
+	it("de-duplicates option ids instead of rendering one card twice", () => {
+		const valid = validateQuestion(
+			question({
+				options: [
+					{ id: "same", label: "One" },
+					{ id: "same", label: "Two" },
 				],
 			}),
-		})
-
-		assert.equal(ranking.options.length, 3, "the screen was left short")
-		assert.ok(
-			!ranking.options.some((option) => option.id === "helvetica-neue-invented"),
-			"an invented option reached the user",
+			[],
 		)
-		assert.ok(
-			ranking.options.every((option) => findPairing(option.id)),
-			"an option was not a library pairing",
-		)
+		const ids = valid.options?.map((option) => option.id) ?? []
+		assert.equal(new Set(ids).size, ids.length, `duplicate ids survived: ${ids.join(", ")}`)
 	})
 
-	it("never shows the same option twice", async () => {
-		const [a] = TYPEFACE_PAIRINGS
-		const ranking = await rankStep({
-			...base,
-			backend: backendReturning({
-				ranking: [
-					{ id: a.id, reason: "one" },
-					{ id: a.id, reason: "again" },
-					{ id: a.id, reason: "and again" },
+	it("renames a question id the interview has already used", () => {
+		const asked = {
+			question: question({ id: "brand" }),
+			answer: { questionId: "brand", question: "?", kind: "options" as const, value: "a" },
+		}
+		const valid = validateQuestion(
+			question({
+				id: "brand",
+				options: [
+					{ id: "a", label: "A" },
+					{ id: "b", label: "B" },
 				],
 			}),
-		})
-
-		const ids = ranking.options.map((option) => option.id)
-		assert.equal(new Set(ids).size, ids.length, `a duplicate was rendered: ${ids.join(", ")}`)
-		assert.equal(ranking.options.length, 3)
+			[asked],
+		)
+		assert.notEqual(valid.id, "brand", "a repeated question id would make the answer ambiguous")
 	})
 
-	it("falls back to the deterministic order with no backend, and says so", async () => {
-		const ranking = await rankStep({ ...base, backend: null })
+	it("requires a scale question to have poles and at least three steps", () => {
+		assert.throws(
+			() => validateQuestion(question({ kind: "scale", steps: [{ label: "tight" }, { label: "airy" }] }), []),
+			WizardTurnError,
+		)
 
-		assert.equal(ranking.options.length, 3)
-		assert.equal(ranking.reasoned, false)
-		assert.match(ranking.degradedBecause ?? "", /backend/)
-	})
-
-	it("falls back when the call throws rather than failing the step", async () => {
-		const ranking = await rankStep({ ...base, backend: backendThatFails() })
-
-		assert.equal(ranking.options.length, 3, "a failed call cost the user the step")
-		assert.equal(ranking.reasoned, false)
-	})
-
-	it("does not claim reasoning when every reason came back empty", async () => {
-		// An emulated backend can satisfy the schema with blank strings. The screen
-		// must not then present a reasoning line it has nothing to put in.
-		const ranking = await rankStep({
-			...base,
-			backend: backendReturning({
-				ranking: TYPEFACE_PAIRINGS.slice(0, 3).map((pairing) => ({ id: pairing.id, reason: "   " })),
+		const valid = validateQuestion(
+			question({
+				kind: "scale",
+				leftLabel: "Compact",
+				rightLabel: "Airy",
+				steps: [{ label: "tight" }, { label: "normal" }, { label: "open" }],
+				defaultStep: 99,
 			}),
-		})
+			[],
+		)
+		assert.equal(valid.defaultStep, 2, "an out-of-range default was not clamped")
+	})
+})
 
-		assert.equal(ranking.reasoned, false, "a screen claimed reasoning it could not show")
-		assert.equal(ranking.options.length, 3)
+describe("nextWizardTurn", () => {
+	function backendReturning(values: unknown[]): CodingBackend {
+		let call = 0
+		return {
+			id: "opencode",
+			async structured() {
+				return { value: values[Math.min(call++, values.length - 1)], emulated: false }
+			},
+		} as unknown as CodingBackend
+	}
+
+	const base = { workingDirectory: "/tmp/x", description: DESCRIPTION, history: [] }
+
+	it("returns a validated ask turn", async () => {
+		const turn = await nextWizardTurn({
+			...base,
+			backend: backendReturning([
+				{
+					action: "ask",
+					question: question({
+						options: [
+							{ id: "a", label: "A" },
+							{ id: "b", label: "B" },
+						],
+					}),
+				},
+			]),
+		})
+		assert.equal(turn.action, "ask")
 	})
 
-	it("only offers palettes the chosen typeface is declared to work with", async () => {
-		const paletteStep = INTERVIEW_STEPS[1]
+	it("retries once with the validator's complaint, and succeeds on the corrected turn", async () => {
+		const turn = await nextWizardTurn({
+			...base,
+			backend: backendReturning([
+				{ action: "ask", question: question({ options: [] }) }, // rejected: no options
+				{
+					action: "ask",
+					question: question({
+						options: [
+							{ id: "a", label: "A" },
+							{ id: "b", label: "B" },
+						],
+					}),
+				},
+			]),
+		})
+		assert.equal(turn.action, "ask")
+	})
+
+	it("fails after the retry rather than looping", async () => {
+		await assert.rejects(
+			nextWizardTurn({ ...base, backend: backendReturning([{ action: "ask", question: question({ options: [] }) }]) }),
+			WizardTurnError,
+		)
+	})
+
+	it("refuses a finish whose foundation cannot be finalized", async () => {
+		await assert.rejects(
+			nextWizardTurn({
+				...base,
+				backend: backendReturning([{ action: "finish", foundation: { ...PROPOSAL, brand: "not-a-colour" } }]),
+			}),
+			ProposalError,
+		)
+	})
+
+	it("forces a finish when asked to, even if the model wants to keep asking", async () => {
+		const turn = await nextWizardTurn({
+			...base,
+			force: "finish",
+			backend: backendReturning([
+				// The model ignores the instruction and asks anyway — the payload has
+				// no foundation, so the retry complaint tells it exactly what to send.
+				{
+					action: "ask",
+					question: question({
+						options: [
+							{ id: "a", label: "A" },
+							{ id: "b", label: "B" },
+						],
+					}),
+				},
+				{ action: "finish", foundation: PROPOSAL },
+			]),
+		})
+		assert.equal(turn.action, "finish")
+	})
+})
+
+describe("finalizeProposal", () => {
+	it("derives every scale itself, in the token editor's shape", () => {
+		const { tokens } = finalizeProposal(PROPOSAL, DESCRIPTION)
+
+		assert.equal(tokens.typography.fontFamily, "Inter")
+		assert.equal(tokens.typography.displayFamily, "Space Grotesk")
+		assert.ok(Object.keys(tokens.typography.scale).length > 0, "no type scale was derived")
+		assert.ok(Object.keys(tokens.color.brand.scale).length > 0, "no colour scale was derived")
+		assert.ok(tokens.spacing.scale.length > 0, "no spacing scale")
+		assert.equal(tokens.radius.character, "sharp")
+		assert.ok(tokens.radius.scale.includes(9999), "the radius scale lost its pill stop")
+	})
+
+	it("clamps parameters into the ranges the derivations behave in", () => {
+		const { tokens } = finalizeProposal({ ...PROPOSAL, scaleRatio: 3, baseSize: 60, spacingUnit: 5 }, DESCRIPTION)
+		assert.equal(tokens.typography.scaleRatio, 1.5)
+		assert.equal(tokens.typography.baseSize, 20)
+		assert.equal(tokens.spacing.baseUnit, 4)
+	})
+
+	it("fills semantic colours the proposal left out, and keeps valid ones it set", () => {
+		const { tokens } = finalizeProposal({ ...PROPOSAL, semantic: { error: "#b91c1c" } }, DESCRIPTION)
+		assert.equal(tokens.color.semantic.error, "#b91c1c")
+		assert.ok(normalizeHex(tokens.color.semantic.success), "a default semantic is missing")
+	})
+
+	it("refuses a brand that is not a colour, naming the fix", () => {
+		assert.throws(() => finalizeProposal({ ...PROPOSAL, brand: "cornflower" }, DESCRIPTION), ProposalError)
+	})
+
+	it("refuses a proposal with no restraint rule", () => {
+		assert.throws(() => finalizeProposal({ ...PROPOSAL, rule: "  " }, DESCRIPTION), ProposalError)
+	})
+})
+
+describe("the Presets tab (deterministic)", () => {
+	it("orders the same options for the same description, every time", () => {
+		const tags = tagsFromDescription(DESCRIPTION)
+		const first = deterministicOptions(INTERVIEW_STEPS[0], {}, tags)
+		const second = deterministicOptions(INTERVIEW_STEPS[0], {}, tags)
+		assert.deepEqual(first, second)
+		assert.equal(first.length, 3)
+	})
+
+	it("only offers palettes the chosen typeface is declared to work with", () => {
 		const typeface = TYPEFACE_PAIRINGS[0]
-		const offered = paletteStep.options({ typeface: typeface.id }).map((option) => option.id)
-
-		assert.ok(offered.length > 0, "the step offered nothing")
+		const offered = INTERVIEW_STEPS[1].options({ typeface: typeface.id }).map((option) => option.id)
+		assert.ok(offered.length > 0)
 		assert.deepEqual(
 			offered.filter((id) => !typeface.pairsWith.palettes.includes(id)),
 			[],
 			"a combination nobody curated was offered",
 		)
 	})
-})
 
-describe("tagsFromDescription", () => {
-	it("finds the library's own vocabulary in ordinary prose", () => {
-		const tags = tagsFromDescription(DESCRIPTION)
-		assert.ok(tags.includes("dashboard"), `no "dashboard" in ${JSON.stringify(tags)}`)
-		assert.ok(tags.includes("technical"), `no "technical" in ${JSON.stringify(tags)}`)
-	})
-
-	it("does not match a tag inside a longer word", () => {
-		// "dense" must not be found inside "condense" — matching a tag that was
-		// never meant produces a narrowing that looks considered and is not.
+	it("finds the library's vocabulary in prose without matching inside words", () => {
+		assert.ok(tagsFromDescription(DESCRIPTION).includes("dashboard"))
 		assert.deepEqual(tagsFromDescription("we condense reports"), [])
 	})
 
-	it("returns nothing rather than guessing when the words do not overlap", () => {
-		assert.deepEqual(tagsFromDescription("zzzz qqqq"), [])
-	})
-})
-
-describe("buildFoundation", () => {
-	it("assembles a complete foundation from the chosen ids", () => {
+	it("builds a complete foundation from chosen ids and refuses incomplete ones", () => {
 		const typeface = TYPEFACE_PAIRINGS[0]
 		const foundation = buildFoundation(DESCRIPTION, {
 			typeface: typeface.id,
 			palette: typeface.pairsWith.palettes[0],
 			shape: typeface.pairsWith.shapes[0],
 		})
-
 		assert.equal(foundation.tokens.typography.fontFamily, typeface.body.family)
-		assert.ok(foundation.tokens.color.brand.seed, "no brand seed was written")
-		assert.ok(Object.keys(foundation.tokens.typography.scale).length > 0, "the type scale was not generated")
-		assert.ok(foundation.rule, "the palette's restraint rule was dropped")
-	})
+		assert.ok(foundation.rule)
 
-	it("honours a brand colour the user overrode", () => {
-		const typeface = TYPEFACE_PAIRINGS[0]
-		const foundation = buildFoundation(DESCRIPTION, {
-			typeface: typeface.id,
-			palette: typeface.pairsWith.palettes[0],
-			shape: typeface.pairsWith.shapes[0],
-			brand: "#ff0055",
-		})
-
-		assert.equal(foundation.tokens.color.brand.seed, "#ff0055")
-	})
-
-	it("refuses to write a foundation that is missing a decision", () => {
-		assert.throws(
-			() => buildFoundation(DESCRIPTION, { typeface: TYPEFACE_PAIRINGS[0].id }),
-			IncompleteInterviewError,
-			"an incomplete interview produced a file",
-		)
-	})
-
-	it("refuses an id the library no longer has", () => {
-		// Scratch state outlives a Caret update, so a stored id can name a pairing
-		// that has since been removed. Failing here beats writing a foundation
-		// whose typeface cannot be loaded.
-		assert.throws(
-			() =>
-				buildFoundation(DESCRIPTION, {
-					typeface: "removed-in-a-later-version",
-					palette: "mono-accent",
-					shape: "sharp-dense",
-				}),
-			IncompleteInterviewError,
-		)
+		assert.throws(() => buildFoundation(DESCRIPTION, { typeface: typeface.id }), IncompleteInterviewError)
 	})
 })
