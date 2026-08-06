@@ -75,6 +75,14 @@ export interface OpencodePromptResponse {
 export type OpencodeEvent =
 	| { type: "message.part.updated"; properties: { sessionID: string; part: OpencodePart } }
 	| { type: "message.part.delta"; properties: { sessionID: string; partID: string; field: string; delta: string } }
+	// Announces a message's existence and role, always before its parts. The
+	// mapper leans on that ordering to tell the assistant's parts from the echo
+	// of the user's own prompt.
+	| { type: "message.updated"; properties: { sessionID: string; info?: { id?: string; role?: string } } }
+	// Emitted continuously while a run is live (`{"status":{"type":"busy"}}`).
+	// Ignored: `session.idle` is the turn boundary. Listed so nobody mistakes it
+	// for an undocumented completion signal — the pinned binary emits both.
+	| { type: "session.status"; properties: { sessionID: string; status?: { type?: string } } }
 	| { type: "session.idle"; properties: { sessionID: string } }
 	| { type: "session.error"; properties: { sessionID?: string; error?: { name?: string; data?: { message?: string } } } }
 	| { type: "file.edited"; properties: { file: string } }

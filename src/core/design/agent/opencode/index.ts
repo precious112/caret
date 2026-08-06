@@ -13,8 +13,6 @@
  * nothing is ever decided behind Caret's back; the `plan` agent on read-only
  * sessions is a second line, not the boundary.
  */
-import { randomUUID } from "crypto"
-
 import { Logger } from "@/shared/services/Logger"
 import {
 	type AvailabilityReport,
@@ -270,7 +268,7 @@ export class OpencodeBackend implements CodingBackend {
 	 */
 	async readTranscript(workingDirectory: string, sessionId: string): Promise<BackendEvent[]> {
 		const server = await this.server()
-		const messages = await request<Array<{ info: { role: string }; parts: OpencodePart[] }>>(
+		const messages = await request<Array<{ info: { id: string; role: string }; parts: OpencodePart[] }>>(
 			server,
 			`/session/${sessionId}/message`,
 			{ query: { directory: workingDirectory } },
@@ -288,8 +286,16 @@ export class OpencodeBackend implements CodingBackend {
 			}
 
 			// Assistant parts are already terminal here, so the live mapper's
-			// suffix bookkeeping is exactly right: nothing was emitted before.
-			const mapper = new EventMapper(sessionId, "")
+			// suffix bookkeeping is exactly right: nothing was emitted before. The
+			// message is announced first, as the live bus would have — the mapper
+			// only maps parts of messages it has seen declared as the assistant's.
+			const mapper = new EventMapper(sessionId)
+			events.push(
+				...mapper.map({
+					type: "message.updated",
+					properties: { sessionID: sessionId, info: { id: message.info.id, role: "assistant" } },
+				}),
+			)
 			for (const part of message.parts) {
 				events.push(...mapper.map({ type: "message.part.updated", properties: { sessionID: sessionId, part } }))
 			}
@@ -392,19 +398,22 @@ class OpencodeSessionHandle implements BackendSession {
 			directory: this.options.workingDirectory,
 		})
 
-		// Caret assigns the user message's id rather than letting the server do it.
-		// Parts of that message come back over the same bus as the assistant's, so
-		// without a way to recognise them the chat opens every turn by replaying
-		// the user's own prompt back at them as if the model had said it.
-		const userMessageId = `msg_caret_${randomUUID().replace(/-/g, "")}`
-		const mapper = new EventMapper(this.id, userMessageId)
+		// The message id is the server's to assign, never Caret's. A client id was
+		// tried here (`msg_caret_<uuid>`) to recognise the user's own message on
+		// the bus, and it broke resumed sessions entirely: the server's agent loop
+		// orders its queue by message id, ids it generates are ascending, and a
+		// foreign id sorting *before* the previous turn's assistant messages looks
+		// like already-processed history — the loop enters, finds "nothing newer",
+		// and exits without ever running the model. An id sorting *after* them is
+		// the mirror failure: the same prompt looks perpetually unprocessed and is
+		// re-run forever. The mapper recognises the user's message by role instead.
+		const mapper = new EventMapper(this.id)
 
 		try {
 			await request(this.server, `/session/${this.id}/prompt_async`, {
 				method: "POST",
 				query: { directory: this.options.workingDirectory },
 				body: {
-					messageID: userMessageId,
 					parts: [
 						{ type: "text", text: input.text },
 						...(input.images ?? []).map((url, index) => ({
@@ -473,16 +482,24 @@ class OpencodeSessionHandle implements BackendSession {
  * a part that gets longer, not as deltas the chat can simply append. Emitting
  * only the suffix beyond what was already emitted makes the mapping idempotent,
  * which matters because the same part can be re-sent after a tool call.
+ *
+ * Parts are mapped only for messages the bus has announced as `role:
+ * "assistant"` — the server emits `message.updated` before any of a message's
+ * parts. The user's own prompt comes back over the same bus, and without this
+ * the chat opens every turn by replaying it as if the model had said it.
+ * Default-exclude, by role: anything not announced as the assistant's stays
+ * off-screen, and no assumption is made about anyone's id scheme (see `send()`
+ * for how a Caret-assigned id broke the server's queue ordering).
+ *
+ * Exported for its tests only.
  */
-class EventMapper {
+export class EventMapper {
 	private emittedLength = new Map<string, number>()
 	private toolStarted = new Set<string>()
 	private toolFinished = new Set<string>()
+	private assistantMessages = new Set<string>()
 
-	constructor(
-		private readonly sessionId: string,
-		private readonly userMessageId: string,
-	) {}
+	constructor(private readonly sessionId: string) {}
 
 	*map(event: OpencodeEvent): Iterable<BackendEvent> {
 		return yield* this.mapEvent(event)
@@ -490,10 +507,18 @@ class EventMapper {
 
 	private *mapEvent(event: OpencodeEvent): Iterable<BackendEvent> {
 		switch (event.type) {
+			case "message.updated": {
+				const properties = event.properties as { sessionID: string; info?: { id?: string; role?: string } }
+				if (properties.sessionID !== this.sessionId) return
+				const info = properties.info
+				if (info?.role === "assistant" && info.id) this.assistantMessages.add(info.id)
+				return
+			}
+
 			case "message.part.updated": {
 				const properties = event.properties as { sessionID: string; part: OpencodePart }
 				if (properties.sessionID !== this.sessionId) return
-				if (properties.part.messageID === this.userMessageId) return
+				if (!this.assistantMessages.has(properties.part.messageID)) return
 				yield* this.mapPart(properties.part)
 				return
 			}

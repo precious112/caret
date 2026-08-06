@@ -123,6 +123,7 @@ export class AgentConversation {
 	private pendingApproval: PendingApproval | null = null
 	private approvalResolver: ((ok: boolean) => void) | null = null
 	private backendId: BackendId | null = null
+	private stopRequested = false
 	private backendName: string | null = null
 	private providerName: string | null = null
 	private blocked: string | null = null
@@ -163,6 +164,9 @@ export class AgentConversation {
 	 * outbound path had.
 	 */
 	async run(request: RunRequest): Promise<RunOutcome> {
+		// Reset before anything async: a Stop pressed while the session is still
+		// being opened is aimed at this turn.
+		this.stopRequested = false
 		const backend = await this.resolve(request.kind)
 
 		if (!this.activity || this.activity.kind !== request.kind || request.resumeSessionId) {
@@ -196,9 +200,16 @@ export class AgentConversation {
 
 		let text = ""
 		let ok = true
+		// A turn can end without the model ever having run: the backend accepts
+		// the prompt, its own loop finds nothing to do, and a perfectly real idle
+		// arrives over an otherwise empty stream. That is a failed turn, not a
+		// quiet success — reporting it `ok` is how a broken sync spent days being
+		// blamed on the model. `done` alone is not activity.
+		let sawActivity = false
 
 		try {
 			for await (const event of session.send({ text: request.prompt, images: request.images })) {
+				if (event.type !== "done") sawActivity = true
 				if (event.type === "text") text += event.text
 				if (event.type === "error") ok = false
 
@@ -221,6 +232,17 @@ export class AgentConversation {
 				recoverable: true,
 			})
 		} finally {
+			// A user's Stop can also end a turn before its first event; that is
+			// their call, not a backend fault.
+			if (ok && !sawActivity && !this.stopRequested) {
+				ok = false
+				applyEvent(this.transcript, {
+					type: "error",
+					message:
+						"The backend accepted the prompt but never ran it — nothing was done. This is a Caret↔backend fault, not the model.",
+					recoverable: true,
+				})
+			}
 			this.streaming = false
 			this.push(true)
 		}
@@ -241,6 +263,7 @@ export class AgentConversation {
 	}
 
 	async abort(): Promise<void> {
+		this.stopRequested = true
 		await this.session?.abort()
 		// A pending approval outlives the turn it belongs to unless it is cleared,
 		// and a stop button that leaves a dead question on screen is worse than no

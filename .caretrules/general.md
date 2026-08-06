@@ -18,6 +18,11 @@ This file is the secret sauce for working effectively in this codebase. It captu
 - When adding new feature flags, see this PR as a reference https://github.com/cline/cline/pull/7566
 - Additional instructions about making requests: @.clinerules/network.md
 
+## OpenCode Backend (bundled server)
+- **Never client-assign message IDs on `prompt_async`.** The server's agent loop orders its work queue by message id, and its own ids are monotonically ascending. A foreign id sorting *before* the previous turn's messages reads as already-processed history — the loop exits at step 0 without running the model, emits a perfectly real `session.idle`, and a resumed session silently no-ops. An id sorting *after* them is the mirror failure: the same prompt is reprocessed forever (observed: 107 identical replies). The `EventMapper` recognises the user's own prompt echo by role (`message.updated` announces a message's role before its parts arrive), never by id.
+- **Primary evidence for backend bugs is free — read it before theorising.** `~/.local/share/opencode/opencode.db` (sqlite: `session`, `message`, `part`, `event`) holds every session's full transcript, and `~/.local/share/opencode/log/opencode.log` shows the agent loop's own decisions (`loop step=N`, `exiting loop`, `process messageID=...`; timestamps are UTC). Three verify runs were spent testing prompt-wording theories for a turn the model was never given; one query of either source would have shown it. Free-tier models (`opencode/mimo-v2.5-free`) reproduce protocol-level behavior at zero cost — `scripts/probe-idle.ts` is the template, and it must kill the server in a `finally` (a leaked agent loop polls the provider forever).
+- A turn can end with a *legitimate* `session.idle` without the model ever having run. `AgentConversation.run()` therefore fails any turn with zero assistant activity — don't weaken that check, and don't add completion signals off `session.status` (it's a busy-heartbeat, not a turn boundary).
+
 ## gRPC/Protobuf Communication
 The extension and webview communicate via gRPC-like protocol over VS Code message passing.
 
