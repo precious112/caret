@@ -14,10 +14,23 @@ import { ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
 import { ASPECTS, type AssetRecipe, type GeneratorPalette, type RecipeInput, type RecipeRequest } from "./types"
 
 export { findGenerator, GENERATORS, type Generator, type GeneratorInput, runGenerator } from "./generators"
+export {
+	allRunnableRecipes,
+	defaultAspect,
+	findChoice,
+	GENERATION_QUESTIONS,
+	type GenerationAnswers,
+	type GenerationChoice,
+	type GenerationQuestion,
+	isComplete,
+	narrowForAnswers,
+	proposeTag,
+} from "./interview"
 export { DEFAULT_PALETTE, derivePalette, hexToHsl, hslToHex, normalizeHex } from "./palette"
 export { ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
 export {
 	ASPECTS,
+	type AssetPurpose,
 	type AssetRecipe,
 	type GeneratorPalette,
 	type RecipeInput,

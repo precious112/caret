@@ -13,12 +13,14 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { AssetEntryWire, ProjectState } from "../../../shared/ipc"
 import { invoke, on, pathForFile } from "../ipc"
 import { cn } from "../lib/utils"
+import { GenerateAsset } from "./GenerateAsset"
 
 export function AssetsView({ project, onClose }: { project: ProjectState; onClose(): void }) {
 	const [assets, setAssets] = useState<AssetEntryWire[]>([])
 	const [dragging, setDragging] = useState(false)
 	const [problems, setProblems] = useState<Array<{ file: string; reason: string }>>([])
 	const [busy, setBusy] = useState(false)
+	const [generating, setGenerating] = useState(false)
 
 	const refresh = useCallback(async () => {
 		setAssets((await invoke("assets:list", project.path)) ?? [])
@@ -105,7 +107,7 @@ export function AssetsView({ project, onClose }: { project: ProjectState; onClos
 
 	return (
 		<div
-			className="flex flex-1 flex-col overflow-hidden bg-shell-bg"
+			className="relative flex flex-1 flex-col overflow-hidden bg-shell-bg"
 			data-testid="assets-view"
 			onDragLeave={() => setDragging(false)}
 			onDragOver={(event) => {
@@ -123,6 +125,14 @@ export function AssetsView({ project, onClose }: { project: ProjectState; onClos
 					</p>
 				</div>
 				<div className="flex gap-2">
+					<button
+						className="rounded-md border border-shell-border px-3 py-1.5 text-sm disabled:opacity-50"
+						data-testid="assets-generate"
+						disabled={busy}
+						onClick={() => setGenerating(true)}
+						type="button">
+						Generate
+					</button>
 					<button
 						className="rounded-md bg-caret-accent px-3 py-1.5 text-sm text-white disabled:opacity-50"
 						data-testid="assets-add"
@@ -170,6 +180,19 @@ export function AssetsView({ project, onClose }: { project: ProjectState; onClos
 					</ul>
 				)}
 			</div>
+
+			{generating && (
+				<GenerateAsset
+					onClose={async () => {
+						setGenerating(false)
+						// The watcher fires too, but not before this returns — refreshing
+						// here is what makes the new asset visible the instant the panel
+						// closes rather than a beat later.
+						await refresh()
+					}}
+					project={project}
+				/>
+			)}
 		</div>
 	)
 }

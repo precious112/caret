@@ -4,7 +4,18 @@ import * as os from "os"
 import * as path from "path"
 import "should"
 
-import { canNarrow, composeVariants, describeVariant, findAssetRecipe, narrowRecipes } from "../asset-library"
+import {
+	canNarrow,
+	composeVariants,
+	defaultAspect,
+	describeVariant,
+	findAssetRecipe,
+	GENERATION_QUESTIONS,
+	isComplete,
+	narrowForAnswers,
+	narrowRecipes,
+	proposeTag,
+} from "../asset-library"
 import { GENERATORS, runGenerator } from "../asset-library/generators"
 import { derivePalette, hexToHsl, hslToHex } from "../asset-library/palette"
 import { ASSET_RECIPES, runnableRecipes } from "../asset-library/recipes"
@@ -89,6 +100,65 @@ describe("asset recipe library", () => {
 		refusal.ok.should.be.false()
 		// The refusal has to name the vocabulary, or the caller cannot recover.
 		;(refusal as { reason: string }).reason.should.containEql("editorial")
+	})
+})
+
+describe("the generation interview", () => {
+	it("asks about the job, never about the look", () => {
+		// The load-bearing property of the whole surface. A question offering a
+		// free-text answer is a prompt box with better manners, and the phase
+		// exists specifically to not have one.
+		GENERATION_QUESTIONS.should.have.length(2)
+		for (const question of GENERATION_QUESTIONS) {
+			question.choices.length.should.be.above(1)
+			for (const choice of question.choices) {
+				choice.label.should.not.be.empty()
+				choice.hint.should.not.be.empty()
+			}
+		}
+	})
+
+	it("filters by purpose rather than ranking by it", () => {
+		// A section divider offered as a hero background is not a worse match, it
+		// is the wrong object, and no tag overlap should promote it.
+		const backgrounds = narrowForAnswers({ purpose: "background", volume: "recede" }, tokens())
+		backgrounds.map((recipe) => recipe.id).should.not.containEql("section-edge")
+		backgrounds.every((recipe) => recipe.purposes.includes("background")).should.be.true()
+
+		const dividers = narrowForAnswers({ purpose: "divider", volume: "lead" }, tokens())
+		dividers.map((recipe) => recipe.id).should.deepEqual(["section-edge"])
+	})
+
+	it("lets the volume answer reorder the same set", () => {
+		const quiet = narrowForAnswers({ purpose: "background", volume: "recede" }, tokens())
+		const loud = narrowForAnswers({ purpose: "background", volume: "lead" }, tokens())
+		quiet.map((recipe) => recipe.id).should.not.deepEqual(loud.map((recipe) => recipe.id))
+	})
+
+	it("offers everything when nothing has been answered yet", () => {
+		narrowForAnswers({}, tokens()).length.should.equal(ASSET_RECIPES.length)
+	})
+
+	it("opens on proportions that suit the job", () => {
+		const wash = findAssetRecipe("quiet-wash")
+		defaultAspect(wash!, { purpose: "background" }).should.equal("16:9")
+		// And never on a ratio the recipe was not composed for, whatever the job
+		// would prefer.
+		const shape = findAssetRecipe("soft-shape")
+		shape!.aspects.should.containEql(defaultAspect(shape!, { purpose: "background" }))
+	})
+
+	it("proposes a name that reads like the slot, not like the recipe", () => {
+		proposeTag(findAssetRecipe("quiet-wash")!, { purpose: "background" }).should.equal("hero-quiet-wash")
+		proposeTag(findAssetRecipe("soft-shape")!, { purpose: "accent" }).should.equal("soft-shape")
+	})
+
+	it("knows when it has enough to proceed", () => {
+		isComplete({}).should.be.false()
+		isComplete({ purpose: "background" }).should.be.false()
+		isComplete({ purpose: "background", volume: "recede" }).should.be.true()
+		// An answer Caret does not recognise is not an answer.
+		isComplete({ purpose: "background", volume: "whatever" }).should.be.false()
 	})
 })
 

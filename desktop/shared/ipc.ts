@@ -396,6 +396,54 @@ export interface AssetAddResult {
 	rejected: Array<{ file: string; reason: string }>
 }
 
+/** One question in the generation interview, mirrored for the renderer. */
+export interface GenerationQuestionWire {
+	id: string
+	question: string
+	why: string
+	choices: Array<{ id: string; label: string; hint: string }>
+}
+
+/**
+ * A recipe as the picker sees it, carrying its own specimen.
+ *
+ * The specimen is the recipe rendered against *this project's* foundation, not
+ * a stock thumbnail: the whole claim of the library is that a recipe produces
+ * something that belongs to your project, and a card that shows somebody else's
+ * palette is arguing the opposite.
+ */
+export interface RecipeCardWire {
+	id: string
+	name: string
+	use: string
+	kind: string
+	aspects: string[]
+	/** An inline `data:` URL of variant 0, ready for an `<img>`. */
+	specimen: string
+	/**
+	 * The project's own surface colour, to put *behind* the specimen.
+	 *
+	 * Load-bearing rather than decorative. Several recipes are transparent by
+	 * design — an overlay, a halftone, a grid — and rendered against the chrome's
+	 * near-black they show nothing at all: the picker offered four options and
+	 * two of them looked like empty cards. The backdrop is also the only honest
+	 * preview, since what the user is choosing is how this looks *on their page*.
+	 */
+	surface: string
+	transparent: boolean
+}
+
+/** One generated option, ready to be looked at and picked. */
+export interface GeneratedVariantWire {
+	variant: number
+	/** Inline `data:` URL. Nothing is written to disk until the user picks. */
+	preview: string
+	width: number
+	height: number
+	/** As on `RecipeCardWire`, and for the same reason. */
+	surface: string
+}
+
 /** Renderer → main. Each entry is an `ipcRenderer.invoke` channel. */
 export interface IpcRequests {
 	"project:pickFolder": () => string | null
@@ -440,6 +488,33 @@ export interface IpcRequests {
 	"assets:setPoster": (projectPath: string, tag: string, dataUrl: string) => WriteResult
 	/** Opens a native file picker filtered to supported asset types. */
 	"assets:pickFiles": () => string[]
+
+	/** The generation interview's questions. Caret owns these; no model invents them. */
+	"generate:questions": () => GenerationQuestionWire[]
+	/**
+	 * Recipes that fit the answers, each rendered against the project's own
+	 * foundation. Free and synchronous for the generator lane — a recipe card is
+	 * an integer's worth of work, which is why the picker can afford to be honest
+	 * and show the thing itself rather than a stock preview.
+	 */
+	"generate:recipes": (projectPath: string, answers: Record<string, string>) => RecipeCardWire[]
+	/** N variants of one recipe. Still nothing on disk. */
+	"generate:variants": (
+		projectPath: string,
+		recipeId: string,
+		answers: Record<string, string>,
+		aspect: string,
+		count: number,
+	) => GeneratedVariantWire[]
+	/** Commits the chosen variant as an ordinary asset, with its provenance. */
+	"generate:accept": (
+		projectPath: string,
+		recipeId: string,
+		answers: Record<string, string>,
+		aspect: string,
+		variant: number,
+		tag: string,
+	) => WriteResult & { tag?: string }
 
 	"sync:now": (projectPath: string) => SyncOutcome
 	"sync:rollback": (projectPath: string) => SyncOutcome

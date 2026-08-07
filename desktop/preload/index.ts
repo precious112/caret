@@ -42,6 +42,11 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"assets:remove": true,
 	"assets:setPoster": true,
 	"assets:pickFiles": true,
+
+	"generate:questions": true,
+	"generate:recipes": true,
+	"generate:variants": true,
+	"generate:accept": true,
 	"sync:now": true,
 	"sync:rollback": true,
 	"sync:markSynced": true,

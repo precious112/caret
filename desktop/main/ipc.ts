@@ -41,6 +41,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
 import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
+import { acceptVariant, generationQuestions, recipeCards, recipeVariants } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
@@ -296,6 +297,39 @@ export function registerIpcHandlers(windows: WindowManager): void {
 			return { ok: false, error: err instanceof Error ? err.message : String(err) }
 		}
 	})
+
+	// ── generated assets ──────────────────────────────────────────────────────
+
+	ipcMain.handle("generate:questions", () => generationQuestions())
+
+	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>) =>
+		recipeCards(projectPath, answers),
+	)
+
+	ipcMain.handle(
+		"generate:variants",
+		(_event, projectPath: string, recipeId: string, answers: Record<string, string>, aspect: string, count: number) =>
+			recipeVariants(projectPath, recipeId, answers, aspect, count),
+	)
+
+	ipcMain.handle(
+		"generate:accept",
+		async (
+			_event,
+			projectPath: string,
+			recipeId: string,
+			answers: Record<string, string>,
+			aspect: string,
+			variant: number,
+			tag: string,
+		) => {
+			const result = await acceptVariant(projectPath, recipeId, answers, aspect, variant, tag)
+			// A new asset changes the always-on context every agent reads, so the
+			// rules files have to follow it in the same breath.
+			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+			return result
+		},
+	)
 
 	// ── sync ──────────────────────────────────────────────────────────────────
 

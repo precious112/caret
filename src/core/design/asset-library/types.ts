@@ -21,6 +21,16 @@ import type { FoundationTokens } from "../types"
 export type RecipeKind = "photo" | "texture" | "pattern" | "gradient" | "mark"
 
 /**
+ * The job an asset does, which is what the user is actually asked about.
+ *
+ * Separate from `kind` on purpose. Kind describes the artefact; purpose
+ * describes the slot, and only one of those is a question a non-designer can
+ * answer. It also **filters** rather than ranks — a section divider offered as
+ * a hero background is not a worse match, it is the wrong object.
+ */
+export type AssetPurpose = "background" | "overlay" | "accent" | "divider"
+
+/**
  * How a recipe is realised. Only `raster` costs money, and only `raster`
  * needs an account of any kind.
  */
@@ -108,6 +118,8 @@ export interface AssetRecipe {
 	use: string
 	kind: RecipeKind
 	lane: RecipeLane
+	/** The slots this belongs in. At least one, and they filter the offer. */
+	purposes: AssetPurpose[]
 	/**
 	 * The **shared** vocabulary — `LIBRARY_TAGS` from the foundation library.
 	 *
