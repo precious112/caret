@@ -1539,6 +1539,49 @@ async function main(): Promise<void> {
 		return `bundled backend selected, chat enabled${model ? `, model ${model.id} (${model.source})` : ""}`
 	})
 
+	await scenario("bf. @ picks an asset in the chat composer too", async () => {
+		// The composer is a different surface from the canvas — Caret's own window,
+		// not the generated shell — so nothing the canvas picker does carries over,
+		// and this reached a user precisely because only the canvas was covered.
+		// Needs a backend: the composer is disabled without one.
+		const input = chrome.getByTestId("chat-input")
+		await input.fill("")
+		await input.click()
+		await chrome.keyboard.type("Put @her")
+
+		const list = chrome.getByTestId("asset-mentions")
+		await list.waitFor({ timeout: 15_000 })
+		const option = list.locator('[data-asset-mention="hero-shot-2x"]')
+		await option.waitFor({ timeout: 15_000 })
+
+		const width = await waitFor(
+			"the composer thumbnail to decode",
+			async () => {
+				const value = await option.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)
+				return value > 0 ? value : null
+			},
+			20_000,
+		)
+		assert(width === 240, `the composer thumbnail decoded at ${width}px`)
+
+		// Clicking, and hovering first — the two things that were broken in the
+		// canvas picker and would fail the same way here.
+		await option.hover()
+		await option.click()
+		await waitFor(
+			"the tag to land in the draft",
+			async () => ((await input.inputValue()).includes("@hero-shot-2x") ? true : null),
+			10_000,
+		)
+
+		// Choosing must not also send: the composer sends on Enter, and the picker
+		// has to consume that key first.
+		assert(!(await chrome.getByTestId("chat-input").isDisabled()), "the composer sent the message on a pick")
+
+		await input.fill("")
+		return "picker opened in the chat composer, thumbnail decoded, click inserted the tag without sending"
+	})
+
 	const inference = model ? scenario : (name: string, _run: () => Promise<string>) => void skip(name, NO_MODEL_REASON)
 
 	await inference("ee. an instruction typed in the chat rewrites the design source to exactly that", async () => {

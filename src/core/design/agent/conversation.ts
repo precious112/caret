@@ -10,6 +10,7 @@
  * which is the only shape in which chat history is worth keeping at all.
  */
 import { Logger } from "@/shared/services/Logger"
+import { expandReferences, readAssetIndex } from "../assets"
 import {
 	type BackendEvent,
 	type BackendId,
@@ -285,14 +286,36 @@ export class AgentConversation {
 		return { ok, sessionId: session.id, text, filesChanged: [...this.transcript.files] }
 	}
 
-	/** Continues the current activity, or opens a brainstorming one. */
+	/**
+	 * Continues the current activity, or opens a brainstorming one.
+	 *
+	 * `@tag` is resolved here rather than by the caller, so every surface that can
+	 * send a chat message gets it — and here rather than left to the model, which
+	 * is the rule §4.6 states for the visual editor and holds for the same reason:
+	 * an agent that fails to resolve a tag does not error, it invents an asset
+	 * that suits the name. The chat still shows what the user typed; only the
+	 * model sees the expansion.
+	 */
 	async sendMessage(text: string): Promise<RunOutcome> {
 		const current = this.activity
+		const expansion = expandReferences(text, await readAssetIndex(this.deps.projectPath))
+		const prompt =
+			expansion.unknown.length > 0
+				? `${expansion.text}\n\nThe user referred to ${expansion.unknown
+						.map((tag) => `@${tag}`)
+						.join(
+							", ",
+						)}, which ${expansion.unknown.length === 1 ? "is not an asset" : "are not assets"} in this project. Do not invent ${
+						expansion.unknown.length === 1 ? "it" : "them"
+					} — say the tag does not exist and list what does.`
+				: expansion.text
+
 		return this.run({
 			kind: current?.kind ?? "chat",
 			title: current?.title ?? "Chat",
 			mode: current?.mode ?? "write",
-			prompt: text,
+			prompt,
+			displayPrompt: prompt === text ? undefined : text,
 			resumeSessionId: current?.sessionId,
 		})
 	}

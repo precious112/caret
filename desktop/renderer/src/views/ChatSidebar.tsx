@@ -28,6 +28,7 @@ import { ThinkingOrb } from "thinking-orbs"
 import type { AgentSessionWire, AgentStateWire, ProjectState, TranscriptEntryWire } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
+import { AssetMentionList, type AssetMentions, useAssetMentions } from "./AssetMentions"
 import { Markdown } from "./Markdown"
 
 export const CHAT_SIDEBAR_WIDTH = 380
@@ -66,6 +67,8 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 	const streaming = state?.streaming ?? false
 	const turns = useMemo(() => groupIntoTurns(entries), [entries])
 
+	const mentions = useAssetMentions({ project, draft, setDraft, inputRef })
+
 	const send = () => {
 		const text = draft.trim()
 		if (!text || streaming) return
@@ -82,12 +85,10 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 		model: describeModel(state?.model ?? "", state?.providerName),
 		effort: state?.effort ?? "",
 		inputRef,
+		mentions,
 		onOpenBackendSetup,
 		onStop: () => void invoke("agent:abort", project.path),
-		onReferenceAsset: () => {
-			setDraft(draft.endsWith("@") || draft.endsWith(" ") || draft === "" ? `${draft}@` : `${draft} @`)
-			inputRef.current?.focus()
-		},
+		onReferenceAsset: mentions.begin,
 	}
 
 	return (
@@ -210,12 +211,17 @@ interface ComposerProps {
 	onReferenceAsset(): void
 	onStop(): void
 	inputRef: React.RefObject<HTMLTextAreaElement | null>
+	mentions: AssetMentions
 }
 
 const PLACEHOLDER = "Ask for a change, @ for an asset…"
 
-function useComposerKeys(send: () => void) {
+function useComposerKeys(send: () => void, mentions: AssetMentions) {
 	return (event: React.KeyboardEvent) => {
+		// The picker gets first refusal on every key. Enter chooses an asset when
+		// the list is open and sends only when it is not — otherwise picking an
+		// asset would also send the half-written message.
+		if (mentions.handleKeyDown(event)) return
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault()
 			send()
@@ -234,7 +240,7 @@ function useComposerKeys(send: () => void) {
  * surface, which is what the first version of this panel did.
  */
 function Composer(props: ComposerProps) {
-	const onKeyDown = useComposerKeys(props.send)
+	const onKeyDown = useComposerKeys(props.send, props.mentions)
 
 	// A textarea does not grow on its own. Height tracks content up to the
 	// max-height ceiling (10rem, from `max-h-40`); past it, the box holds still
@@ -248,7 +254,8 @@ function Composer(props: ComposerProps) {
 	}, [props.draft, props.inputRef])
 
 	return (
-		<footer className="shrink-0 p-2.5">
+		<footer className="relative shrink-0 p-2.5">
+			<AssetMentionList mentions={props.mentions} />
 			<div className="rounded-xl border border-shell-border bg-shell-bg focus-within:border-white/20">
 				<textarea
 					className="max-h-40 min-h-[46px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2.5 leading-relaxed outline-none placeholder:text-shell-muted"
@@ -263,11 +270,9 @@ function Composer(props: ComposerProps) {
 				/>
 				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
 					{/*
-					 * Types the `@` rather than opening a picker, because the picker is
-					 * Phase 6.6 and does not exist yet. The expansion behind it *does* —
-					 * `@tag` resolves to a real asset before any instruction reaches an
-					 * agent — so this is a shortcut to something that works, not a stub
-					 * for something that does not.
+					 * Types the `@`, which is what opens the picker — the button and the
+					 * keystroke are the same act, so there is no second code path to keep
+					 * in agreement with the first.
 					 */}
 					<IconButton label="Reference an asset" onClick={props.onReferenceAsset}>
 						<Paperclip size={13} />

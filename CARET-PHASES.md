@@ -586,7 +586,8 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
 - [x] `@tag` expands to the **resolved entry inline** (path, dimensions, description) before
       any instruction reaches an agent, in the shared prompt builder so every edit surface
       gets it. Unknown tags are kept verbatim and flagged — never silently dropped.
-- [x] `@` picker in the AI-edit box and overlay editor: thumbnail autocomplete over the index,
+- [x] `@` picker in **every box that sends an instruction** — the AI-edit box, the overlay
+      editor and the chat composer: thumbnail autocomplete over the index,
       served fresh from `/__caret/assets-index`. One attach-to-an-input implementation for both
       surfaces, because the AI-edit box is react-grab's and lives in a shadow root — it cannot
       be a component, and a second implementation would drift on what a tag is. Enter chooses
@@ -599,6 +600,13 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       and received nothing), `data-react-grab-ignore-events` (in prompt mode it reads any press
       outside its selection as a dismissal and offers to discard the typed text), and keeping
       the element in the DOM until the gesture that chose it has finished being delivered.
+      The composer is Caret's own React surface, so it shares only the matching rules
+      (`desktop/shared/mentions.ts`) — generated code in the user's project cannot import from
+      Caret, and one definition of what a mention is beats two that agree today.
+- [x] **`@tag` expands on the chat path too**, in `sendMessage` rather than at a call site, so
+      every surface that can send a message gets it. The chat still shows what the user typed;
+      only the model sees the expansion, and an unknown tag is named rather than left for the
+      model to invent around.
 - [x] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
       >2×) joins the expanded reference — the selection payload now carries the target's
       rendered box, and an overlay edit uses the painted region as its box. The prompt states
