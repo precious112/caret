@@ -30,6 +30,18 @@ export type AssetOrigin =
 			answers?: Record<string, string>
 			/** The fully resolved request, for auditing what was actually asked. */
 			resolved?: string
+			/**
+			 * What post-processing did, when it ran.
+			 *
+			 * Recorded because it is lossy and irreversible: the file in the repo is
+			 * not the file the model returned, and somebody comparing them later
+			 * deserves to know that a crop and a re-encode happened rather than
+			 * assuming the model produced a 1.75:1 image at 200KB.
+			 */
+			postProcessed?: {
+				from: { bytes: number; mime: string }
+				to: { bytes: number; mime: string; width: number; height: number }
+			}
 	  }
 
 export interface AssetEntry {

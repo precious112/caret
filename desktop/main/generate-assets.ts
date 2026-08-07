@@ -33,6 +33,7 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
+import { postProcessPhotograph } from "./image-post"
 import { getSecret } from "./secrets"
 
 /**
@@ -350,13 +351,20 @@ async function acceptRasterVariant(
 
 	const palette = derivePalette(tokens)
 	const [composed] = composeVariants({ recipe, tokens, aspect, answers, count: variant + 1 }).slice(variant)
-	const extension = held.mime.includes("jpeg") ? ".jpg" : held.mime.includes("webp") ? ".webp" : ".png"
+
+	// Only now, on the one the user actually chose. Post-processing every variant
+	// would spend the work on three pictures nobody keeps.
+	const processed = await postProcessPhotograph(held.bytes, composed.width, composed.height)
+	Logger.info(
+		`[generate] ${recipe.id} → ${processed.width}x${processed.height} ${processed.mime}, ` +
+			`${Math.round(processed.originalBytes / 1024)}KB → ${Math.round(processed.bytes.length / 1024)}KB`,
+	)
 
 	const result = await addGeneratedAsset({
 		projectPath,
 		tag: tag.trim() || proposeTag(recipe, answers),
-		extension,
-		bytes: held.bytes,
+		extension: processed.extension,
+		bytes: processed.bytes,
 		description: describeVariant(recipe, composed, palette),
 		alt: "",
 		origin: {
@@ -368,6 +376,10 @@ async function acceptRasterVariant(
 			// The prompt as sent, negatives included. For a paid lane this is the
 			// only record of what the money bought.
 			resolved: held.resolved,
+			postProcessed: {
+				from: { bytes: processed.originalBytes, mime: held.mime },
+				to: { bytes: processed.bytes.length, mime: processed.mime, width: processed.width, height: processed.height },
+			},
 		},
 	})
 

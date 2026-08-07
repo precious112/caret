@@ -1425,9 +1425,24 @@ async function main(): Promise<void> {
 				(asset) => asset.tag === "hero-bench",
 			)
 			assert(entry?.kind === "image", `the photograph was indexed as ${entry?.kind}`)
-			assert(Number(entry?.bytes) > 50_000, `the photograph is only ${entry?.bytes} bytes`)
 			// Intrinsic size probed from the real file header, not from the request.
 			assert(Number(entry?.width) > 100, `the photograph measured ${entry?.width}x${entry?.height}`)
+
+			// Post-processing, checked on the file rather than on the intention.
+			// The model returns 1344x768 for a 16:9 request — 1.75:1, close enough
+			// to look fine and wrong enough to show a seam in a full-bleed hero.
+			const ratio = Number(entry?.width) / Number(entry?.height)
+			assert(Math.abs(ratio - 16 / 9) < 0.01, `the stored photograph is ${ratio.toFixed(3)}:1, not 16:9`)
+			assert(entry?.mime === "image/webp", `the photograph was stored as ${entry?.mime}`)
+
+			const post = (entry?.origin as Record<string, any>)?.postProcessed
+			assert(Boolean(post), "post-processing was not recorded")
+			// A 1.4MB PNG per hero, committed forever, is the thing this prevents.
+			assert(
+				Number(post.to.bytes) < Number(post.from.bytes) / 3,
+				`post-processing only got ${post.from.bytes} down to ${post.to.bytes} bytes`,
+			)
+			assert(Number(entry?.bytes) === Number(post.to.bytes), "the index disagrees with what was recorded")
 
 			const origin = entry?.origin as Record<string, unknown> | undefined
 			assert(origin?.lane === "raster", `the lane was recorded as ${origin?.lane}`)
@@ -1438,7 +1453,11 @@ async function main(): Promise<void> {
 			assert(String(origin?.resolved ?? "").includes("workbench"), "the resolved prompt is not the recipe's")
 
 			await chrome.getByTestId("assets-view").getByText("Done").click()
-			return `${usable} photograph(s) generated (${failures} refused), picked one, indexed at ${entry?.width}x${entry?.height} with the prompt recorded`
+			return (
+				`${usable} photograph(s) generated (${failures} refused), picked one, ` +
+				`cropped to 16:9 at ${entry?.width}x${entry?.height}, ` +
+				`${Math.round(Number(post.from.bytes) / 1024)}KB ${post.from.mime} → ${Math.round(Number(post.to.bytes) / 1024)}KB webp`
+			)
 		})
 	}
 

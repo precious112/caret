@@ -29,6 +29,20 @@ So sync is never at risk; the only downside is an occasional "uncommitted change
 
 ---
 
+## Generated photographs are not emitted as AVIF
+
+**Status:** deferred · **Severity:** none today · **From:** Phase 6.7
+
+**Symptom:** §4.7 asks for `webp`/`avif` emitted alongside a generated photograph. WebP ships; AVIF does not.
+
+**Why:** Chromium **decodes** AVIF and does not **encode** it — `canvas.toDataURL("image/avif")` returns a PNG data URL — and `nativeImage` has no AVIF path either. Encoding it needs a native module (`sharp`, or libavif directly), which means an ABI rebuild per Electron version on every platform Caret ships to.
+
+**Why deferred rather than done:** WebP is supported by every browser Caret's users target, and the saving that mattered is already taken — 1466KB of PNG became 108KB of WebP in a real run, a 13× reduction. AVIF would improve on that by perhaps a further 20%, for a native dependency in the build. That is the wrong trade while the file is already small.
+
+**When picked up:** the seam is `postProcessPhotograph` in `desktop/main/image-post.ts`, which already isolates crop → resize → encode. Only the encode step changes, and the fallback chain (WebP → JPEG) is the pattern to extend.
+
+---
+
 ## 3D assets (`glb`/`gltf`) have no still image
 
 **Status:** deferred, deliberately · **Severity:** cosmetic in the library, real for agents · **From:** Phase 6.6
