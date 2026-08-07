@@ -245,6 +245,28 @@ describe("precomputePage — dynamic content detection (outside iterators)", () 
 		hasRange(result.dynamicRanges, "dynamic-tailwind-class").should.be.true()
 	})
 
+	it("flags prop-driven text in a component file — the shape a mapped list resolves to", () => {
+		// A click on "Monolith Trainer" in a product grid resolves to the
+		// component, not the page: the page holds `products.map(p => <ProductCard
+		// product={p}/>)`, the component holds `{product.name}`. Detection always
+		// caught this shape — but the ranges were only ever computed for the
+		// focused page file and stored under a mismatched key, so the "Edit text"
+		// gate never fired and the user discovered the limit as a failure after
+		// typing. `handlePageFocused` now analyzes components/ and layouts/
+		// read-only and keys everything by resolved absolute path.
+		const source = `export function ProductCard({ product }: { product: Product }) {
+  return (
+    <div data-caret-id="product-card">
+      <p data-caret-id="p-1" className="text-brand-950">{product.name}</p>
+    </div>
+  )
+}`
+		const result = precomputePage(source, "components/ProductCard.tsx")
+		hasRange(result.dynamicRanges, "dynamic-text").should.be.true()
+		// Analysis of a component must be observation, not surgery.
+		result.modified.should.be.false()
+	})
+
 	it("should NOT flag static text as dynamic", () => {
 		const source = `export default function Page() {
   return <h1 data-caret-id="title">Static Title</h1>

@@ -2006,8 +2006,15 @@ function generateCaretGrabPlugin(): string {
 
 		const dynamicRangesMap: Map<string, Array<{ startLine: number; startCol: number; endLine: number; endCol: number; diagnostics: string[] }>> = new Map()
 
+		// macOS aliases /var to /private/var, and the fiber's path and the host's
+		// resolved path can land on opposite sides of it. A miss here silently
+		// disables the whole dynamic-content gate, so both spellings are one key.
+		function normalizeRangePath(p: string): string {
+		  return p.replace(/^\\/private\\//, "/")
+		}
+
 		function isInDynamicRange(filePath: string, line: number, col: number, diagnosticType?: string): boolean {
-		  const ranges = dynamicRangesMap.get(filePath)
+		  const ranges = dynamicRangesMap.get(normalizeRangePath(filePath))
 		  if (!ranges) return false
 		  return ranges.some(r => {
 		    const afterStart = line > r.startLine || (line === r.startLine && col >= r.startCol)
@@ -2138,7 +2145,7 @@ function generateCaretGrabPlugin(): string {
 
 		  bridge.on("precompute-result", (payload: any) => {
 		    if (payload.filePath && Array.isArray(payload.dynamicRanges)) {
-		      dynamicRangesMap.set(payload.filePath, payload.dynamicRanges)
+		      dynamicRangesMap.set(normalizeRangePath(payload.filePath), payload.dynamicRanges)
 		      log("precompute-result: loaded", payload.dynamicRanges.length, "dynamic ranges for", payload.filePath)
 		    }
 		  })

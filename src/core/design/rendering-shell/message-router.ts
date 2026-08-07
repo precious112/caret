@@ -16,6 +16,7 @@ import { mutateFlowDefinition } from "../flow-meta"
 import { bridgeFor, hostFor } from "../services"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { buildVisualEditPrompt } from "../visual-editing/context-builder"
+import { precomputePage } from "../visual-editing/page-precompute"
 import { precomputeAndApply } from "../visual-editing/post-generation-hook"
 import type {
 	AiEditRequestPayload,
@@ -276,12 +277,42 @@ async function handlePageFocused(rawFilePath: string, workspacePath: string): Pr
 	try {
 		const filePath = await resolveCaretPath(rawFilePath, workspacePath)
 		const result = await precomputeAndApply(filePath)
+		// The RESOLVED path, never the raw one. The client stores these ranges in a
+		// map keyed by file and looks them up with the absolute path the React
+		// fiber reports — a payload keyed "pages/home/index.tsx" matches nothing,
+		// which left the dynamic-text gate dead: "Edit text" stayed enabled on
+		// `{product.name}`, and the user found out only after typing, as a failure.
 		hostFor(workspacePath).sendToCanvas({
 			source: "caret-host",
 			type: "precompute-result",
-			payload: { filePath: rawFilePath, dynamicRanges: result.dynamicRanges },
+			payload: { filePath, dynamicRanges: result.dynamicRanges },
 		})
 		Logger.debug(`[design] page-focused: sent ${result.dynamicRanges.length} dynamic ranges, modified=${result.modified}`)
+
+		// Components render inside the page, so their elements are exactly as
+		// clickable — and the map's item content usually lives in one (`<p>
+		// {product.name}</p>` in ProductCard, driven by the page's data array).
+		// Analyzed read-only: healing is the page pipeline's job, and a silent
+		// write to a component from a focus event would be a surprise.
+		for (const dir of ["components", "layouts"]) {
+			const folder = path.join(workspacePath, ".caret", dir)
+			const entries = await fs.readdir(folder, { withFileTypes: true }).catch(() => [])
+			for (const entry of entries) {
+				if (!entry.isFile() || !entry.name.endsWith(".tsx")) continue
+				const componentPath = path.join(folder, entry.name)
+				try {
+					const source = await fs.readFile(componentPath, "utf-8")
+					const ranges = precomputePage(source, componentPath).dynamicRanges
+					hostFor(workspacePath).sendToCanvas({
+						source: "caret-host",
+						type: "precompute-result",
+						payload: { filePath: componentPath, dynamicRanges: ranges },
+					})
+				} catch (err) {
+					Logger.warn(`[design] page-focused: could not analyze ${componentPath}: ${err}`)
+				}
+			}
+		}
 	} catch (err) {
 		Logger.error(`[design] page-focused: precompute failed for ${rawFilePath}:`, err)
 	}
