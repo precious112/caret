@@ -5,7 +5,7 @@
  * else — no `ipcRenderer` object, no Node globals. `contextIsolation` stays on,
  * so the renderer can only reach main through this surface.
  */
-import { contextBridge, ipcRenderer } from "electron"
+import { contextBridge, ipcRenderer, webUtils } from "electron"
 
 import type { CaretBridge, IpcEventChannel, IpcRequestChannel } from "../shared/ipc"
 
@@ -36,9 +36,11 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"pages:list": true,
 	"assets:list": true,
 	"assets:add": true,
+	"assets:addBytes": true,
 	"assets:retag": true,
 	"assets:describe": true,
 	"assets:remove": true,
+	"assets:setPoster": true,
 	"assets:pickFiles": true,
 	"sync:now": true,
 	"sync:rollback": true,
@@ -110,6 +112,19 @@ const bridge: CaretBridge = {
 	},
 
 	platform: process.platform,
+
+	// The only main-world object this bridge accepts, and it never leaves the
+	// preload: a dropped File goes in, a path comes out. Electron 32 removed
+	// `File.path`, so without this a drop resolves to nothing and the library
+	// silently ignores the files — the worst shape of failure for a surface whose
+	// whole job is getting files in.
+	pathForFile(file: File) {
+		try {
+			return webUtils.getPathForFile(file)
+		} catch {
+			return ""
+		}
+	},
 }
 
 contextBridge.exposeInMainWorld("caret", bridge)

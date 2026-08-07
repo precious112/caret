@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { AssetEntryWire, ProjectState } from "../../../shared/ipc"
-import { invoke, on } from "../ipc"
+import { invoke, on, pathForFile } from "../ipc"
 import { cn } from "../lib/utils"
 
 export function AssetsView({ project, onClose }: { project: ProjectState; onClose(): void }) {
@@ -53,16 +53,52 @@ export function AssetsView({ project, onClose }: { project: ProjectState; onClos
 		[project.path, refresh],
 	)
 
+	/**
+	 * A drop is two different operations depending on where it came from.
+	 *
+	 * From Finder, the file exists on disk and main copies it — cheap at any
+	 * size. From a browser, a mail client or a preview pane there is no path at
+	 * all, only bytes; that used to be read off the removed `File.path` and
+	 * silently produced nothing. Each file takes whichever route it has.
+	 */
 	const onDrop = useCallback(
-		(event: React.DragEvent) => {
+		async (event: React.DragEvent) => {
 			event.preventDefault()
 			setDragging(false)
-			// Electron exposes the real path on the File object; without it there is
-			// nothing for main to copy, since the renderer has no disk access.
-			const paths = [...event.dataTransfer.files].map((file) => (file as File & { path?: string }).path ?? "")
-			void add(paths.filter(Boolean))
+
+			const dropped = [...event.dataTransfer.files]
+			if (dropped.length === 0) return
+
+			const paths: string[] = []
+			const pathless: File[] = []
+			for (const file of dropped) {
+				const filePath = pathForFile(file)
+				if (filePath) paths.push(filePath)
+				else pathless.push(file)
+			}
+
+			setBusy(true)
+			try {
+				const problems: Array<{ file: string; reason: string }> = []
+				if (paths.length > 0) {
+					problems.push(...((await invoke("assets:add", project.path, paths))?.rejected ?? []))
+				}
+				if (pathless.length > 0) {
+					const encoded = await Promise.all(
+						pathless.map(async (file) => ({
+							name: file.name,
+							base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+						})),
+					)
+					problems.push(...((await invoke("assets:addBytes", project.path, encoded))?.rejected ?? []))
+				}
+				setProblems(problems)
+				await refresh()
+			} finally {
+				setBusy(false)
+			}
 		},
-		[add],
+		[project.path, refresh],
 	)
 
 	const undescribed = assets.filter((asset) => !asset.description).length
@@ -186,7 +222,7 @@ function AssetRow({
 
 	return (
 		<li className="flex gap-4 rounded-lg border border-shell-border p-3" data-testid="asset-row">
-			<Thumbnail asset={asset} canvasUrl={canvasUrl} />
+			<Thumbnail asset={asset} canvasUrl={canvasUrl} onChanged={onChanged} projectPath={projectPath} />
 
 			<div className="flex min-w-0 flex-1 flex-col gap-2">
 				<div className="flex items-center gap-2">
@@ -253,28 +289,101 @@ function AssetRow({
 }
 
 /**
- * Only image and vector assets can show themselves.
+ * What an asset looks like, by kind.
  *
- * Video and 3D get a labelled placeholder rather than a broken `<img>` — the
- * poster-frame and rendered-still work is real and not pretended at here.
+ * Images and vectors show themselves. Video shows a **real frame**: the browser
+ * has to decode one to display the element anyway, so the same frame is grabbed
+ * to a canvas and stored as the asset's poster — which is what lets an agent
+ * asking `get_asset` about a video receive a look at it rather than a sentence
+ * about it. No ffmpeg on the user's machine, and nothing pretended at.
+ *
+ * 3D models still get a labelled placeholder. A still needs a renderer, and
+ * adding a WebGL dependency to the chrome for a 112×80 thumbnail is not a
+ * trade worth making yet.
  *
  * The src is absolute against the design server. This chrome is not served by
  * Vite, so the `/caret-assets/…` path the index records would resolve against
  * the chrome's own origin and silently 404.
  */
-function Thumbnail({ asset, canvasUrl }: { asset: AssetEntryWire; canvasUrl: string | null }) {
-	const previewable = asset.kind === "image" || asset.kind === "vector"
-	const src = canvasUrl ? new URL(asset.url, canvasUrl).toString() : null
+function Thumbnail({
+	asset,
+	canvasUrl,
+	projectPath,
+	onChanged,
+}: {
+	asset: AssetEntryWire
+	canvasUrl: string | null
+	projectPath: string
+	onChanged(): void | Promise<void>
+}) {
+	const absolute = (url: string) => (canvasUrl ? new URL(url, canvasUrl).toString() : null)
+	const src = absolute(asset.url)
+	const box =
+		"flex h-20 w-28 shrink-0 items-center justify-center overflow-hidden rounded border border-shell-border bg-black/20"
+
+	if (asset.kind === "image" || asset.kind === "vector") {
+		return (
+			<div className={box}>
+				{src ? (
+					<img alt={asset.alt || asset.tag} className="max-h-full max-w-full object-contain" src={src} />
+				) : (
+					<span className="text-xs uppercase tracking-wide text-shell-muted">loading</span>
+				)}
+			</div>
+		)
+	}
+
+	if (asset.kind === "video" && src) {
+		return (
+			<div className={box}>
+				<video
+					className="max-h-full max-w-full object-contain"
+					data-testid="asset-video"
+					muted
+					// Metadata alone is not enough to paint: the frame has to be decoded,
+					// which is also what makes it capturable.
+					onLoadedData={async (event) => {
+						if (asset.posterUrl) return
+						const video = event.currentTarget
+						const canvas = document.createElement("canvas")
+						canvas.width = video.videoWidth
+						canvas.height = video.videoHeight
+						if (!canvas.width || !canvas.height) return
+						const context = canvas.getContext("2d")
+						if (!context) return
+						context.drawImage(video, 0, 0)
+						try {
+							await invoke("assets:setPoster", projectPath, asset.tag, canvas.toDataURL("image/png"))
+							await onChanged()
+						} catch {
+							// A poster is an enhancement. Failing to store one must not
+							// take down the row it belongs to.
+						}
+					}}
+					playsInline
+					preload="auto"
+					// A tenth of a second in, not zero: plenty of video opens on a black
+					// or blank frame, and a black poster is no more use than none.
+					src={`${src}#t=0.1`}
+				/>
+			</div>
+		)
+	}
 
 	return (
-		<div className="flex h-20 w-28 shrink-0 items-center justify-center overflow-hidden rounded border border-shell-border bg-black/20">
-			{previewable && src ? (
-				<img alt={asset.alt || asset.tag} className="max-h-full max-w-full object-contain" src={src} />
-			) : (
-				<span className="text-xs uppercase tracking-wide text-shell-muted">{previewable ? "loading" : asset.kind}</span>
-			)}
+		<div className={box}>
+			<span className="text-xs uppercase tracking-wide text-shell-muted">{asset.kind}</span>
 		</div>
 	)
+}
+
+/** Chunked because `String.fromCharCode(...bytes)` blows the argument limit. */
+function bytesToBase64(bytes: Uint8Array): string {
+	let binary = ""
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+	}
+	return btoa(binary)
 }
 
 function formatBytes(bytes: number): string {

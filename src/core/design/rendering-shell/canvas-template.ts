@@ -23,6 +23,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
+		fs.writeFile(path.join(libDir, "asset-picker.ts"), generateAssetPicker()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
 	])
 }
@@ -1191,6 +1192,7 @@ function generateOverlayPainter(): string {
 		import { domToCanvas } from "modern-screenshot"
 		import { bridge } from "../bridge"
 		import { ackEdit } from "../edit-pill"
+		import { attachAssetPicker } from "../asset-picker"
 
 		interface Props {
 		  onClose: () => void
@@ -1202,6 +1204,21 @@ function generateOverlayPainter(): string {
 		  const [instruction, setInstruction] = useState("")
 		  const [sending, setSending] = useState(false)
 		  const startRef = useRef({ x: 0, y: 0 })
+		  const detachPicker = useRef<null | (() => void)>(null)
+
+		  // Attached to the element rather than reimplemented in React state: the
+		  // AI-edit box is react-grab's and cannot be a component, and one @ that
+		  // behaves differently per surface is worse than none.
+		  //
+		  // A callback ref rather than an effect, because the input mounts on a
+		  // condition no effect dependency here describes: the rect exists while
+		  // the pointer is still dragging, and the prompt box only appears once
+		  // the drag finishes. An effect keyed on the rect fired too early and
+		  // attached to nothing.
+		  const inputRef = useCallback((el: HTMLInputElement | null) => {
+		    detachPicker.current?.()
+		    detachPicker.current = el ? attachAssetPicker(el) : null
+		  }, [])
 
 		  const handlePointerDown = useCallback((e: React.PointerEvent) => {
 		    if ((e.target as HTMLElement).closest(".caret-overlay-prompt")) return
@@ -1310,8 +1327,9 @@ function generateOverlayPainter(): string {
 		          {!drawing && rect.w > 20 && rect.h > 20 && (
 		            <div className="caret-overlay-prompt" style={{ left: rect.x, top: rect.y + rect.h + 8 }}>
 		              <input
+		                ref={inputRef}
 		                autoFocus
-		                placeholder="Describe the change..."
+		                placeholder="Describe the change, @ for an asset"
 		                value={instruction}
 		                onChange={e => setInstruction(e.target.value)}
 		                onKeyDown={e => { if (e.key === "Enter") handleSubmit(); if (e.key === "Escape") { setRect(null); onClose() } }}
@@ -1914,6 +1932,265 @@ function generateBridge(): string {
 }
 
 /**
+ * The `@` picker: asset autocomplete on any instruction box.
+ *
+ * Written as a vanilla attach-to-an-input function rather than a React
+ * component because the two surfaces that need it are not alike. The overlay
+ * painter's input is ours; the AI-edit box is react-grab's, living in a shadow
+ * root we do not control. One implementation that takes an element covers both,
+ * and a second implementation would eventually disagree with the first about
+ * what a tag is.
+ *
+ * Two details are load-bearing:
+ *
+ * - **The native value setter.** Both inputs are React-controlled, and React
+ *   installs a value tracker that swallows a plain `input.value = …`. Writing
+ *   through the prototype setter and dispatching `input` is the only way the
+ *   component's own state follows what the user picked.
+ * - **Capture-phase Enter, attached first.** The grab plugin submits on Enter
+ *   from its own capture listener on the same element. The picker has to see
+ *   that key first and stop it, or choosing an asset also sends the instruction.
+ */
+function generateAssetPicker(): string {
+	return dedent`
+		export interface AssetSummary {
+		  tag: string
+		  file: string
+		  kind: "image" | "vector" | "video" | "model"
+		  width: number | null
+		  height: number | null
+		  alt: string
+		  description: string
+		}
+
+		let cached: AssetSummary[] = []
+		let loaded = false
+
+		/** The index, fetched once per page load and refreshed on every open. */
+		export async function loadAssets(): Promise<AssetSummary[]> {
+		  try {
+		    const response = await fetch("/__caret/assets-index")
+		    const body = await response.json()
+		    cached = Array.isArray(body?.assets) ? body.assets : []
+		    loaded = true
+		  } catch {
+		    // A canvas that cannot reach the index still has to accept typing; the
+		    // instruction goes through with a bare @tag and the host expands it.
+		    if (!loaded) cached = []
+		  }
+		  return cached
+		}
+
+		export function assetUrl(asset: AssetSummary): string {
+		  return "/caret-assets/" + encodeURIComponent(asset.file)
+		}
+
+		/** The partial tag being typed immediately before the caret, or null. */
+		function queryAt(value: string, caret: number): { query: string; start: number } | null {
+		  const before = value.slice(0, caret)
+		  const match = before.match(/(^|[\\s(\\[{>])@([a-z0-9-]*)$/i)
+		  if (!match) return null
+		  return { query: match[2].toLowerCase(), start: caret - match[2].length - 1 }
+		}
+
+		function rank(assets: AssetSummary[], query: string): AssetSummary[] {
+		  if (!query) return assets.slice(0, 8)
+		  const starts = assets.filter(a => a.tag.startsWith(query))
+		  const contains = assets.filter(a => !a.tag.startsWith(query) && (a.tag.includes(query) || (a.description || "").toLowerCase().includes(query)))
+		  return starts.concat(contains).slice(0, 8)
+		}
+
+		function setValue(input: HTMLInputElement | HTMLTextAreaElement, value: string, caret: number) {
+		  const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+		  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set
+		  if (setter) setter.call(input, value)
+		  else input.value = value
+		  input.dispatchEvent(new Event("input", { bubbles: true }))
+		  try { input.setSelectionRange(caret, caret) } catch {}
+		}
+
+		/**
+		 * Attaches the picker to an input. Returns a detach function.
+		 *
+		 * The popup goes in \`document.body\` even when the input is in a shadow
+		 * root: a fixed-position element inside someone else's subtree inherits
+		 * their transforms and clipping, and react-grab's overlay has both.
+		 */
+		export function attachAssetPicker(input: HTMLInputElement | HTMLTextAreaElement): () => void {
+		  let popup: HTMLDivElement | null = null
+		  let matches: AssetSummary[] = []
+		  let highlighted = 0
+		  let anchor: { start: number } | null = null
+
+		  void loadAssets()
+
+		  const close = () => {
+		    popup?.remove()
+		    popup = null
+		    matches = []
+		    anchor = null
+		  }
+
+		  const render = () => {
+		    if (!popup) {
+		      popup = document.createElement("div")
+		      popup.setAttribute("data-caret-asset-picker", "")
+		      Object.assign(popup.style, {
+		        position: "fixed", zIndex: "2147483000", minWidth: "260px", maxWidth: "360px",
+		        maxHeight: "260px", overflowY: "auto", background: "#15161a",
+		        border: "1px solid #2c2e36", borderRadius: "10px", padding: "4px",
+		        boxShadow: "0 12px 32px rgba(0,0,0,0.45)", fontFamily: "system-ui, sans-serif",
+		      })
+		      // Keep the input focused: react-grab exits prompt mode on blur, so a
+		      // click that steals focus would close the box being typed into.
+		      popup.addEventListener("mousedown", e => e.preventDefault())
+		      document.body.appendChild(popup)
+		    }
+
+		    const box = input.getBoundingClientRect()
+		    popup.style.left = Math.max(8, Math.min(box.left, window.innerWidth - 380)) + "px"
+		    const below = window.innerHeight - box.bottom
+		    if (below > 280) {
+		      popup.style.top = (box.bottom + 6) + "px"
+		      popup.style.bottom = ""
+		    } else {
+		      popup.style.bottom = (window.innerHeight - box.top + 6) + "px"
+		      popup.style.top = ""
+		    }
+
+		    popup.innerHTML = ""
+		    if (matches.length === 0) {
+		      const empty = document.createElement("div")
+		      empty.textContent = cached.length === 0
+		        ? "No assets yet — add them in the Assets library"
+		        : "No asset matches that"
+		      Object.assign(empty.style, { padding: "10px 12px", fontSize: "12px", color: "#8b8d98" })
+		      popup.appendChild(empty)
+		      return
+		    }
+
+		    matches.forEach((asset, i) => {
+		      const row = document.createElement("div")
+		      row.setAttribute("data-caret-asset-option", asset.tag)
+		      Object.assign(row.style, {
+		        display: "flex", gap: "10px", alignItems: "center", padding: "6px",
+		        borderRadius: "7px", cursor: "pointer",
+		        background: i === highlighted ? "rgba(11,122,255,0.18)" : "transparent",
+		      })
+		      row.addEventListener("mouseenter", () => { highlighted = i; render() })
+		      row.addEventListener("click", () => accept(asset))
+
+		      const thumb = document.createElement("div")
+		      Object.assign(thumb.style, {
+		        width: "44px", height: "32px", flexShrink: "0", borderRadius: "4px",
+		        overflow: "hidden", background: "#0c0d10", display: "flex",
+		        alignItems: "center", justifyContent: "center",
+		      })
+		      if (asset.kind === "image" || asset.kind === "vector") {
+		        const img = document.createElement("img")
+		        img.src = assetUrl(asset)
+		        img.alt = ""
+		        Object.assign(img.style, { maxWidth: "100%", maxHeight: "100%", objectFit: "contain" })
+		        thumb.appendChild(img)
+		      } else {
+		        const label = document.createElement("span")
+		        label.textContent = asset.kind === "video" ? "VID" : "3D"
+		        Object.assign(label.style, { fontSize: "9px", letterSpacing: "0.06em", color: "#8b8d98" })
+		        thumb.appendChild(label)
+		      }
+		      row.appendChild(thumb)
+
+		      const text = document.createElement("div")
+		      Object.assign(text.style, { minWidth: "0", flex: "1" })
+		      const tag = document.createElement("div")
+		      tag.textContent = "@" + asset.tag
+		      Object.assign(tag.style, { fontSize: "12px", color: "#e6e7ea", fontFamily: "ui-monospace, monospace" })
+		      text.appendChild(tag)
+		      const detail = document.createElement("div")
+		      // The description is what makes the pick informed — the dimensions say
+		      // whether it fits, the description says whether text can sit on it.
+		      detail.textContent = asset.description || (asset.width && asset.height ? asset.width + "×" + asset.height : asset.kind)
+		      Object.assign(detail.style, {
+		        fontSize: "11px", color: "#8b8d98", whiteSpace: "nowrap",
+		        overflow: "hidden", textOverflow: "ellipsis",
+		      })
+		      text.appendChild(detail)
+		      row.appendChild(text)
+
+		      popup!.appendChild(row)
+		    })
+		  }
+
+		  const accept = (asset: AssetSummary) => {
+		    if (!anchor) return
+		    const caret = input.selectionStart ?? input.value.length
+		    const next = input.value.slice(0, anchor.start) + "@" + asset.tag + " " + input.value.slice(caret)
+		    setValue(input, next, anchor.start + asset.tag.length + 2)
+		    close()
+		    input.focus()
+		  }
+
+		  const refresh = () => {
+		    const caret = input.selectionStart ?? input.value.length
+		    const found = queryAt(input.value, caret)
+		    if (!found) return close()
+		    anchor = { start: found.start }
+		    matches = rank(cached, found.query)
+		    highlighted = 0
+		    render()
+		  }
+
+		  const onInput = () => {
+		    // Refresh the index lazily: an asset added while the canvas was open
+		    // should be typeable without a reload.
+		    if (!loaded) void loadAssets().then(() => { if (anchor) refresh() })
+		    refresh()
+		  }
+
+		  const onKeyDown = (event: KeyboardEvent) => {
+		    if (!popup) return
+		    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+		      if (matches.length === 0) return
+		      event.preventDefault()
+		      event.stopImmediatePropagation()
+		      highlighted = (highlighted + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length
+		      render()
+		      return
+		    }
+		    if (event.key === "Enter" || event.key === "Tab") {
+		      if (matches.length === 0) return
+		      event.preventDefault()
+		      // Immediate, not plain stopPropagation: the submit handler lives on
+		      // this same element, so choosing an asset would otherwise also send.
+		      event.stopImmediatePropagation()
+		      accept(matches[highlighted])
+		      return
+		    }
+		    if (event.key === "Escape") {
+		      event.preventDefault()
+		      event.stopImmediatePropagation()
+		      close()
+		    }
+		  }
+
+		  // Delayed, because a click on a row blurs before it lands.
+		  const onBlur = () => setTimeout(close, 120)
+
+		  input.addEventListener("input", onInput)
+		  input.addEventListener("keydown", onKeyDown, true)
+		  input.addEventListener("blur", onBlur)
+
+		  return () => {
+		    input.removeEventListener("input", onInput)
+		    input.removeEventListener("keydown", onKeyDown, true)
+		    input.removeEventListener("blur", onBlur)
+		    close()
+		  }
+		}
+	`
+}
+
+/**
  * The edit pill: the live surface for a canvas-initiated AI edit.
  *
  * The gap it closes was read as a freeze: Enter on an AI edit, then seconds of
@@ -2134,6 +2411,21 @@ function generateCaretGrabPlugin(): string {
 	return dedent`
 		import { bridge } from "./bridge"
 		import { ackEdit, editPillEngaged } from "./edit-pill"
+		import { attachAssetPicker } from "./asset-picker"
+
+		/**
+		 * The rendered box of the element an edit is aimed at.
+		 *
+		 * Sent with the instruction so the host can tell the agent when a named
+		 * asset is a poor fit for the space it is going into — a 400px logo in a
+		 * 2400px hero should get a stated reason, not a silent upscale.
+		 */
+		function boxOf(el: Element | null): { width: number; height: number } | undefined {
+		  if (!el) return undefined
+		  const rect = el.getBoundingClientRect()
+		  if (!rect.width || !rect.height) return undefined
+		  return { width: Math.round(rect.width), height: Math.round(rect.height) }
+		}
 
 		function log(...args: unknown[]) {
 		  console.log("[caret-grab]", ...args)
@@ -2330,7 +2622,7 @@ function generateCaretGrabPlugin(): string {
 
 		  const input = document.createElement("input")
 		  input.type = "text"
-		  input.placeholder = "e.g. Change text to 'Hello World'"
+		  input.placeholder = "e.g. Change text to 'Hello World', or @ for an asset"
 		  input.style.cssText = "flex:1;padding:8px 12px;border-radius:6px;border:1px solid #555;background:#2a2a3e;color:#fff;font-size:13px;outline:none;"
 		  row.appendChild(input)
 
@@ -2343,10 +2635,13 @@ function generateCaretGrabPlugin(): string {
 		  document.body.appendChild(card)
 		  input.focus()
 
+		  const detachPicker = attachAssetPicker(input)
+
 		  const submit = () => {
 		    const text = input.value.trim()
 		    if (!text || !lastResolvedSource) return
 		    log("ai-edit-fallback: submitting", text)
+		    const selectedEl = document.querySelector("[data-rg-selected]") as HTMLElement | null
 		    bridge.send({
 		      type: "ai-edit-request",
 		      payload: {
@@ -2357,16 +2652,18 @@ function generateCaretGrabPlugin(): string {
 		        componentName: lastResolvedSource.componentName,
 		        caretId: "",
 		        componentStack: "",
+		        box: boxOf(selectedEl),
 		      },
 		    })
-		    ackEdit(text, document.querySelector("[data-rg-selected]"))
+		    ackEdit(text, selectedEl)
+		    detachPicker()
 		    card.remove()
 		  }
 
 		  btn.addEventListener("click", submit)
 		  input.addEventListener("keydown", (e: KeyboardEvent) => {
 		    if (e.key === "Enter") submit()
-		    if (e.key === "Escape") card.remove()
+		    if (e.key === "Escape") { detachPicker(); card.remove() }
 		  })
 		}
 
@@ -2462,6 +2759,10 @@ function generateCaretGrabPlugin(): string {
 		          log("prompt mode: input found after " + attempts + " attempts")
 		          let pendingValue = ""
 		          const onInput = () => { pendingValue = (input as HTMLInputElement | HTMLTextAreaElement).value }
+		          // Before the submit handler on purpose. Both are capture listeners
+		          // on the same element, so they fire in registration order, and the
+		          // picker has to consume Enter first or picking an asset also sends.
+		          const detachPicker = attachAssetPicker(input as HTMLInputElement | HTMLTextAreaElement)
 		          const handler = (e: KeyboardEvent) => {
 		            if (e.key !== "Enter" || e.shiftKey) return
 		            const prompt = pendingValue.trim() || (input as HTMLInputElement | HTMLTextAreaElement).value.trim()
@@ -2481,9 +2782,11 @@ function generateCaretGrabPlugin(): string {
 		                componentName: lastResolvedSource.componentName,
 		                caretId: selectedEl?.getAttribute("data-caret-id") || "",
 		                componentStack: "",
+		                box: boxOf(selectedEl),
 		              },
 		            })
 		            ackEdit(prompt, selectedEl)
+		            detachPicker()
 		            input.removeEventListener("keydown", handler, true)
 		            input.removeEventListener("input", onInput)
 		          }

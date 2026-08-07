@@ -16,10 +16,13 @@ export {
 	describeAsset,
 	findAsset,
 	LARGE_ASSET_BYTES,
+	posterPath,
+	postersDirectory,
 	type ReindexResult,
 	readAssetIndex,
 	reindexAssets,
 	retagAsset,
+	setPoster,
 	writeAssetIndex,
 } from "./store"
 export { deriveTag, findTagReferences, MAX_TAG_LENGTH, uniqueTag, validateTag } from "./tags"

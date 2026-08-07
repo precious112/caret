@@ -27,6 +27,15 @@ export function assetsDirectory(projectPath: string): string {
 	return path.join(projectPath, ASSETS_DIR)
 }
 
+/** Where extracted video poster frames live. Derived, gitignored, unindexed. */
+export function postersDirectory(projectPath: string): string {
+	return path.join(assetsDirectory(projectPath), ".posters")
+}
+
+export function posterPath(projectPath: string, entry: AssetEntry): string | null {
+	return entry.poster ? path.join(postersDirectory(projectPath), entry.poster) : null
+}
+
 export function assetIndexPath(projectPath: string): string {
 	return path.join(assetsDirectory(projectPath), INDEX_FILE)
 }
@@ -144,7 +153,10 @@ export async function reindexAssets(projectPath: string): Promise<ReindexResult>
 				origin: previous?.origin ?? { type: "discovered" },
 				addedAt: previous?.addedAt ?? new Date().toISOString(),
 				...(previous?.duration !== undefined ? { duration: previous.duration } : {}),
-				...(previous?.poster !== undefined ? { poster: previous.poster } : {}),
+				// Unlike the description, a poster describes the *bytes*. Carrying it
+				// across a re-export would show the old frame for the new video, which
+				// reads as a caching bug rather than as stale data.
+				...(previous?.poster !== undefined && previous.hash === hash ? { poster: previous.poster } : {}),
 			}
 
 			assets.push(entry)
@@ -184,6 +196,37 @@ export async function retagAsset(
 		entry.tag = to
 		await writeAssetIndex(projectPath, index)
 		return { ok: true as const, index }
+	})
+}
+
+/**
+ * Records an extracted poster frame for an asset that cannot show itself.
+ *
+ * The pixels come from the library's own `<video>` element — the browser
+ * already decoded the frame to display it, so extracting it costs nothing and
+ * needs no ffmpeg on the user's machine. What it buys is that `get_asset` can
+ * hand an agent a look at a video instead of a sentence about one.
+ */
+export async function setPoster(
+	projectPath: string,
+	tag: string,
+	png: Buffer,
+): Promise<{ ok: true; entry: AssetEntry } | { ok: false; reason: string }> {
+	return runExclusive(assetIndexPath(projectPath), async () => {
+		const index = await readAssetIndex(projectPath)
+		const entry = findAsset(index, tag)
+		if (!entry) return { ok: false as const, reason: `No asset tagged "${tag}".` }
+
+		// Named after the file rather than the tag: a rename must not orphan the
+		// poster, and the file name is what the entry is keyed on internally.
+		const name = `${entry.file}.png`
+		const directory = postersDirectory(projectPath)
+		await fs.mkdir(directory, { recursive: true })
+		await fs.writeFile(path.join(directory, name), png)
+
+		entry.poster = name
+		await writeAssetIndex(projectPath, index)
+		return { ok: true as const, entry }
 	})
 }
 

@@ -24,3 +24,8 @@ export function on<C extends IpcEventChannel>(channel: C, listener: IpcEvents[C]
 }
 
 export const platform = window.caret.platform
+
+/** The disk path behind a dropped file. "" when the browser has none to give. */
+export function pathForFile(file: File): string {
+	return window.caret.pathForFile?.(file) ?? ""
+}

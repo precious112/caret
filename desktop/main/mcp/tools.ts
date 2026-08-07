@@ -32,6 +32,7 @@ import {
 	listFlows,
 	listPages,
 	type PageMeta,
+	posterPath,
 	readAssetIndex,
 	readFoundationTokens,
 	readPageMeta,
@@ -259,22 +260,43 @@ export const TOOLS: ToolDefinition[] = [
 				origin: entry.origin,
 			}
 
-			// Video and 3D cannot be handed over as pixels, and a client that
-			// received an unreadable blob would be worse off than one told plainly
-			// that it has metadata only.
-			if (!isViewable(entry.kind)) {
+			// Video and 3D cannot be handed over as their own bytes. A video has a
+			// poster frame once the library has shown it, and one frame answers the
+			// question an agent actually has — what does this look like. A client
+			// that received an unreadable blob would be worse off than one told
+			// plainly that it has metadata only.
+			const viewable = isViewable(entry.kind)
+			const poster = viewable ? null : posterPath(ctx.projectPath, entry)
+			if (!viewable && !poster) {
 				return reply(ctx, { ...summary, note: `${entry.kind} assets cannot be shown directly; use the description.` })
 			}
 
+			const file = poster ?? path.join(assetsDirectory(ctx.projectPath), entry.file)
+			const mimeType = poster ? "image/png" : entry.mime
+
 			try {
-				const bytes = await fs.readFile(path.join(assetsDirectory(ctx.projectPath), entry.file))
+				const bytes = await fs.readFile(file)
 				return {
 					content: [
-						{ type: "text" as const, text: JSON.stringify(summary, null, 2) },
-						{ type: "image" as const, data: bytes.toString("base64"), mimeType: entry.mime },
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								poster
+									? { ...summary, note: "The image below is a frame from this video, not the whole thing." }
+									: summary,
+								null,
+								2,
+							),
+						},
+						{ type: "image" as const, data: bytes.toString("base64"), mimeType },
 					],
 				}
 			} catch (err) {
+				// A poster is derived and gitignored, so a fresh clone has none. Falling
+				// back to the metadata reply is the honest answer, not an error.
+				if (poster) {
+					return reply(ctx, { ...summary, note: `${entry.kind} assets cannot be shown directly; use the description.` })
+				}
 				return fail(`"${tag}" is indexed but its file could not be read: ${err instanceof Error ? err.message : err}`)
 			}
 		},

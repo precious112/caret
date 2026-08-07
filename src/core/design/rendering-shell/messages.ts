@@ -30,6 +30,14 @@ export interface AiEditRequestPayload {
 	componentName: string
 	caretId: string
 	componentStack: string
+	/**
+	 * The rendered size of the target, in CSS pixels.
+	 *
+	 * Only used to judge whether a referenced asset fits the space it is going
+	 * into. Optional because it is a courtesy, not a contract: an older canvas,
+	 * or an element with no box, still sends a usable instruction.
+	 */
+	box?: { width: number; height: number }
 }
 
 export interface EditResultPayload {

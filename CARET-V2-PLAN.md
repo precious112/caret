@@ -889,9 +889,11 @@ block next to the foundation tokens. Pixels and full metadata stay pull-only beh
 
 ### The `@` reference
 
-`@` in the AI-edit box and the overlay editor opens a thumbnail picker. **What travels to the
-agent is the resolved entry, expanded inline** — path, dimensions, description — not the token
-`@hero-shot`. Sending a token and trusting the agent to resolve it is the pull-tool failure
+`@` in the AI-edit box and the overlay editor opens a thumbnail picker — **one attach-to-an-
+input implementation for both**, because the AI-edit box belongs to react-grab and lives in a
+shadow root, so it cannot be a component and a second implementation would eventually disagree
+about what a tag is. **What travels to the agent is the resolved entry, expanded inline** —
+path, dimensions, description — not the token `@hero-shot`. Sending a token and trusting the agent to resolve it is the pull-tool failure
 mode with extra steps, and it fails silently: the agent invents an asset that fits the name.
 
 **Fit is the agent's judgment.** It has the intrinsic aspect ratio and the target box geometry
@@ -922,6 +924,14 @@ canvas iframe like any other markup — Caret has no per-kind rendering path to 
 Only two things vary by kind. The **library thumbnail**: a poster frame for video, a rendered
 still for a model. And what an agent receives from `get_asset`: pixels for raster and SVG, the
 poster for video and 3D, plus metadata in every case.
+
+**A poster is derived, not an asset** (settled 2026-08-07). It lives in
+`.caret/assets/.posters/`, gitignored and healer-ignored, and is cleared when the source file's
+bytes change. Giving it its own `@tag` would put two names on one decision, and a poster is a
+*view* of a decision rather than a second one. The frame comes from the library's own `<video>`
+element — the browser decoded it to paint the row, so extracting it needs no ffmpeg on the
+user's machine. The 3D case is **deferred**: a still needs a WebGL renderer in the chrome, and
+that dependency is not worth a thumbnail until something else needs it.
 
 ### Agent vision is a prerequisite, and is certified
 

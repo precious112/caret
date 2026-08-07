@@ -23,6 +23,10 @@ import { mutateFlowDefinition } from "../src/core/design/flow-meta"
 import { generateEntryFiles } from "../src/core/design/rendering-shell/entry-template"
 import { generateViteConfig } from "../src/core/design/rendering-shell/vite-config-template"
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
+import { solidPng } from "./verify-support"
+
+/** A real decodable PNG — the picker's thumbnail has to actually paint. */
+const FIXTURE_PNG = solidPng(240, 135, [20, 24, 33])
 
 // Mirrors REQUIRED_DEPS in rendering-shell/index.ts (which we can't import here
 // without dragging in the whole extension graph).
@@ -185,6 +189,39 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 	for (const [file, flow] of Object.entries(FIXTURE_FLOWS)) {
 		await fs.writeFile(path.join(caretDir, "flows", file), JSON.stringify(flow, null, 2))
 	}
+
+	// An asset for the @ picker to autocomplete over. Written as bytes plus an
+	// index, exactly as a direct write would arrive, so the fixture exercises
+	// the same path a user's own drop produces.
+	const assetsDir = path.join(caretDir, "assets")
+	await fs.mkdir(assetsDir, { recursive: true })
+	await fs.writeFile(path.join(assetsDir, "hero-shot.png"), FIXTURE_PNG)
+	await fs.writeFile(
+		path.join(assetsDir, "index.json"),
+		JSON.stringify(
+			{
+				version: 1,
+				assets: [
+					{
+						tag: "hero-shot",
+						file: "hero-shot.png",
+						kind: "image",
+						mime: "image/png",
+						width: 240,
+						height: 135,
+						bytes: FIXTURE_PNG.length,
+						hash: "sha256:fixture",
+						alt: "A workbench",
+						description: "wide, dark, empty space top-left",
+						origin: { type: "uploaded" },
+						addedAt: "2026-08-07T00:00:00Z",
+					},
+				],
+			},
+			null,
+			2,
+		),
+	)
 
 	await generateViteConfig(caretDir)
 	await generateEntryFiles(caretDir)
@@ -882,7 +919,84 @@ async function main() {
 		return "added live, clickable, opened — 0 reloads"
 	})
 
+	await scenario("r. @ picks an asset in the instruction box without sending it", async () => {
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		await page.goto(`http://localhost:${port}/?page=home&mode=focused`)
+		await page.waitForSelector(".caret-focused-paint-btn", { timeout: 15000 })
+		await page.waitForTimeout(2000)
+		await page.evaluate(() => {
+			;(window as any).__POSTED__ = []
+			window.addEventListener("message", (e) => {
+				if (e.data?.type === "overlay-edit") (window as any).__POSTED__.push(e.data.payload?.instruction || "")
+			})
+			;(window as any).__REACT_GRAB__?.deactivate?.()
+		})
+
+		await page.click(".caret-focused-paint-btn", { force: true })
+		await page.waitForTimeout(300)
+		await page.mouse.move(200, 200)
+		await page.mouse.down()
+		await page.mouse.move(500, 400, { steps: 5 })
+		await page.mouse.up()
+
+		const input = page.locator(".caret-overlay-prompt input, .caret-overlay-prompt textarea")
+		await input.waitFor({ timeout: 5000 })
+		await input.click()
+		await page.keyboard.type("Put @her")
+
+		await page.waitForSelector("[data-caret-asset-picker]", { timeout: 5000 })
+		const option = page.locator('[data-caret-asset-option="hero-shot"]')
+		await option.waitFor({ timeout: 5000 })
+
+		// The thumbnail decoding is the assertion that the picker's URL is the same
+		// one the canvas and the agent use. An <img> that exists but never paints
+		// would look identical in a screenshot of the DOM.
+		const thumbWidth = await waitFor2(
+			async () => {
+				const width = await option.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)
+				return width > 0 ? width : null
+			},
+			10000,
+			"the picker thumbnail to decode",
+		)
+		if (thumbWidth !== 240) throw new Error(`the picker thumbnail decoded at ${thumbWidth}px, not the real asset`)
+
+		// Enter chooses the asset. It must NOT also submit: the submit handler is on
+		// the same element, and before the picker consumed the key first, picking an
+		// asset sent a half-written instruction.
+		await page.keyboard.press("Enter")
+		await page.waitForTimeout(400)
+		const afterPick = await input.inputValue()
+		if (!afterPick.includes("@hero-shot")) throw new Error(`the pick did not reach the input: "${afterPick}"`)
+		const sentEarly = (await page.evaluate(() => (window as any).__POSTED__)) as string[]
+		if (sentEarly.length > 0) throw new Error(`choosing an asset also sent the instruction: ${JSON.stringify(sentEarly)}`)
+
+		await page.keyboard.type("behind the headline")
+		await page.keyboard.press("Enter")
+		await waitFor(
+			async () => ((await page.evaluate(() => (window as any).__POSTED__)) as string[]).length > 0,
+			15000,
+			"the overlay-edit message",
+		)
+		const sent = (await page.evaluate(() => (window as any).__POSTED__)) as string[]
+		await page.close()
+		if (!sent[0].includes("@hero-shot")) throw new Error(`the tag did not survive into the instruction: "${sent[0]}"`)
+
+		return `picked from a thumbnail list, Enter did not send, instruction carried the tag: "${sent[0]}"`
+	})
+
 	await browser.close()
+}
+
+/** `waitFor` for a value rather than a boolean. */
+async function waitFor2<T>(probe: () => Promise<T | null>, timeoutMs: number, what: string): Promise<T> {
+	const deadline = Date.now() + timeoutMs
+	while (Date.now() < deadline) {
+		const value = await probe()
+		if (value !== null) return value
+		await new Promise((resolve) => setTimeout(resolve, 200))
+	}
+	throw new Error(`timed out waiting for ${what}`)
 }
 
 async function cleanup(workspace: string | null) {

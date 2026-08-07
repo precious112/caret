@@ -20,10 +20,8 @@ import * as path from "path"
 
 import { type ElectronApplication, _electron as electron, type Page } from "playwright"
 
-import * as zlib from "zlib"
-
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
-import { NO_MODEL_REASON, resolveVerifyModel } from "./verify-support"
+import { NO_MODEL_REASON, resolveVerifyModel, solidPng } from "./verify-support"
 
 const KEEP = process.argv.includes("--keep")
 const SHOTS = path.resolve("release/verify-shots")
@@ -176,65 +174,6 @@ const UNHEALED_SOURCE = `export default function About() {
   )
 }
 `
-
-/**
- * A genuinely valid solid-colour PNG.
- *
- * Not a header stub: the asset path ends with these bytes being served to a
- * browser and handed to a model, and a file that only satisfies the dimension
- * probe would pass the indexing assertions while being undecodable everywhere it
- * actually matters.
- */
-function solidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
-	const raw = Buffer.alloc(height * (width * 3 + 1))
-	for (let y = 0; y < height; y++) {
-		const rowStart = y * (width * 3 + 1)
-		raw[rowStart] = 0 // filter: none
-		for (let x = 0; x < width; x++) {
-			raw[rowStart + 1 + x * 3] = rgb[0]
-			raw[rowStart + 2 + x * 3] = rgb[1]
-			raw[rowStart + 3 + x * 3] = rgb[2]
-		}
-	}
-
-	const ihdr = Buffer.alloc(13)
-	ihdr.writeUInt32BE(width, 0)
-	ihdr.writeUInt32BE(height, 4)
-	ihdr[8] = 8 // bit depth
-	ihdr[9] = 2 // truecolour
-
-	return Buffer.concat([
-		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-		pngChunk("IHDR", ihdr),
-		pngChunk("IDAT", zlib.deflateSync(raw)),
-		pngChunk("IEND", Buffer.alloc(0)),
-	])
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-	const length = Buffer.alloc(4)
-	length.writeUInt32BE(data.length, 0)
-	const body = Buffer.concat([Buffer.from(type, "ascii"), data])
-	const crc = Buffer.alloc(4)
-	crc.writeUInt32BE(crc32(body), 0)
-	return Buffer.concat([length, body, crc])
-}
-
-const CRC_TABLE = (() => {
-	const table = new Uint32Array(256)
-	for (let n = 0; n < 256; n++) {
-		let c = n
-		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-		table[n] = c >>> 0
-	}
-	return table
-})()
-
-function crc32(buffer: Buffer): number {
-	let c = 0xffffffff
-	for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8)
-	return (c ^ 0xffffffff) >>> 0
-}
 
 async function buildFixture(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-app-"))
@@ -1098,8 +1037,88 @@ async function main(): Promise<void> {
 		assert(raw.includes('"hero-shot-2x"'), "the asset lost its tag on a refused rename")
 		assert(!raw.includes("Not A Tag"), "a malformed tag was written")
 
-		await chrome.getByTestId("assets-view").getByText("Done").click()
 		return "malformed tag refused, field restored, index untouched"
+	})
+
+	await scenario("bc. a file dropped on the library is added, listed and removable", async () => {
+		// The real gesture, not a harness-supplied `assets:add`. A drop from a
+		// browser or a mail client carries bytes and no path, which is also all a
+		// synthetic DataTransfer can carry — and until this landed, the drop
+		// handler read the `File.path` Electron removed in v32 and did nothing at
+		// all, silently, for every drop.
+		const png = solidPng(120, 60, [200, 40, 90]).toString("base64")
+
+		const view = chrome.getByTestId("assets-view")
+		await view.waitFor({ timeout: 15_000 })
+		await view.evaluate((element, data) => {
+			const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
+			const file = new File([bytes], "dropped-mark.png", { type: "image/png" })
+			const transfer = new DataTransfer()
+			transfer.items.add(file)
+			element.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true }))
+		}, png)
+
+		await waitFor(
+			"the dropped file to reach the index",
+			async () => {
+				const raw = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+				return raw.includes('"dropped-mark"') ? true : null
+			},
+			30_000,
+		)
+
+		const row = chrome.locator('[data-testid="asset-row"]:has([data-testid="asset-tag"][value="dropped-mark"])')
+		await row.waitFor({ timeout: 30_000 })
+		const width = await waitFor(
+			"the dropped file's thumbnail to decode",
+			async () => {
+				const value = await row.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)
+				return value > 0 ? value : null
+			},
+			30_000,
+		)
+		assert(width === 120, `the dropped asset's preview decoded at ${width}px`)
+
+		// Removing is the other half of the library nobody had driven: it deletes a
+		// file, so a wrong one is not recoverable from the UI.
+		await row.getByRole("button", { name: "Remove" }).click()
+		await waitFor(
+			"the asset to leave the index",
+			async () => {
+				const raw = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+				return raw.includes('"dropped-mark"') ? null : true
+			},
+			30_000,
+		)
+		const onDisk = await fs
+			.stat(path.join(fixture, ".caret", "assets", "dropped-mark.png"))
+			.then(() => true)
+			.catch(() => false)
+		assert(!onDisk, "Remove left the file behind")
+
+		return "dropped with no path on disk, indexed, previewed, then removed from the index and the disk"
+	})
+
+	await scenario("bd. a video shows a frame, not a broken image", async () => {
+		// Kinds differ in exactly one place — the library thumbnail — and a video
+		// rendered through an <img> is a broken icon rather than a poster. This
+		// asserts the dispatch and the URL; the extracted poster frame itself needs
+		// a decodable video, which this fixture has no way to produce.
+		await fs.writeFile(path.join(fixture, ".caret", "assets", "reel.mp4"), Buffer.from("not a decodable video"))
+
+		const row = chrome.locator('[data-testid="asset-row"]:has([data-testid="asset-tag"][value="reel"])')
+		await row.waitFor({ timeout: 30_000 })
+		const video = row.getByTestId("asset-video")
+		await video.waitFor({ timeout: 15_000 })
+		const src = await video.getAttribute("src")
+		assert(src?.includes("/caret-assets/reel.mp4"), `the video element points at ${src}`)
+		assert(src?.includes("#t="), "the video opens on frame zero, which is blank in most footage")
+
+		assert((await row.locator("img").count()) === 0, "a video was rendered through an <img>")
+
+		await fs.rm(path.join(fixture, ".caret", "assets", "reel.mp4"))
+		await chrome.getByTestId("assets-view").getByText("Done").click()
+		return "video indexed by the healer and shown as a seeked frame, not an image"
 	})
 
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {

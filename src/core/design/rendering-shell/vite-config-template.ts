@@ -300,6 +300,28 @@ function caretApiPlugin() {
           return
         }
 
+        // GET /__caret/assets-index
+        // What the @ picker autocompletes over. Read fresh on every request
+        // rather than cached: an asset added in the library while the canvas is
+        // open has to be typeable immediately, and a picker that shows a stale
+        // list is worse than none — the user names a tag that resolves to
+        // nothing and the agent is told to invent it.
+        if (req.method === "GET" && req.url === "/__caret/assets-index") {
+          try {
+            const raw = readFileSync(resolve(__dirname, "assets", "index.json"), "utf-8")
+            const parsed = JSON.parse(raw)
+            const assets = Array.isArray(parsed?.assets) ? parsed.assets : []
+            res.setHeader("Content-Type", "application/json")
+            res.setHeader("Cache-Control", "no-store")
+            res.end(JSON.stringify({ version: 1, assets }))
+          } catch {
+            // No assets yet is the normal state of a new project, not an error.
+            res.setHeader("Content-Type", "application/json")
+            res.end(JSON.stringify({ version: 1, assets: [] }))
+          }
+          return
+        }
+
         // GET /__caret/flows-meta
         if (req.method === "GET" && req.url === "/__caret/flows-meta") {
           const flowsDir = resolve(__dirname, "flows")

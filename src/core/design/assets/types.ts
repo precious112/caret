@@ -71,7 +71,15 @@ export interface AssetEntry {
 	addedAt: string
 	/** Seconds. Video only. */
 	duration?: number
-	/** Tag of the poster image, for kinds that cannot be shown directly. */
+	/**
+	 * File name of the extracted poster frame, inside `.caret/assets/.posters/`.
+	 *
+	 * For kinds that cannot be handed over as pixels directly. A derived file
+	 * rather than an asset with its own tag: a poster is not a design decision,
+	 * it is a view of one, and giving it an `@` name would put two names on the
+	 * same thing. Cleared when the source file's bytes change, so a replaced
+	 * video never shows the old frame.
+	 */
 	poster?: string
 }
 

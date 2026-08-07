@@ -212,6 +212,11 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 				componentName: "",
 				caretId: "",
 				componentStack: "",
+				// The painted region *is* the space the asset would go into, so an
+				// overlay edit gets the same fit judgment as a selected element.
+				box: payload.regionBounds
+					? { width: Math.round(payload.regionBounds.width), height: Math.round(payload.regionBounds.height) }
+					: undefined,
 			},
 			workspacePath,
 		)

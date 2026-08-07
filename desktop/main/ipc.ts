@@ -24,6 +24,7 @@ import {
 	getBackend,
 	LARGE_ASSET_BYTES,
 	listPages,
+	posterPath,
 	probeBackends,
 	readAssetIndex,
 	readFoundationTokens,
@@ -31,6 +32,7 @@ import {
 	retagAsset,
 	rollbackSync,
 	searchGoogleFonts,
+	setPoster,
 	validateFoundationTokens,
 	type WizardAnswer,
 	writeFoundationTokens,
@@ -136,6 +138,9 @@ export function registerIpcHandlers(windows: WindowManager): void {
 			description: asset.description,
 			origin: asset.origin.type,
 			addedAt: asset.addedAt,
+			// Served from inside the assets directory, so the same path-confined
+			// middleware that serves assets serves posters with no second route.
+			posterUrl: asset.poster ? `/caret-assets/.posters/${encodeURIComponent(asset.poster)}` : null,
 		}))
 	})
 
@@ -193,6 +198,61 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return { added, rejected }
 	})
 
+	/**
+	 * The same thing, for a drop that carries no file on disk.
+	 *
+	 * Dragging an image straight out of a browser, a mail client or a preview
+	 * pane is ordinary, and none of those give a path — the drop carries bytes
+	 * and nothing else. Refusing them would make the drop zone work for Finder
+	 * and mysteriously not for anything else.
+	 */
+	ipcMain.handle("assets:addBytes", async (_event, projectPath: string, files: Array<{ name: string; base64: string }>) => {
+		const directory = assetsDirectory(projectPath)
+		await fs.mkdir(directory, { recursive: true })
+
+		const added: string[] = []
+		const rejected: Array<{ file: string; reason: string }> = []
+
+		for (const file of files) {
+			// The name arrives from the renderer, so only its basename is trusted —
+			// this handler writes to disk, and "../../.zshrc" is a name.
+			const name = path.basename(file.name || "asset")
+			const extension = path.extname(name).toLowerCase()
+
+			if (!ASSET_TYPES[extension]) {
+				rejected.push({ file: name, reason: `${extension || "files with no extension"} is not a supported asset type` })
+				continue
+			}
+
+			const bytes = Buffer.from(file.base64, "base64")
+			if (bytes.length === 0) {
+				rejected.push({ file: name, reason: "arrived empty" })
+				continue
+			}
+			// Bytes cross an IPC boundary as a string, so unlike the copy path this
+			// one has a real ceiling. Above it, the file exists on disk somewhere and
+			// the picker is the better route.
+			if (bytes.length > LARGE_ASSET_BYTES) {
+				rejected.push({
+					file: name,
+					reason: `too large to accept from this kind of drop (${Math.round(bytes.length / 1024 / 1024)}MB) — save it to disk and use Add files`,
+				})
+				continue
+			}
+
+			try {
+				const target = await freeName(directory, name)
+				await fs.writeFile(path.join(directory, target), bytes)
+				added.push(target)
+			} catch (err) {
+				rejected.push({ file: name, reason: err instanceof Error ? err.message : String(err) })
+			}
+		}
+
+		await reindexAssets(projectPath).catch((err) => Logger.warn(`[assets] reindex after add failed: ${err}`))
+		return { added, rejected }
+	})
+
 	ipcMain.handle("assets:retag", async (_event, projectPath: string, from: string, to: string) => {
 		const result = await retagAsset(projectPath, from, to)
 		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
@@ -208,6 +268,17 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		},
 	)
 
+	ipcMain.handle("assets:setPoster", async (_event, projectPath: string, tag: string, dataUrl: string) => {
+		const base64 = dataUrl.startsWith("data:image/png;base64,") ? dataUrl.slice("data:image/png;base64,".length) : null
+		// The renderer is the least trusted thing that talks to this process, and
+		// this handler writes a file. Only a PNG data URL is accepted, and the
+		// name is derived here from the index rather than taken from the caller.
+		if (!base64) return { ok: false, error: "A poster must be a PNG data URL." }
+
+		const result = await setPoster(projectPath, tag, Buffer.from(base64, "base64"))
+		return result.ok ? { ok: true } : { ok: false, error: result.reason }
+	})
+
 	ipcMain.handle("assets:remove", async (_event, projectPath: string, tag: string) => {
 		const index = await readAssetIndex(projectPath)
 		const entry = findAsset(index, tag)
@@ -215,6 +286,9 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 		try {
 			await fs.rm(path.join(assetsDirectory(projectPath), entry.file))
+			// A poster outlives nothing: it is derived from the file just deleted.
+			const poster = posterPath(projectPath, entry)
+			if (poster) await fs.rm(poster).catch(() => {})
 			await reindexAssets(projectPath)
 			await regenerateRulesFiles(projectPath).catch(() => {})
 			return { ok: true }

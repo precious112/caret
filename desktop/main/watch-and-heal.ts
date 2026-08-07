@@ -48,6 +48,11 @@ const IGNORED = [
 	// Caret's own scratch, rewritten on every interview step. Not design content,
 	// and waking the healer once per answered question is work for nothing.
 	"**/.caret/.interview.json",
+	// Poster frames Caret extracts from videos. Derived from the asset beside
+	// them, so they are neither design content nor something to index as assets
+	// in their own right — a poster with its own @tag would be a second name for
+	// the same decision.
+	"**/.caret/assets/.posters/**",
 	"**/*.tmp",
 ]
 

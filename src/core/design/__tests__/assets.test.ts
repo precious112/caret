@@ -6,9 +6,10 @@ import "should"
 
 import { probeDimensions, probeSvg } from "../assets/probe"
 import { expandReferences, fitWarning, summariseForRules } from "../assets/references"
-import { describeAsset, readAssetIndex, reindexAssets, retagAsset } from "../assets/store"
+import { describeAsset, postersDirectory, readAssetIndex, reindexAssets, retagAsset, setPoster } from "../assets/store"
 import { deriveTag, findTagReferences, uniqueTag, validateTag } from "../assets/tags"
 import type { AssetEntry, AssetIndex } from "../assets/types"
+import { buildVisualEditPrompt } from "../visual-editing/context-builder"
 
 /** A minimal but genuinely valid PNG header — 3x7, so the numbers are distinctive. */
 function pngHeader(width: number, height: number): Buffer {
@@ -169,6 +170,36 @@ describe("asset index", () => {
 		await fs.writeFile(path.join(dir, ".caret", "assets", "index.json"), "{ not json")
 		;(await readAssetIndex(dir)).assets.should.have.length(0)
 	})
+
+	it("stores a poster frame outside the index, so it never becomes an asset itself", async () => {
+		await write("clip.mp4", Buffer.from("not really a video"))
+		await reindexAssets(dir)
+
+		const stored = await setPoster(dir, "clip", pngHeader(320, 180))
+		stored.ok.should.be.true()
+
+		const index = await readAssetIndex(dir)
+		index.assets.should.have.length(1)
+		index.assets[0].poster!.should.equal("clip.mp4.png")
+		await fs.stat(path.join(postersDirectory(dir), "clip.mp4.png"))
+
+		// The reindex that follows a poster write must not turn the poster into a
+		// second entry — a poster with its own @tag is a second name for one thing.
+		const after = await reindexAssets(dir)
+		after.index.assets.should.have.length(1)
+	})
+
+	it("drops a poster when the video it was taken from is replaced", async () => {
+		await write("clip.mp4", Buffer.from("first cut"))
+		await reindexAssets(dir)
+		await setPoster(dir, "clip", pngHeader(320, 180))
+
+		await write("clip.mp4", Buffer.from("a different cut entirely"))
+		const result = await reindexAssets(dir)
+
+		result.updated.should.deepEqual(["clip"])
+		;(result.index.assets[0].poster === undefined).should.be.true()
+	})
 })
 
 describe("reference expansion", () => {
@@ -244,5 +275,65 @@ describe("fit warnings", () => {
 
 	it("stays quiet when the size is unknown rather than inventing a verdict", () => {
 		;(fitWarning({ ...small, width: null, height: null }, { width: 2400, height: 2400 }) === null).should.be.true()
+	})
+})
+
+/**
+ * The fit judgment only earns its place if it reaches the model. `fitWarning`
+ * being correct in isolation was already true before the box travelled with the
+ * instruction, and nothing downstream read it.
+ */
+describe("fit judgment in the edit prompt", () => {
+	let dir = ""
+
+	beforeEach(async () => {
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-fit-"))
+		await fs.mkdir(path.join(dir, ".caret", "assets"), { recursive: true })
+		await fs.writeFile(path.join(dir, ".caret", "assets", "brand-mark.png"), pngHeader(400, 400))
+		await reindexAssets(dir)
+	})
+
+	afterEach(async () => {
+		await fs.rm(dir, { recursive: true, force: true })
+	})
+
+	const request = (box?: { width: number; height: number }) => ({
+		instruction: "Put @brand-mark in here",
+		filePath: "",
+		lineNumber: 0,
+		columnNumber: 0,
+		componentName: "",
+		caretId: "",
+		componentStack: "",
+		box,
+	})
+
+	it("tells the agent the measured size and that refusing is allowed", async () => {
+		const prompt = await buildVisualEditPrompt(request({ width: 2400, height: 900 }), dir)
+
+		prompt.should.match(/2400x900 CSS pixels/)
+		prompt.should.match(/upscaled/)
+		prompt.should.match(/refuse and say why/)
+	})
+
+	it("says nothing about fit when the asset suits the space", async () => {
+		const prompt = await buildVisualEditPrompt(request({ width: 380, height: 380 }), dir)
+
+		prompt.should.match(/380x380 CSS pixels/)
+		prompt.should.not.match(/Caret measured a poor fit/)
+	})
+
+	it("ignores a nonsense box rather than quoting it to the model as fact", async () => {
+		const prompt = await buildVisualEditPrompt(request({ width: 0, height: Number.NaN }), dir)
+
+		prompt.should.not.match(/CSS pixels/)
+		prompt.should.match(/\/caret-assets\/brand-mark\.png/)
+	})
+
+	it("still expands the reference when no box was measured", async () => {
+		const prompt = await buildVisualEditPrompt(request(), dir)
+
+		prompt.should.match(/\/caret-assets\/brand-mark\.png/)
+		prompt.should.not.match(/CSS pixels/)
 	})
 })

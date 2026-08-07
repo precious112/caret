@@ -386,6 +386,8 @@ export interface AssetEntryWire {
 	description: string
 	origin: string
 	addedAt: string
+	/** URL of the extracted poster frame, for kinds that cannot show themselves. */
+	posterUrl: string | null
 }
 
 export interface AssetAddResult {
@@ -420,9 +422,22 @@ export interface IpcRequests {
 	 * dialog, so main does the copying — the renderer never touches the disk.
 	 */
 	"assets:add": (projectPath: string, sourcePaths: string[]) => AssetAddResult
+	/**
+	 * The same, for dropped files that have no path on disk — an image dragged
+	 * out of a browser or a mail client carries bytes and a name, nothing more.
+	 */
+	"assets:addBytes": (projectPath: string, files: Array<{ name: string; base64: string }>) => AssetAddResult
 	"assets:retag": (projectPath: string, from: string, to: string) => WriteResult
 	"assets:describe": (projectPath: string, tag: string, fields: { alt?: string; description?: string }) => WriteResult
 	"assets:remove": (projectPath: string, tag: string) => WriteResult
+	/**
+	 * Stores a poster frame the library extracted from a video.
+	 *
+	 * The renderer is the only place a video frame exists as pixels without
+	 * shipping ffmpeg, so it captures and main persists. `dataUrl` is a PNG data
+	 * URL of a single decoded frame.
+	 */
+	"assets:setPoster": (projectPath: string, tag: string, dataUrl: string) => WriteResult
 	/** Opens a native file picker filtered to supported asset types. */
 	"assets:pickFiles": () => string[]
 
@@ -528,4 +543,14 @@ export interface CaretBridge {
 	): Promise<Awaited<ReturnType<IpcRequests[C]>>>
 	on<C extends IpcEventChannel>(channel: C, listener: IpcEvents[C]): () => void
 	platform: NodeJS.Platform
+	/**
+	 * The real disk path behind a dropped `File`, or "" when there isn't one.
+	 *
+	 * Electron removed `File.path` in v32, and this app runs 33 — reading it
+	 * yields `undefined`, so a drop looked like it worked and copied nothing.
+	 * `webUtils.getPathForFile` is the replacement, and it can only be called
+	 * from the preload, which is why it rides on the bridge rather than living
+	 * in the view.
+	 */
+	pathForFile(file: File): string
 }

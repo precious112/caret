@@ -105,7 +105,7 @@ Design mode is hardened so failures are attributable to bad AI-generated content
 - [x] Iframe message payloads are validated before reaching handlers; stale inline-edit targets (line drift after HMR) fall back safely instead of editing the wrong element
 - [x] Design-mode activation is serialized (no double vite spawn) and an unexpected vite exit shows a Restart prompt instead of a dead iframe
 
-**Re-certify after any rendering-shell change:** `npm run verify:design-shell` — boots the generated shell on a fixture project and runs a 14-scenario browser suite (happy paths + adversarial corruption); all scenarios must PASS.
+**Re-certify after any rendering-shell change:** `npm run verify:design-shell` — boots the generated shell on a fixture project and runs a browser suite (happy paths + adversarial corruption); all scenarios must PASS.
 
 ---
 
@@ -550,7 +550,7 @@ protecting — with an escape hatch on every question that is a real control, ne
 
 ---
 
-## [ ] Phase 6.6: Assets — supply, tagging, and `@` references
+## [~] Phase 6.6: Assets — supply, tagging, and `@` references
 
 **Added 2026-08-02.** The design layer has type, colour, spacing, and (7.5) components. It has
 nothing for the actual *content*: the photograph in the hero, the logo, the product shot, the
@@ -568,10 +568,14 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       photograph is dark, wide, and has empty space top-left — which is what decides whether
       it can carry overlaid text. Written by the user, or proposed by the agent from the
       pixels. Descriptions survive a byte change to the file — they describe the slot.
-- [ ] Asset library surface in the chrome: drag-and-drop, native picker, tag rename with
+- [x] Asset library surface in the chrome: drag-and-drop, native picker, tag rename with
       validation, description/alt editing, delete. **Certified by driving the UI from a cold
       launch** — thumbnail decodes from the design server, a description typed in the row
-      reaches `index.json` and the rules files, a refused rename restores the field.
+      reaches `index.json` and the rules files, a refused rename restores the field, a real
+      drop lands and Remove takes the file with it. A drop carries **bytes as well as a path**:
+      Electron removed `File.path` in v32, so the path-only handler silently did nothing for
+      every drop, and an image dragged out of a browser or a mail client never had a path to
+      give in the first place.
 - [x] **The index is always-on context** — tag · kind · dimensions · description, one line
       each, in the generated rules block; the Phase 6.4 backend gets the same lines injected
       into its system prompt directly. Pixels stay pull-only.
@@ -580,11 +584,16 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
 - [x] `@tag` expands to the **resolved entry inline** (path, dimensions, description) before
       any instruction reaches an agent, in the shared prompt builder so every edit surface
       gets it. Unknown tags are kept verbatim and flagged — never silently dropped.
-- [ ] `@` picker in the AI-edit box and overlay editor: thumbnail autocomplete over the index
-- [ ] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
-      >2×) joins the expanded reference once the selection payload carries box geometry — and
-      the agent can **refuse**, which matters more (a 400×400 asset in a 2400px hero should
-      get a reason, not an upscale)
+- [x] `@` picker in the AI-edit box and overlay editor: thumbnail autocomplete over the index,
+      served fresh from `/__caret/assets-index`. One attach-to-an-input implementation for both
+      surfaces, because the AI-edit box is react-grab's and lives in a shadow root — it cannot
+      be a component, and a second implementation would drift on what a tag is. Enter chooses
+      the asset without also sending the instruction (both handlers sit on the same element).
+- [x] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
+      >2×) joins the expanded reference — the selection payload now carries the target's
+      rendered box, and an overlay edit uses the painted region as its box. The prompt states
+      the measured size and tells the agent it may **refuse**, which matters more (a 400×400
+      asset in a 2400px hero should get a reason, not an upscale)
 - [x] MCP: `list_assets`, `get_asset` (returns pixels + metadata, tolerates a leading `@`,
       refusals name the tags that do exist), `describe_asset`
 - [x] Watch-and-heal indexes assets written directly into `.caret/assets/` by any author —
@@ -594,10 +603,16 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       public directory with the path rewritten — never a hotlink to `/caret-assets/`
 - [ ] Sync records each asset copy in the mapping so Phase 9 can detect drift (lands with the
       Phase 9 manifest)
-- [ ] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
+- [~] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
       stored, tagged, served, `@`-referenceable, synced. What differs is only the library
-      thumbnail: a frame for video, a rendered still for a model. (Raster + SVG complete;
-      video/model thumbnails pending.)
+      thumbnail. **Video shows a real frame** and that frame is kept, so `get_asset` hands an
+      agent a look at a video rather than a sentence about one — the browser decoded it to
+      display the row, so extracting it costs nothing and needs no ffmpeg on the user's
+      machine. A poster is a **derived file** (`.caret/assets/.posters/`, gitignored,
+      healer-ignored, dropped when the video's bytes change), not an asset with its own tag:
+      a poster is a view of a decision, not a second decision. **3D stills are deferred** —
+      they need a WebGL renderer in the chrome, and ~1MB of dependency for a 112×80 thumbnail
+      is not a trade worth making before anything else needs one.
 - [x] **Agent vision, certified.** `get_screenshot` captures a fresh isolated render (settled:
       fonts ready, images decoded), refuses unknown pages by naming the ones that exist, and
       pairs the image with a text sibling so a client that drops image content degrades

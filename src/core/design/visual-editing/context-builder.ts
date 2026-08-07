@@ -1,7 +1,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
-import { describeInline, expandReferences, readAssetIndex } from "../assets"
+import { describeInline, expandReferences, fitWarning, readAssetIndex } from "../assets"
 import type { AiEditRequestPayload } from "../rendering-shell/messages"
 import { findJSXElementAtPosition, findJSXElementByCaretId, parseSource } from "./ast-editor"
 
@@ -26,6 +26,18 @@ function extractElementSource(
 	}
 	result.push(lines[endLine].slice(0, node.loc.end.column))
 	return result.join("\n")
+}
+
+function isUsableBox(box: unknown): box is { width: number; height: number } {
+	const candidate = box as { width?: unknown; height?: unknown }
+	return (
+		typeof candidate?.width === "number" &&
+		typeof candidate.height === "number" &&
+		Number.isFinite(candidate.width) &&
+		Number.isFinite(candidate.height) &&
+		candidate.width > 0 &&
+		candidate.height > 0
+	)
 }
 
 export async function buildVisualEditPrompt(payload: AiEditRequestPayload, workspacePath: string): Promise<string> {
@@ -57,6 +69,32 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 			...expansion.resolved.map((asset) => `  - ${describeInline(asset)}`),
 			`Respect the intrinsic size. If an asset is much smaller than the space it is going into, or its aspect ratio is far from the target, say so rather than stretching it.`,
 		)
+
+		// The box the user is pointing at, measured in the canvas. With it, "much
+		// smaller than the space" stops being a judgment the agent has to guess at
+		// from the surrounding markup, and refusing becomes a decision it can
+		// defend with numbers.
+		//
+		// Validated rather than trusted: this arrives from the preview iframe,
+		// which runs generated and user-authored code, and a bad number here would
+		// be quoted to the model as fact.
+		const box = isUsableBox(payload.box) ? payload.box : null
+		if (box) {
+			const warnings = expansion.resolved
+				.map((asset) => fitWarning(asset, box))
+				.filter((warning): warning is string => warning !== null)
+
+			sections.push(
+				`\nThe target renders at ${box.width}x${box.height} CSS pixels.`,
+				...(warnings.length > 0
+					? [
+							`Caret measured a poor fit:`,
+							...warnings.map((warning) => `  - ${warning}`),
+							`Do not paper over this. Make the change if it is still the best available option, and tell the user what is wrong with the fit and what would fix it (a larger asset, a different crop, a different slot). If it cannot be made to look right, refuse and say why — that is a better outcome than a stretched image the user has to notice for themselves.`,
+						]
+					: []),
+			)
+		}
 	}
 
 	if (expansion.unknown.length > 0) {
