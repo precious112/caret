@@ -149,6 +149,15 @@ ${
 a colour that is close to the brand colour but not it is the single most visible way
 generated UI reads as generated.
 
+**These tokens are defined into the Tailwind theme** (\`.caret/caret-theme.css\`, generated —
+never edit it), so use them as ordinary utilities:
+
+- Brand scale: \`text-brand-500\`, \`bg-brand-50\`, \`border-brand-950\` … every step in the
+  scale below, plus bare \`brand\` for the seed itself. Use these — never a stock palette
+  colour that merely looks similar.
+- Semantic: \`text-success\`, \`text-warning\`, \`text-error\`, \`text-info\` (and \`bg-\`/\`border-\`).
+- Type: the body face is \`font-sans\`, the heading face is \`font-display\`.
+
 \`\`\`json
 ${JSON.stringify(context.tokens, null, 2)}
 \`\`\``

@@ -134,7 +134,9 @@ export {
 } from "./interview"
 export { listPages, readPageMeta, validatePageMeta, writePageMeta } from "./page-meta"
 export { RenderingShell } from "./rendering-shell"
+export { writeThemeCss } from "./rendering-shell/entry-template"
 export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-shell/messages"
+export { foundationThemeCss, THEME_CSS_FILENAME } from "./rendering-shell/theme-css"
 export { caretDirectoryExists, ensureCaretDirectoryExists, ensureCaretGitignore } from "./scaffold"
 export {
 	bridgeFor,

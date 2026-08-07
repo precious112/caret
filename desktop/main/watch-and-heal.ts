@@ -20,7 +20,7 @@
 import chokidar, { type FSWatcher } from "chokidar"
 import * as path from "path"
 
-import { assetIndexPath, reindexAssets } from "../../src/core/design"
+import { assetIndexPath, reindexAssets, writeThemeCss } from "../../src/core/design"
 import { precomputeAndApply } from "../../src/core/design/visual-editing/post-generation-hook"
 import { Logger } from "../../src/shared/services/Logger"
 import { recordEdit } from "./provenance"
@@ -38,6 +38,9 @@ const IGNORED = [
 	"**/.caret/lib/**",
 	"**/.caret/thumbnails/**",
 	"**/.caret/vite.log",
+	// Generated from foundation.json by Caret itself — healing it would loop:
+	// tokens change → theme regenerated → healer wakes → regenerates again.
+	"**/.caret/caret-theme.css",
 	"**/.caret/canvas-layout.json",
 	"**/.caret/.sync-pending.json",
 	"**/.caret/.provenance.jsonl",
@@ -251,6 +254,13 @@ export class WatchAndHeal {
 		// brand colour — so this must happen on every token change, not on request.
 		await regenerateRulesFiles(this.options.projectPath).catch((err) =>
 			Logger.warn(`[heal] could not regenerate rules files: ${err}`),
+		)
+		// The theme IS the tokens, as far as the rendered pages are concerned:
+		// `text-brand-*` resolves through caret-theme.css. Regenerating it here is
+		// what makes a foundation change restyle the open canvas as a CSS hot
+		// update instead of waiting for the next project open.
+		await writeThemeCss(path.join(this.options.projectPath, ".caret")).catch((err) =>
+			Logger.warn(`[heal] could not regenerate the theme css: ${err}`),
 		)
 		this.options.onTokensChanged?.()
 	}
