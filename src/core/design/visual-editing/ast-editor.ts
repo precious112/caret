@@ -312,6 +312,12 @@ const TAILWIND_COLOR_NAMES = new Set([
 	"current",
 ])
 
+/**
+ * Utility families that look like `prefix-name-number` but are not colours:
+ * `ring-offset-2` is a width, `bg-opacity-50` (v3 legacy) is an alpha.
+ */
+const NON_COLOR_SUFFIX_FAMILIES = new Set(["opacity", "offset"])
+
 function isTailwindColorClass(cls: string): boolean {
 	return TAILWIND_COLOR_PREFIXES.some((prefix) => {
 		if (!cls.startsWith(prefix)) return false
@@ -321,7 +327,21 @@ function isTailwindColorClass(cls: string): boolean {
 			return /^#[0-9a-fA-F]{3,8}$/.test(value) || /^rgba?\(/.test(value) || /^hsla?\(/.test(value)
 		}
 		const parts = suffix.split("-")
-		return TAILWIND_COLOR_NAMES.has(parts[0])
+		if (TAILWIND_COLOR_NAMES.has(parts[0])) return true
+
+		// Custom theme colours. The foundation writes its own scale into the
+		// generated theme — `text-brand-950`, straight from `foundation.json` —
+		// and the design rules tell every agent to use it. A colour editor that
+		// recognises only the stock palette cannot edit the very classes Caret's
+		// own system produces, which is exactly the shape it will meet most.
+		// The tell for "custom colour" versus "sized utility" is the shade: a
+		// colour is `name…-number` with at least two segments (`brand-950`),
+		// while widths are bare numbers (`border-2` → one segment) and sizes are
+		// not numeric at all (`text-4xl`).
+		if (parts.length >= 2 && /^\d+$/.test(parts[parts.length - 1]) && !NON_COLOR_SUFFIX_FAMILIES.has(parts[0])) {
+			return true
+		}
+		return false
 	})
 }
 
@@ -403,8 +423,42 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 			return true
 		}
 
-		console.warn(`[design] AST: no color value found to replace at ${filePath}:${lineNumber}`)
-		return false
+		// Nothing to replace is not nothing to do. An element with no colour
+		// class inherits its colour, and "make this text red" on it is the most
+		// ordinary request the colour picker gets — refusing it with "use AI
+		// Edit" turns a one-token change into a model call. Append the class
+		// instead (or create className outright), the same arbitrary-value form
+		// the replacer writes.
+		for (const attr of attrs) {
+			if (attr.type !== "JSXAttribute") continue
+			const name = attr.name.type === "JSXIdentifier" ? attr.name.name : ""
+			if (name === "className" && attr.value?.type === "StringLiteral") {
+				attr.value.value = `${attr.value.value.trim()} text-[${newColor}]`.trim()
+				await writeFileAtomic(filePath, recast.print(ast).code)
+				console.log(`[design] AST: no colour class on the element — appended text-[${newColor}]`)
+				return true
+			}
+		}
+
+		const hasClassName = attrs.some(
+			(attr) => attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "className",
+		)
+		if (hasClassName) {
+			// It exists but is not a plain string — a template literal or a computed
+			// expression. Appending next to it would leave two classNames, and
+			// editing inside it is genuinely a job for the model.
+			console.warn(`[design] AST: className at ${filePath}:${lineNumber} is dynamic — deferring to AI edit`)
+			return false
+		}
+
+		const builders = recast.types.builders
+		element.openingElement.attributes = [
+			...attrs,
+			builders.jsxAttribute(builders.jsxIdentifier("className"), builders.stringLiteral(`text-[${newColor}]`)),
+		]
+		await writeFileAtomic(filePath, recast.print(ast).code)
+		console.log(`[design] AST: element had no className — added one with text-[${newColor}]`)
+		return true
 	} catch (err) {
 		console.error(`[design] AST color edit failed:`, err)
 		return false

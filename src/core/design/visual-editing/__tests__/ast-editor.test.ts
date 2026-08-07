@@ -271,6 +271,80 @@ describe("editJSXColor with caretId", () => {
 		output.should.not.containEql("text-zinc-500")
 	})
 
+	it("edits a foundation-generated theme colour like text-brand-950", async () => {
+		// The exact element this shipped broken on. The foundation writes its own
+		// scale into the generated theme and the design rules tell every agent to
+		// use it — so `text-brand-950` is what the colour editor meets MOST, and
+		// recognising only the stock palette refused it with "use AI Edit".
+		const source = `<h2 data-caret-id="featured-title" className="mt-2 text-xl font-black uppercase leading-none tracking-tight text-brand-950 sm:text-2xl">This week's drops</h2>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#e11d48", "featured-title")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("text-[#e11d48]")
+		output.should.not.containEql("text-brand-950")
+		// The sized utilities around it are untouched.
+		output.should.containEql("text-xl")
+		output.should.containEql("tracking-tight")
+	})
+
+	it("does not mistake width utilities like border-2 or ring-2 for colours", async () => {
+		// The custom-colour rule is "name…-number with two or more segments":
+		// `brand-950` qualifies, a bare width number must not.
+		const source = `<div data-caret-id="card" className="border-2 ring-2 ring-offset-2 border-brand-200">Card</div>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#0000ff", "card")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("border-2")
+		output.should.containEql("ring-2")
+		output.should.containEql("ring-offset-2")
+		output.should.containEql("border-[#0000ff]")
+		output.should.not.containEql("border-brand-200")
+	})
+
+	it("adds a colour class when the element has none, rather than refusing", async () => {
+		// An element that inherits its colour is the most ordinary target the
+		// picker gets; "can't be edited inline — use AI Edit" turned a one-token
+		// change into a model call.
+		const source = `<p data-caret-id="plain" className="mt-4 leading-relaxed">Inherited colour</p>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#dc2626", "plain")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("mt-4 leading-relaxed text-[#dc2626]")
+	})
+
+	it("creates className outright when the element has no attributes to lean on", async () => {
+		const source = `<p data-caret-id="bare">Bare</p>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#16a34a", "bare")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql(`className="text-[#16a34a]"`)
+	})
+
+	it("refuses a dynamic className rather than stacking a second one", async () => {
+		const source = `<p data-caret-id="dyn" className={active ? "text-red-500" : "text-blue-500"}>Dyn</p>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#000000", "dyn")
+		result.should.be.false()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.equal(source)
+		// Exactly one className — a second one would be the worse bug.
+		output.match(/className/g)!.length.should.equal(1)
+	})
+
 	it("should NOT replace text-4xl or other non-color text- classes", async () => {
 		const source = `<h1 data-caret-id="title" className="text-4xl font-bold text-white">Hello</h1>`
 		await fs.writeFile(tmpFile, source)
