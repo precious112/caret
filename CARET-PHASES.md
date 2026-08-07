@@ -543,8 +543,9 @@ of asked one by one). Freedom over content, none over presentation.
 - [ ] Re-runnable with blast radius shown — needs Phase 7's live bindings; re-running today
       overwrites, so the surface warns before the first commit rather than after.
 
-**Gate (working-agreement exception 2):** the user runs the wizard on a real project and rates
-the output before this phase closes.
+**Gate (working-agreement exception 2) — PASSED 2026-08-07.** The user ran the wizard on a real
+project and was satisfied with the foundations it produced. Re-opened only if more complex
+projects say otherwise.
 
 **Deliverable:** a developer with no design vocabulary describes what they're building, answers
 a handful of questions composed *for that description*, and lands on foundations worth
