@@ -46,6 +46,7 @@
 		"@moonshot-ai/kimi-agent-sdk": "0.1.8",
 		"@openai/codex-sdk": "0.146.0",
 		"chokidar": "^4.0.1",
+		"google-auth-library": "^11.0.0",
 		"react-markdown": "^10.1.0",
 		"recast": "^0.23.11",
 		"remark-gfm": "^4.0.1",

@@ -1,0 +1,261 @@
+/**
+ * The raster lane's one adapter: Google's Gemini image models.
+ *
+ * Two backends behind one interface, exactly as §4.7 specifies:
+ *
+ * - **API key** — the shipped path. The user's own key, read from the OS
+ *   keychain, never written into `.caret/`.
+ * - **Vertex AI with `gcloud` ADC** — configured through env/prefs, absent from
+ *   the UI. It exists so the project can be exercised against Vertex credits,
+ *   and so the lane can be certified against a real model rather than a stub.
+ *
+ * The two differ in host, auth and path. That is the only reason this file
+ * knows there are two; everything above it composes a request and gets back
+ * pixels or a refusal that says why.
+ *
+ * **Why REST rather than `@google/genai`.** The plan says "one adapter over the
+ * SDK, given Caret's proxy-aware `fetch` per the network rules" — and the SDK
+ * has no hook for supplying one. Its `HttpOptions` carries headers, timeouts and
+ * retries, and nothing else; every request goes through the global `fetch`,
+ * which ignores `HTTP_PROXY`. Taking the SDK would mean the lane works on a
+ * laptop and fails behind every corporate proxy, silently, with a connection
+ * error that names nothing. So the transport is ours and only the auth is
+ * Google's: `google-auth-library` mints the ADC token, `@/shared/net` makes the
+ * call. The plan's intent survives; its mechanism could not.
+ *
+ * **Nothing here invents a prompt.** The prompt arrives fully composed by a
+ * recipe, negative constraints included. This adapter's job is transport,
+ * decoding and honest failure — deliberately not a place where a "helpful"
+ * suffix could get added.
+ */
+import { fetch } from "@/shared/net"
+
+/** Which backend a configuration selects. */
+export type GeminiBackend = "api-key" | "vertex"
+
+export interface GeminiConfig {
+	backend: GeminiBackend
+	/** `api-key` only. */
+	apiKey?: string
+	/** `vertex` only. */
+	project?: string
+	/** `vertex` only. `global` is where the image models are served. */
+	location?: string
+	/**
+	 * Model in Caret's own vocabulary, resolved to a provider id below.
+	 *
+	 * Named rather than free-form so a typo is a refusal here instead of a 404
+	 * from a provider, which arrives with no indication of what was expected.
+	 */
+	model?: GeminiModel
+}
+
+export type GeminiModel = "flash-image" | "pro-image"
+
+const MODEL_IDS: Record<GeminiModel, string> = {
+	"flash-image": "gemini-2.5-flash-image",
+	"pro-image": "gemini-3-pro-image-preview",
+}
+
+/** The scope an ADC token needs to call Vertex. */
+const VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+
+export interface ImageRequest {
+	/** Fully composed by the recipe. Never edited here. */
+	prompt: string
+	/** Negative constraints, appended as their own instruction block. */
+	avoid: string[]
+	/** e.g. `16:9`. Passed to the model's own aspect control. */
+	aspect: string
+	/** Reference images, for "match this palette" and "the same style as this". */
+	references?: Array<{ mime: string; base64: string }>
+}
+
+export type ImageResult =
+	| { ok: true; mime: string; bytes: Buffer; model: string; resolved: string }
+	| { ok: false; reason: string; retryable: boolean }
+
+export class GeminiImages {
+	private readonly config: GeminiConfig
+
+	constructor(config: GeminiConfig) {
+		this.config = config
+	}
+
+	/** What this adapter would ask for, without asking. For provenance and tests. */
+	resolve(request: ImageRequest): { model: string; prompt: string; url: string } {
+		const model = MODEL_IDS[this.config.model ?? "flash-image"]
+		return { model, prompt: composePrompt(request), url: this.endpoint(model) }
+	}
+
+	/**
+	 * Generates one image.
+	 *
+	 * Every failure is a `reason` a person can act on, and `retryable` says
+	 * whether trying again could plausibly help — a quota error can, a refused
+	 * prompt cannot. Callers use that to choose between a retry and telling the
+	 * user, instead of guessing from a message string.
+	 */
+	async generate(request: ImageRequest): Promise<ImageResult> {
+		const misconfigured = this.check()
+		if (misconfigured) return { ok: false, reason: misconfigured, retryable: false }
+
+		const { model, prompt, url } = this.resolve(request)
+
+		let headers: Record<string, string>
+		try {
+			headers = await this.authHeaders()
+		} catch (err) {
+			return { ok: false, reason: `Could not authenticate: ${message(err)}`, retryable: false }
+		}
+
+		const body = {
+			contents: [
+				{
+					role: "user",
+					parts: [
+						...(request.references ?? []).map((reference) => ({
+							inlineData: { mimeType: reference.mime, data: reference.base64 },
+						})),
+						{ text: prompt },
+					],
+				},
+			],
+			generationConfig: {
+				// Asked for explicitly. Without it these models will happily answer a
+				// picture request in prose, which reads downstream as "no image" with
+				// no indication that nothing was ever going to be produced.
+				responseModalities: ["TEXT", "IMAGE"],
+				imageConfig: { aspectRatio: request.aspect },
+			},
+		}
+
+		let response: Response
+		try {
+			response = await fetch(url, {
+				method: "POST",
+				headers: { "content-type": "application/json", ...headers },
+				body: JSON.stringify(body),
+			})
+		} catch (err) {
+			return { ok: false, reason: message(err), retryable: true }
+		}
+
+		const text = await response.text()
+		if (!response.ok) {
+			return {
+				ok: false,
+				// The provider's own message, trimmed. It names the enabled-API and
+				// quota problems that are the two most common first failures, and a
+				// paraphrase would lose exactly that.
+				reason: `${response.status} from ${new URL(url).host}: ${extractError(text)}`,
+				retryable: response.status === 429 || response.status >= 500,
+			}
+		}
+
+		let parsed: GenerateContentResponse
+		try {
+			parsed = JSON.parse(text) as GenerateContentResponse
+		} catch {
+			return { ok: false, reason: "The provider returned something that is not JSON.", retryable: true }
+		}
+
+		const parts = parsed.candidates?.[0]?.content?.parts ?? []
+		const image = parts.find((part) => part.inlineData?.data)
+		if (!image?.inlineData?.data) {
+			// A model that answers in words instead of pixels has usually refused,
+			// and its sentence is the most useful thing available.
+			const said = parts
+				.map((part) => part.text)
+				.filter(Boolean)
+				.join(" ")
+				.trim()
+			return {
+				ok: false,
+				reason: said ? `The model returned no image and said: ${said}` : "The model returned no image and no reason.",
+				retryable: false,
+			}
+		}
+
+		return {
+			ok: true,
+			mime: image.inlineData.mimeType ?? "image/png",
+			bytes: Buffer.from(image.inlineData.data, "base64"),
+			model,
+			resolved: prompt,
+		}
+	}
+
+	/** Why this configuration cannot run, or null. */
+	check(): string | null {
+		if (this.config.backend === "api-key") {
+			return this.config.apiKey?.trim()
+				? null
+				: "No Gemini API key is configured. Generated photographs need one; every other kind of asset does not."
+		}
+		if (!this.config.project?.trim()) {
+			return "Vertex is selected but no Google Cloud project is set."
+		}
+		return null
+	}
+
+	private endpoint(model: string): string {
+		if (this.config.backend === "api-key") {
+			return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+		}
+		const location = this.config.location?.trim() || "global"
+		// `global` has no regional prefix, and using one gets a 404 that reads like
+		// the model does not exist.
+		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`
+		return `https://${host}/v1/projects/${this.config.project}/locations/${location}/publishers/google/models/${model}:generateContent`
+	}
+
+	private async authHeaders(): Promise<Record<string, string>> {
+		if (this.config.backend === "api-key") {
+			return { "x-goog-api-key": this.config.apiKey ?? "" }
+		}
+
+		// Imported lazily so a build that never touches the raster lane — and every
+		// unit test — neither loads it nor fails without it.
+		const { GoogleAuth } = await import("google-auth-library")
+		const auth = new GoogleAuth({ scopes: [VERTEX_SCOPE] })
+		const token = await auth.getAccessToken()
+		if (!token) {
+			throw new Error("Application Default Credentials produced no token. Run `gcloud auth application-default login`.")
+		}
+		return { authorization: `Bearer ${token}` }
+	}
+}
+
+interface GenerateContentResponse {
+	candidates?: Array<{
+		content?: { parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> }
+	}>
+}
+
+/**
+ * Prompt plus constraints, in that order.
+ *
+ * The `avoid` list is the documented slop tells, and it is appended rather than
+ * woven in so it stays legible in the provenance record — somebody reading
+ * `origin.resolved` months later can see exactly what was ruled out, which is
+ * not true of a paragraph that had negatives edited into it.
+ */
+export function composePrompt(request: ImageRequest): string {
+	if (request.avoid.length === 0) return request.prompt.trim()
+	return `${request.prompt.trim()}\n\nDo not include: ${request.avoid.join("; ")}.`
+}
+
+/** The provider's `error.message`, or the raw body if it is not shaped that way. */
+function extractError(body: string): string {
+	try {
+		const parsed = JSON.parse(body) as { error?: { message?: string } }
+		return parsed.error?.message ?? body.slice(0, 300)
+	} catch {
+		return body.slice(0, 300)
+	}
+}
+
+function message(err: unknown): string {
+	return err instanceof Error ? err.message : String(err)
+}
