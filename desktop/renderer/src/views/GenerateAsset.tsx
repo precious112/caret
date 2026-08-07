@@ -537,10 +537,17 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 	const [outcome, setOutcome] = useState<Model3dOutcomeWire | null>(null)
 	const [tag, setTag] = useState("")
 	const [error, setError] = useState<string | null>(null)
+	const [sourceOptions, setSourceOptions] = useState<GeneratedVariantWire[] | null>(null)
+	const [sourceBusy, setSourceBusy] = useState(false)
+
+	const refreshAssets = useCallback(async () => {
+		const list = await invoke("assets:list", project.path)
+		setAssets((list ?? []).filter((asset) => asset.kind === "image"))
+	}, [project.path])
 
 	useEffect(() => {
-		void invoke("assets:list", project.path).then((list) => setAssets((list ?? []).filter((asset) => asset.kind === "image")))
-	}, [project.path])
+		void refreshAssets()
+	}, [refreshAssets])
 
 	useEffect(
 		() =>
@@ -574,6 +581,40 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 			else setError(result?.error ?? "Could not save that.")
 		} finally {
 			setBusy(false)
+		}
+	}
+
+	/**
+	 * The purpose-made source: four single-object studies from the raster lane.
+	 *
+	 * Reconstruction wants the opposite of a hero shot — one object, centered,
+	 * fully in frame, even light — so rather than hoping the library has such an
+	 * image, the flow can generate one through the ordinary photograph pipeline
+	 * with the object-study recipe, and the pick lands as a normal asset first.
+	 */
+	const generateSources = async () => {
+		setSourceBusy(true)
+		setSourceOptions(null)
+		try {
+			setSourceOptions((await invoke("generate:variants", project.path, "object-study", {}, "1:1", 4)) ?? [])
+		} finally {
+			setSourceBusy(false)
+		}
+	}
+
+	const pickSource = async (variant: number) => {
+		setSourceBusy(true)
+		try {
+			const result = await invoke("generate:accept", project.path, "object-study", {}, "1:1", variant, "")
+			if (result?.ok && result.tag) {
+				await refreshAssets()
+				setSource(result.tag)
+				setSourceOptions(null)
+			} else {
+				setError(result?.error ?? "Could not save the source image.")
+			}
+		} finally {
+			setSourceBusy(false)
 		}
 	}
 
@@ -611,6 +652,46 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 						))}
 					</div>
 
+					<div className="mt-4">
+						<button
+							className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+							data-testid="model3d-generate-source"
+							disabled={busy || sourceBusy}
+							onClick={generateSources}
+							type="button">
+							{sourceBusy ? "Generating source options…" : "Generate a purpose-made source"}
+						</button>
+						<span className="ml-2 text-[11px] text-shell-muted">
+							One object, centered, plain background — what reconstruction wants.
+						</span>
+					</div>
+
+					{sourceOptions && (
+						<div className="mt-3 grid grid-cols-4 gap-3" data-testid="model3d-source-options">
+							{sourceOptions.map((option) =>
+								option.error ? (
+									<p
+										className="rounded-lg border border-amber-500/40 p-2 text-[11px] text-shell-muted"
+										key={option.variant}>
+										{option.error}
+									</p>
+								) : (
+									<button
+										className="overflow-hidden rounded-lg border border-shell-border hover:border-caret-accent"
+										data-model3d-source-option={option.variant}
+										disabled={sourceBusy}
+										key={option.variant}
+										onClick={() => pickSource(option.variant)}
+										type="button">
+										<span className="block" style={{ backgroundColor: option.surface }}>
+											<img alt="" className="block w-full" src={option.preview} />
+										</span>
+									</button>
+								),
+							)}
+						</div>
+					)}
+
 					<TaskModelPicker disabled={busy} recommendedNote task="model3d" />
 
 					<button
@@ -632,7 +713,11 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 			)}
 
 			{outcome && !outcome.ok && (
-				<p className="mt-4 rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted">{outcome.reason}</p>
+				<p
+					className="mt-4 rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
+					data-testid="model3d-error">
+					{outcome.reason}
+				</p>
 			)}
 
 			{outcome?.ok && (

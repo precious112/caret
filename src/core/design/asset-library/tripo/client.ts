@@ -47,13 +47,33 @@ export interface TripoModelOutput {
 export class TripoClient {
 	constructor(private readonly config: TripoConfig) {}
 
-	/** Uploads an image and returns the token a task references it by. */
+	/**
+	 * Uploads an image and returns the token a task references it by.
+	 *
+	 * The multipart body is built by hand rather than through `FormData`, and
+	 * that is a fix, not a preference: the global `FormData` handed to the npm
+	 * undici that `@/shared/net` wraps serializes into something Tripo's server
+	 * rejects with "one or more of your parameter is invalid" — while the same
+	 * bytes with a hand-rolled boundary pass, through the same fetch. Proven
+	 * side by side against the live API after two full runs died on it.
+	 *
+	 * `/upload`, not `/upload/sts`: both return an image_token, but only this
+	 * one's token is valid as a task's `file_token` — the STS route pairs with
+	 * S3 object references. The SDK's legacy token flow is the arbiter.
+	 */
 	async uploadImage(bytes: Buffer, mime: string): Promise<TripoResult<string>> {
-		const form = new FormData()
 		const extension = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg"
-		form.append("file", new Blob([new Uint8Array(bytes)], { type: mime }), `source.${extension}`)
+		const boundary = `----caret${bytes.length.toString(16)}${Math.random().toString(36).slice(2)}`
+		const head = Buffer.from(
+			`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="source.${extension}"\r\nContent-Type: ${mime}\r\n\r\n`,
+		)
+		const tail = Buffer.from(`\r\n--${boundary}--\r\n`)
 
-		const response = await this.call("/upload/sts", { method: "POST", body: form })
+		const response = await this.call("/upload", {
+			method: "POST",
+			headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+			body: Buffer.concat([head, bytes, tail]),
+		})
 		if (!response.ok) return response
 
 		const token =
@@ -66,17 +86,28 @@ export class TripoClient {
 
 	/**
 	 * Image → draft model. The heavy step, and the one that spends credits.
+	 *
+	 * `file.type` is always `"jpg"`, whatever the image actually is. That is not
+	 * a bug here — the official SDK hardcodes it for every reference, PNGs
+	 * included, and sending the honest value is what the live API rejects with
+	 * "one or more of your parameter is invalid". Learned from a real 400: the
+	 * first source this ran against was a WebP this codebase itself produced.
 	 */
 	async imageToModel(
 		fileToken: string,
-		mime: string,
+		_mime: string,
 		onProgress: (update: TripoProgress) => void,
 	): Promise<TripoResult<TripoModelOutput>> {
-		const type = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg"
 		const created = await this.call("/task", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ type: "image_to_model", file: { type, file_token: fileToken } }),
+			body: JSON.stringify({
+				type: "image_to_model",
+				// Pinned like the SDK pins it, so a server-side default change never
+				// silently alters what credits buy.
+				model_version: "v2.5-20250123",
+				file: { type: "jpg", file_token: fileToken },
+			}),
 		})
 		if (!created.ok) return created
 
@@ -102,7 +133,9 @@ export class TripoClient {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				type: "convert_model",
-				format: "GLB",
+				// "GLB" is not in the allowed set — GLTF, USDZ, FBX, OBJ, STL, 3MF —
+				// however reasonable it looks next to an output that *is* a glb.
+				format: "GLTF",
 				original_model_task_id: originalTaskId,
 				face_limit: options.faceLimit,
 				texture_size: options.textureSize,
@@ -148,7 +181,12 @@ export class TripoClient {
 				return this.download(url, taskId)
 			}
 
-			if (task.status === "failed" || task.status === "cancelled" || task.status === "banned") {
+			if (
+				task.status === "failed" ||
+				task.status === "cancelled" ||
+				task.status === "banned" ||
+				task.status === "expired"
+			) {
 				return { ok: false, reason: `Tripo reported the task ${task.status}.`, retryable: false }
 			}
 
@@ -169,14 +207,31 @@ export class TripoClient {
 				return { ok: false, reason: `Downloading the model failed with ${response.status}.`, retryable: true }
 			const bytes = Buffer.from(await response.arrayBuffer())
 			if (bytes.length === 0) return { ok: false, reason: "The downloaded model was empty.", retryable: true }
+			// A GLTF conversion can come back as a zip rather than a binary glb, and
+			// a zip written to disk as `.glb` is an asset that renders nowhere and
+			// says nothing. glb declares itself: the first four bytes are "glTF".
+			if (bytes.length >= 4 && bytes.toString("ascii", 0, 4) !== "glTF") {
+				return {
+					ok: false,
+					reason: `The downloaded file is not a binary glb (starts ${JSON.stringify(bytes.toString("ascii", 0, 4))}).`,
+					retryable: false,
+				}
+			}
 			return { ok: true, value: { bytes, taskId } }
 		} catch (err) {
 			return { ok: false, reason: err instanceof Error ? err.message : String(err), retryable: true }
 		}
 	}
 
-	/** One call, with Tripo's envelope unwrapped and its errors carried whole. */
+	/**
+	 * One call, with Tripo's envelope unwrapped and its errors carried whole —
+	 * including which endpoint and what was sent. "One or more of your parameter
+	 * is invalid" without naming the call burned two full e2e runs on guessing;
+	 * the request body carries no secret (the key travels in a header), so
+	 * echoing it costs nothing and names the fix.
+	 */
 	private async call(pathname: string, init: RequestInit): Promise<TripoResult<Record<string, unknown>>> {
+		const sent = typeof init.body === "string" ? ` (sent ${init.body})` : ""
 		let response: Response
 		try {
 			response = await fetch(`${BASE}${pathname}`, {
@@ -194,7 +249,7 @@ export class TripoClient {
 		} catch {
 			return {
 				ok: false,
-				reason: `${response.status} from Tripo: ${text.slice(0, 300)}`,
+				reason: `${response.status} from Tripo ${pathname}: ${text.slice(0, 300)}${sent}`,
 				retryable: response.status >= 500,
 			}
 		}
@@ -205,7 +260,7 @@ export class TripoClient {
 			const said = [parsed.message, parsed.suggestion].filter(Boolean).join(" — ")
 			return {
 				ok: false,
-				reason: `${response.status} from Tripo${said ? `: ${said}` : `: ${text.slice(0, 300)}`}`,
+				reason: `${response.status} from Tripo ${pathname}${said ? `: ${said}` : `: ${text.slice(0, 300)}`}${sent}`,
 				retryable: response.status === 429 || response.status >= 500,
 			}
 		}

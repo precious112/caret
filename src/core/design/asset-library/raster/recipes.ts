@@ -24,12 +24,69 @@
  * legible in the provenance record rather than being woven into prose.
  */
 import type { AssetRecipe } from "../types"
-import { foundationWords } from "./palette-words"
+import { foundationWords, paletteWords } from "./palette-words"
 
 /** Where the headline goes, in words a model composes to. */
 const HEADROOM = "Leave the top-left third deliberately empty and low-contrast so a headline can sit there and stay readable."
 
+/**
+ * The source image a 3D model is built from.
+ *
+ * Not a hero shot — the opposite of one. Image-to-3D reconstruction wants what
+ * every other recipe here avoids: one object, dead centre, fully in frame,
+ * even light, nothing else in the picture. A scene gives the reconstructor
+ * several objects to fuse into one lump, which is exactly the failure the
+ * verification layer downstream exists to catch before credits are spent.
+ *
+ * The subject rotates by variant, so generate-and-pick offers four different
+ * objects rather than four angles of one — for a source image the *what* is
+ * the choice, and the framing is deliberately identical.
+ */
+const OBJECT_STUDY: AssetRecipe = {
+	id: "object-study",
+	name: "Object study",
+	use: "A single object on a plain background — the source a 3D model is built from.",
+	kind: "photo",
+	lane: "raster",
+	purposes: ["object3d"],
+	tags: ["product", "clean", "modern", "minimal", "consumer"],
+	aspects: ["1:1"],
+	avoid: [
+		"any second object, prop or hand",
+		"hard shadows or dramatic lighting",
+		"the object cropped by the frame edge",
+		"reflections that read as extra geometry",
+	],
+	pairsWith: { palettes: ["mono-accent", "warm-earth", "quiet-institutional"] },
+	rationale:
+		"Reconstruction quality is decided by the source: one object, all of it visible, on a background that offers no competing geometry. Deliberately not lit from the foundation's key — a low-key hero treatment hides half the object, and the 3D model of half an object is half a model.",
+	realise: ({ palette, variant }) => ({
+		lane: "raster",
+		prompt: [
+			`A product photograph of ${objectOf(variant)}, alone, centered, the whole object visible in frame.`,
+			"Seamless plain studio background, soft even light from all sides, only a gentle contact shadow.",
+			"No other items, no hands, no props, no text.",
+			paletteWords(palette),
+		].join(" "),
+		avoid: [],
+		aspect: "1:1",
+		transparent: false,
+	}),
+}
+
+function objectOf(variant: number): string {
+	return [
+		"a small ceramic vase with a simple silhouette",
+		"a modern table lamp",
+		"a pair of over-ear headphones",
+		"a potted succulent in a plain pot",
+		"a classic wooden chair",
+		"a wristwatch on a stand",
+	][variant % 6]
+}
+
 export const RASTER_RECIPES: AssetRecipe[] = [
+	OBJECT_STUDY,
 	{
 		id: "workbench",
 		name: "Made by hand",

@@ -491,6 +491,8 @@ export interface Model3dOutcomeWire {
 	model?: string
 	reason?: string
 	needsAnotherModel?: boolean
+	/** The source failed verification — the fix is a different image, not a retry. */
+	badSource?: boolean
 }
 
 /** A backend model annotated for a specific task's picker. */

@@ -2258,8 +2258,19 @@ async function main(): Promise<void> {
 		})
 	}
 
-	if (!process.env.TRIPO_API_KEY) {
-		skip("bl. an image becomes an optimized 3D model", "no TRIPO_API_KEY in this environment")
+	const tripoReady = Boolean(process.env.TRIPO_API_KEY)
+	const vertexReady = Boolean(
+		process.env.CARET_VERTEX_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || process.env.GEMINI_API_KEY,
+	)
+	if (!tripoReady || !vertexReady || !claudeReady) {
+		const missing = [
+			!tripoReady && "TRIPO_API_KEY",
+			!vertexReady && "image credentials for the source",
+			!claudeReady && "a signed-in Claude for verification",
+		]
+			.filter(Boolean)
+			.join(", ")
+		skip("bl. an image becomes an optimized 3D model", `missing: ${missing}`)
 	} else {
 		await scenario("bl. an image becomes an optimized 3D model", async () => {
 			await chrome.getByTestId("assets-generate").click()
@@ -2272,13 +2283,41 @@ async function main(): Promise<void> {
 
 			const flow = panel.getByTestId("generate-model3d")
 			await flow.waitFor({ timeout: 15_000 })
-			// Pointing, never typing: the source is an asset already in the library.
-			await flow.locator("[data-model3d-source]").first().click()
+
+			// The verification layer, certified on its reject path first: the
+			// workbench photograph is several tools on a surface, and building a 3D
+			// model from it would fuse them into a lump. The refusal costs one
+			// vision turn and spends nothing at Tripo.
+			await flow.locator('[data-model3d-source="hero-bench"]').click()
+			await flow.getByTestId("model3d-generate").click()
+			const refusal = flow.getByTestId("model3d-error")
+			await refusal.waitFor({ timeout: 180_000 })
+			const said = await refusal.innerText()
+			assert(/single object/i.test(said), `the refusal does not explain the problem: ${said}`)
+			assert(/saw/i.test(said), "the refusal does not carry what the model actually saw")
+
+			// The purpose-made source: four single-object studies through the
+			// ordinary photograph pipeline, picked by clicking, landing as a normal
+			// asset that the flow then auto-selects.
+			await flow.getByTestId("model3d-generate-source").click()
+			const options = flow.getByTestId("model3d-source-options")
+			await options.waitFor({ timeout: 240_000 })
+			await options.locator("[data-model3d-source-option]").first().waitFor({ timeout: 240_000 })
+			await options.locator("[data-model3d-source-option]").first().click()
+			await flow.locator('[data-model3d-source^="object-study"]').waitFor({ timeout: 60_000 })
+
 			await flow.getByTestId("model3d-generate").click()
 
-			// Tripo's queue plus two tasks plus the optimizer's decision. Long.
+			// Result or error, whichever lands — a hang on the error box was how the
+			// first live run died, waiting 900s for a result that was never coming.
 			const result = flow.getByTestId("model3d-result")
-			await result.waitFor({ timeout: 900_000 })
+			const failed = flow.getByTestId("model3d-error")
+			await Promise.race([
+				result.waitFor({ timeout: 900_000 }),
+				failed.waitFor({ timeout: 900_000 }).then(async () => {
+					throw new Error(`the pipeline failed: ${await failed.innerText()}`)
+				}),
+			])
 			await shot(chrome, "24-model3d-result")
 
 			await flow.getByTestId("model3d-tag").fill("bench-object")
@@ -2298,16 +2337,18 @@ async function main(): Promise<void> {
 			assert(entry?.kind === "model", `the model was indexed as ${entry?.kind}`)
 			assert(Number(entry?.bytes) > 1_000, `the glb is only ${entry?.bytes} bytes`)
 
+			// A glb that is actually a glb, on disk, byte one through four.
+			const glb = await fs.readFile(path.join(fixture, ".caret", "assets", String(entry?.file)))
+			assert(glb.toString("ascii", 0, 4) === "glTF", "the stored file does not carry the glb magic")
+
 			const origin = entry?.origin as Record<string, unknown> | undefined
 			assert(origin?.lane === "model3d", `the lane was recorded as ${origin?.lane}`)
 			assert(origin?.producer === "tripo", `the producer was recorded as ${origin?.producer}`)
-			// The whole pipeline is reconstructible from provenance: source, task
-			// ids, the optimizer's decision and what it saved.
 			const resolved = String(origin?.resolved ?? "")
 			assert(resolved.includes("taskIds"), "the Tripo task ids were not recorded")
 			assert(resolved.includes("draftBytes"), "the draft weight was not recorded")
 
-			return `glb landed at ${Math.round(Number(entry?.bytes) / 1024)}KB with the full pipeline in provenance`
+			return `workbench refused as a source with what the model saw, object study generated and accepted, glb landed at ${Math.round(Number(entry?.bytes) / 1024)}KB`
 		})
 	}
 }

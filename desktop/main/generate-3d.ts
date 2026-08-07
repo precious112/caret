@@ -31,6 +31,7 @@ import {
 import { Logger } from "../../src/shared/services/Logger"
 import { getPrefs } from "./prefs"
 import { getSecret } from "./secrets"
+import { canSeeImages } from "./vision-cache"
 
 export interface Model3dProgress {
 	stage: string
@@ -45,6 +46,8 @@ export interface Model3dOutcome {
 	model?: string
 	reason?: string
 	needsAnotherModel?: boolean
+	/** The source failed verification — the fix is a different image, not a retry. */
+	badSource?: boolean
 }
 
 interface PendingModel {
@@ -89,6 +92,27 @@ export async function generateModel3d(
 		bytes = await fs.readFile(path.join(assetsDirectory(projectPath), source.file))
 	} catch (err) {
 		return { ok: false, reason: `Could not read @${sourceTag}: ${err instanceof Error ? err.message : String(err)}` }
+	}
+
+	// The verification layer: is this actually one object? Image-to-3D fuses a
+	// scene into a single lump, so a workbench full of tools produces a model of
+	// nothing — and the check costs one cheap vision turn against the credits the
+	// draft would have spent. Skipped honestly when no vision-capable backend is
+	// available, because a guard that cannot look should say so, not pretend.
+	onProgress({ stage: "Checking the source is a single object" })
+	const verdict = await verifySingleObject(projectPath, bytes, source.mime)
+	if (verdict.checked && !verdict.singleObject) {
+		return {
+			ok: false,
+			badSource: true,
+			reason:
+				`@${sourceTag} doesn't look like a single object — the model saw: ${verdict.sees}. ` +
+				`3D generation works from one object on a plain background; generate a purpose-made source below, or pick a different image.`,
+		}
+	}
+	if (!verdict.checked) {
+		Logger.warn(`[3d] source verification skipped: ${verdict.why}`)
+		onProgress({ stage: "Source check skipped", detail: verdict.why })
 	}
 
 	onProgress({ stage: "Uploading the source image to Tripo" })
@@ -218,4 +242,65 @@ export async function acceptModel3d(projectPath: string, tag: string): Promise<{
 
 export function discardModel3d(projectPath: string): void {
 	pending.delete(projectPath)
+}
+
+type SourceVerdict = { checked: true; singleObject: boolean; sees: string } | { checked: false; why: string }
+
+/**
+ * Asks the session's vision to look at the source before Tripo spends on it.
+ *
+ * The same probe pattern as the vision check, and for the same reason: parsing
+ * a constrained first word out of a real look at the pixels. `structured()`
+ * cannot carry an image, so this is a session turn, not a schema call.
+ */
+async function verifySingleObject(projectPath: string, image: Buffer, mime: string): Promise<SourceVerdict> {
+	const prefs = getPrefs()
+	if (!prefs.backendId) return { checked: false, why: "no coding backend is configured" }
+
+	const model = prefs.laneModels.model3d?.trim() || prefs.backendModel || ""
+	const vision = await canSeeImages(prefs.backendId, model, projectPath)
+	if (!vision.sees) return { checked: false, why: "the selected model cannot be shown images" }
+
+	const backend = await getBackend(prefs.backendId)
+	if (!backend) return { checked: false, why: `the "${prefs.backendId}" backend is unavailable` }
+
+	let session: Awaited<ReturnType<typeof backend.startSession>> | null = null
+	let answer = ""
+	try {
+		session = await backend.startSession({
+			workingDirectory: projectPath,
+			mode: "read-only",
+			model: model || undefined,
+			title: "caret source check",
+		})
+		for await (const event of session.send({
+			text:
+				"This image is a candidate source for image-to-3D reconstruction, which needs ONE main object on a simple background. " +
+				"First word of your reply, exactly: SINGLE if it shows one main object, MULTIPLE if several distinct objects, SCENE if it is a scene, landscape, texture or background. " +
+				"Then, after a dash, one short sentence describing what you see.",
+			images: [`data:${mime};base64,${image.toString("base64")}`],
+		})) {
+			if (event.type === "text" || event.type === "done") answer += event.text
+		}
+	} catch (err) {
+		return { checked: false, why: err instanceof Error ? err.message : String(err) }
+	} finally {
+		await session?.close().catch(() => {})
+	}
+
+	const first =
+		answer
+			.trim()
+			.split(/[\s—-]+/)[0]
+			?.toUpperCase() ?? ""
+	const sees =
+		answer
+			.trim()
+			.replace(/^\w+\s*[—-]?\s*/, "")
+			.slice(0, 200) || answer.trim().slice(0, 200)
+	if (first === "SINGLE") return { checked: true, singleObject: true, sees }
+	if (first === "MULTIPLE" || first === "SCENE") return { checked: true, singleObject: false, sees }
+	// An answer outside the vocabulary is a check that did not happen, not a
+	// verdict — refusing the user's image on a garbled reply would be guessing.
+	return { checked: false, why: `the model answered outside the expected vocabulary: "${answer.trim().slice(0, 80)}"` }
 }
