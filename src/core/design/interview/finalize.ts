@@ -102,6 +102,7 @@ export function finalizeProposal(proposal: FoundationProposal, description: stri
 			brand: { seed: brand, scale: generateTokenScale("color", brand, { steps: 11 }) },
 			neutral: { character: proposal.neutral, scale: {} },
 			semantic,
+			surface: proposal.surface === "dark" ? "dark" : "light",
 		},
 		typography: {
 			fontFamily: proposal.bodyFamily.trim(),

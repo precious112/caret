@@ -6,6 +6,13 @@
  * project path alone so it stays unit-testable.
  */
 
+export {
+	type AddGeneratedResult,
+	addGeneratedAsset,
+	type GeneratedAssetInput,
+	type GeneratedOrigin,
+	readGeneratedEntry,
+} from "./generated"
 export { type Dimensions, probeDimensions, probeSvg } from "./probe"
 export { describeInline, type ExpansionResult, expandReferences, fitWarning, summariseForRules } from "./references"
 export {

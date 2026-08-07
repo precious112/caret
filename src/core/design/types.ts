@@ -26,6 +26,18 @@ export interface ColorTokens {
 		character: "warm" | "cool" | "true" | "slight-tint"
 		scale: Partial<ColorScale>
 	}
+	/**
+	 * Whether this project is built on light or dark surfaces.
+	 *
+	 * Optional because foundations written before this field existed do not carry
+	 * it; everything that reads it treats absent as `light`. The wizard has always
+	 * *asked* — the palette recipes each declare a surface and `FoundationProposal`
+	 * requires one — but until Phase 6.7 the answer was dropped in `finalize`, so
+	 * nothing downstream could act on it. Generated assets are the first thing that
+	 * genuinely cannot: an image composed for a white page is wrong on a dark one
+	 * in a way no amount of description repairs.
+	 */
+	surface?: "light" | "dark"
 	semantic: {
 		success: string
 		warning: string

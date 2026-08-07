@@ -22,6 +22,7 @@ const DEFAULT_FOUNDATION_TOKENS: FoundationTokens = {
 		brand: { seed: "#3b82f6", scale: {} },
 		neutral: { character: "cool", scale: {} },
 		semantic: { success: "#22c55e", warning: "#eab308", error: "#ef4444", info: "#3b82f6" },
+		surface: "light",
 	},
 	typography: {
 		fontFamily: "Inter",

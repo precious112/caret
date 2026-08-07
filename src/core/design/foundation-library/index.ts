@@ -189,6 +189,9 @@ export function buildTokens(input: BuildTokensInput): FoundationTokens {
 			brand: { seed, scale: generateTokenScale("color", seed, { steps: 11 }) },
 			neutral: { character: palette.neutral, scale: {} },
 			semantic: palette.semantic,
+			// The recipe was designed for one surface or the other; a dark-surface
+			// strategy committed as light is a different strategy.
+			surface: palette.surface,
 		},
 		typography: {
 			fontFamily: typeface.body.family,
