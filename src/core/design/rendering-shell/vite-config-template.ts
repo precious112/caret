@@ -14,7 +14,9 @@ function caretRouterPlugin() {
 
   function buildModule() {
     if (!existsSync(pagesDir)) {
-      return "export const routes = []\\nexport const pageMetas = []"
+      // Still self-accepting: the first page added to an empty project must
+      // hot-swap in, and it is the OLD module's accept that permits that.
+      return "export const routes = []\\nexport const pageMetas = []\\nif (import.meta.hot) { import.meta.hot.accept() }"
     }
     const allDirs = readdirSync(pagesDir, { withFileTypes: true })
       .filter(d => d.isDirectory())
@@ -47,7 +49,14 @@ function caretRouterPlugin() {
     })
     const metaEntries = metas.map(m => \`  \${m}\`).join(",\\n")
 
-    return \`\${imports}\\nexport const routes = [\\n\${routeEntries}\\n]\\nexport const pageMetas = [\\n\${metaEntries}\\n]\`
+    // Self-accepting, and it announces itself: every (re-)evaluation hands the
+    // document the current routes, so the canvas can hold them as live state
+    // instead of a frozen import. Without the announcement, HMR re-evaluates
+    // the module into the void and the stale array wins anyway.
+    const hmrTail = 'if (import.meta.hot) { import.meta.hot.accept() }\\n' +
+      'if (typeof window !== "undefined") { window.dispatchEvent(new CustomEvent("caret:routes-updated", { detail: { routes, pageMetas } })) }'
+
+    return \`\${imports}\\nexport const routes = [\\n\${routeEntries}\\n]\\nexport const pageMetas = [\\n\${metaEntries}\\n]\\n\${hmrTail}\`
   }
 
   return {
@@ -61,19 +70,23 @@ function caretRouterPlugin() {
       return null
     },
     configureServer(server) {
+      // \`reloadModule\`, not bare invalidation. Invalidating only marks the
+      // module stale for the NEXT importer; the canvas imported \`routes\` once,
+      // statically, so nothing ever re-imported it — a page added mid-session
+      // rendered its thumbnail (metas refresh over REST) but was unclickable,
+      // because \`hasRoute\` consulted the frozen array. reloadModule pushes an
+      // HMR update, the self-accepting module re-evaluates, and it announces
+      // its fresh routes to the document (see buildModule's tail).
+      const reloadRouter = () => {
+        const mod = server.moduleGraph.getModuleById("\\0virtual:caret-router")
+        if (mod) server.reloadModule(mod).catch(() => {})
+        server.ws.send({ type: "custom", event: "caret:pages-changed" })
+      }
       server.watcher.on("addDir", (p) => {
-        if (p.startsWith(pagesDir) && p !== pagesDir) {
-          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-router")
-          if (mod) server.moduleGraph.invalidateModule(mod)
-          server.ws.send({ type: "custom", event: "caret:pages-changed" })
-        }
+        if (p.startsWith(pagesDir) && p !== pagesDir) reloadRouter()
       })
       server.watcher.on("unlinkDir", (p) => {
-        if (p.startsWith(pagesDir) && p !== pagesDir) {
-          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-router")
-          if (mod) server.moduleGraph.invalidateModule(mod)
-          server.ws.send({ type: "custom", event: "caret:pages-changed" })
-        }
+        if (p.startsWith(pagesDir) && p !== pagesDir) reloadRouter()
       })
       server.watcher.on("change", (p) => {
         if (p.endsWith("meta.json") && p.includes(pagesDir)) {
@@ -83,11 +96,7 @@ function caretRouterPlugin() {
       // index.tsx appearing/disappearing changes which pages are importable —
       // without this, a deleted page file never invalidates the router module.
       const handleIndexFile = (p) => {
-        if (p.startsWith(pagesDir) && p.endsWith("index.tsx")) {
-          const mod = server.moduleGraph.getModuleById("\\0virtual:caret-router")
-          if (mod) server.moduleGraph.invalidateModule(mod)
-          server.ws.send({ type: "custom", event: "caret:pages-changed" })
-        }
+        if (p.startsWith(pagesDir) && p.endsWith("index.tsx")) reloadRouter()
       }
       server.watcher.on("add", handleIndexFile)
       server.watcher.on("unlink", handleIndexFile)

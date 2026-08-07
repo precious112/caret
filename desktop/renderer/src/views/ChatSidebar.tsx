@@ -23,6 +23,7 @@
 
 import { AlertTriangle, ChevronDown, ChevronRight, History, Paperclip, Plus, Send, Square, Wrench, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { ThinkingOrb } from "thinking-orbs"
 
 import type { AgentSessionWire, AgentStateWire, ProjectState, TranscriptEntryWire } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
@@ -164,6 +165,8 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 						))}
 					</div>
 				))}
+
+				{state?.streaming && <WorkingRow />}
 
 				<FileChanges files={state?.transcript.files ?? []} />
 			</div>
@@ -498,6 +501,33 @@ function Permission({
 
 /** Beyond this, the list is a wall — the count says the rest. */
 const FILE_CHANGES_SHOWN = 5
+
+/**
+ * The turn's heartbeat: visible for the whole streaming window, not only until
+ * first output. Long silences happen mid-turn too (thinking gaps, tool waits),
+ * and this row is what says "still alive" through them. The elapsed counter is
+ * the honest half — an animation loops identically whether the process is
+ * alive or wedged; a counter cannot lie about time passing.
+ */
+function WorkingRow() {
+	const [startedAt] = useState(() => Date.now())
+	const [, tick] = useState(0)
+
+	useEffect(() => {
+		const timer = setInterval(() => tick((n) => n + 1), 1000)
+		return () => clearInterval(timer)
+	}, [])
+
+	const seconds = Math.floor((Date.now() - startedAt) / 1000)
+
+	return (
+		<div className="mt-3 flex items-center gap-2.5 text-[12px] text-shell-muted" data-testid="chat-working">
+			<ThinkingOrb size={20} state="working" theme="dark" />
+			<span>Working…</span>
+			{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{seconds}s</span>}
+		</div>
+	)
+}
 
 function FileChanges({ files }: { files: string[] }) {
 	const [expanded, setExpanded] = useState(false)

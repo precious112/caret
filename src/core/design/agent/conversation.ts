@@ -173,11 +173,30 @@ export class AgentConversation {
 		// Reset before anything async: a Stop pressed while the session is still
 		// being opened is aimed at this turn.
 		this.stopRequested = false
-		const backend = await this.resolve(request.kind)
 
 		if (!this.activity || this.activity.kind !== request.kind || request.resumeSessionId) {
 			this.transcript = request.resumeSessionId ? this.transcript : emptyTranscript()
 		}
+
+		// **Echo before anything asynchronous.** Opening a session is a real
+		// round-trip — an availability probe, an HTTP call, the system-prompt
+		// build — and it used to run before the user's own message was even added
+		// to the transcript. On a cold backend that was seconds in which pressing
+		// Enter changed nothing on screen, which reads as a hang. The first
+		// hundred milliseconds decide whether the app feels alive; nothing about
+		// them may wait on a network.
+		activityCounter += 1
+		this.activity = {
+			id: `activity-${activityCounter}`,
+			kind: request.kind,
+			title: request.title,
+			mode: request.mode,
+			sessionId: request.resumeSessionId ?? "",
+		}
+		if (request.note) addNote(this.transcript, request.note)
+		addUserMessage(this.transcript, request.displayPrompt ?? request.prompt)
+		this.streaming = true
+		this.push(true)
 
 		// The session title is what the History panel shows, and a list reading
 		// "Chat, Chat, Chat" identifies nothing. A chat is named by its opening
@@ -186,30 +205,33 @@ export class AgentConversation {
 		const sessionTitle =
 			request.kind === "chat" ? firstLine(request.displayPrompt ?? request.prompt) || request.title : request.title
 
-		const session = await backend.startSession({
-			workingDirectory: this.deps.projectPath,
-			mode: request.mode,
-			model: this.deps.model(),
-			effort: this.deps.effort(),
-			title: sessionTitle,
-			resumeSessionId: request.resumeSessionId,
-			systemPrompt: await this.deps.systemPrompt(),
-		})
-
-		this.session = session
-		activityCounter += 1
-		this.activity = {
-			id: `activity-${activityCounter}`,
-			kind: request.kind,
-			title: request.title,
-			mode: request.mode,
-			sessionId: session.id,
+		let session: BackendSession
+		try {
+			const backend = await this.resolve(request.kind)
+			session = await backend.startSession({
+				workingDirectory: this.deps.projectPath,
+				mode: request.mode,
+				model: this.deps.model(),
+				effort: this.deps.effort(),
+				title: sessionTitle,
+				resumeSessionId: request.resumeSessionId,
+				systemPrompt: await this.deps.systemPrompt(),
+			})
+		} catch (err) {
+			// The echo promised work; a failure to even open the session has to
+			// land in the same transcript, not vanish into a rejected promise.
+			this.streaming = false
+			applyEvent(this.transcript, {
+				type: "error",
+				message: err instanceof Error ? err.message : String(err),
+				recoverable: true,
+			})
+			this.push(true)
+			throw err
 		}
 
-		if (request.note) addNote(this.transcript, request.note)
-		addUserMessage(this.transcript, request.displayPrompt ?? request.prompt)
-		this.streaming = true
-		this.push(true)
+		this.session = session
+		this.activity = { ...this.activity, sessionId: session.id }
 
 		let text = ""
 		let ok = true

@@ -50,6 +50,7 @@
 		"recast": "^0.23.11",
 		"remark-gfm": "^4.0.1",
 		"simple-git": "^3.27.0",
+		"thinking-orbs": "^0.2.0",
 		"undici": "^7.16.0",
 		"zod": "^4.4.3"
 	},

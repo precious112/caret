@@ -840,6 +840,48 @@ async function main() {
 		return "a folder/meta id mismatch still opens, on the folder's own id"
 	})
 
+	await scenario("q. a page added while the canvas is open becomes clickable without a reload", async () => {
+		// The reported shape: the agent adds a terms page mid-session, its
+		// thumbnail appears (metas refresh over REST), and it cannot be opened —
+		// `hasRoute` consulted the routes array from the canvas's initial static
+		// import, which nothing ever refreshed. The router module is now
+		// self-accepting HMR and announces its routes on every evaluation; this
+		// adds a page to the LIVE server and requires the click to work with zero
+		// page reloads.
+		const { page, counters } = await openCanvas(ctx)
+		await page.waitForSelector(".caret-canvas-frame", { timeout: 20000 })
+		const navsBefore = counters.navigations
+
+		const termsDir = path.join(ctx.caretDir, "pages", "terms")
+		await fs.mkdir(termsDir, { recursive: true })
+		await fs.writeFile(path.join(termsDir, "index.tsx"), PAGE_TEMPLATE("terms", "Terms"))
+		await fs.writeFile(
+			path.join(termsDir, "meta.json"),
+			JSON.stringify({ id: "terms", title: "Terms", type: "page", states: [], tags: ["fixture"] }, null, 2),
+		)
+
+		const card = page.locator('.caret-canvas-frame:has-text("Terms")')
+		await card.waitFor({ timeout: 20000 })
+
+		// Clickability, not just presence — presence was never the bug.
+		await waitFor(
+			async () => (await card.evaluate((el) => getComputedStyle(el as HTMLElement).cursor)) === "pointer",
+			15000,
+			"the new page's card to become clickable",
+		)
+		await card.click()
+		await page.waitForSelector(".caret-focused-iframe", { timeout: 15000 })
+
+		const navs = counters.navigations - navsBefore
+		await page.close()
+
+		// Cleanup so the fixture stays canonical for anything after us.
+		await fs.rm(termsDir, { recursive: true, force: true })
+
+		if (navs > 0) throw new Error(`the route refresh caused ${navs} page reload(s) — the zero-reload contract broke`)
+		return "added live, clickable, opened — 0 reloads"
+	})
+
 	await browser.close()
 }
 

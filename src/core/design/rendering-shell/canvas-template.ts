@@ -96,6 +96,22 @@ function generateCanvasApp(): string {
 		  const [mode, setMode] = useState<"canvas" | "focused" | "simulation">("canvas")
 		  const [focusedPageId, setFocusedPageId] = useState<string | null>(null)
 		  const [pages, setPages] = useState<PageInfo[]>(pageMetas || [])
+
+		  // Routes as LIVE state, fed by the router module announcing each of its
+		  // evaluations. The static import above is only the initial value: a page
+		  // added mid-session used to render its thumbnail (metas refresh over
+		  // REST) while staying unclickable, because hasRoute consulted this
+		  // import's frozen array forever.
+		  const [liveRoutes, setLiveRoutes] = useState(routes)
+		  useEffect(() => {
+		    const onRoutes = (e: Event) => {
+		      const detail = (e as CustomEvent).detail
+		      if (detail?.routes) setLiveRoutes(detail.routes)
+		      if (detail?.pageMetas) setPages(detail.pageMetas)
+		    }
+		    window.addEventListener("caret:routes-updated", onRoutes)
+		    return () => window.removeEventListener("caret:routes-updated", onRoutes)
+		  }, [])
 		  const [viewport, setViewport] = useState<ViewportPreset>("desktop-1440")
 		  const [flows, setFlows] = useState<FlowDefinition[]>([])
 
@@ -194,7 +210,7 @@ function generateCanvasApp(): string {
 		    <ErrorBoundary fallback={<CanvasErrorFallback />}>
 		      <CanvasView
 		        pages={pages}
-		        routes={routes}
+		        routes={liveRoutes}
 		        onFocus={handleFocus}
 		        onSimulate={handleSimulateFromCanvas}
 		        flows={flows}
@@ -1998,7 +2014,9 @@ function generateEditPill(): string {
 		  return '<div style="display:flex;align-items:center;gap:9px">' + body + '<div style="flex:1"></div>' + cancel + "</div>"
 		}
 
-		const SPINNER = '<span style="display:inline-block;width:11px;height:11px;border:2px solid rgba(11,122,255,0.35);border-top-color:#0b7aff;border-radius:50%;animation:caret-pill-spin 0.8s linear infinite;flex-shrink:0"></span>'
+		// A dotted ring, not a solid arc: it rhymes with the chat's thinking orb,
+		// so "Caret's agent is working" has one visual signature everywhere.
+		const SPINNER = '<span style="display:inline-block;width:12px;height:12px;border:2px dotted rgba(11,122,255,0.8);border-radius:50%;animation:caret-pill-spin 1.6s linear infinite;flex-shrink:0"></span>'
 
 		function wire() {
 		  if (!root) return
