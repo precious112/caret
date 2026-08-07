@@ -83,28 +83,62 @@ export class RenderingShell {
 	}
 
 	/**
-	 * True when `node_modules` is absent, or when `package.json` is missing a
-	 * required dependency (in which case it is added first).
+	 * True when anything the shell needs is not actually installed.
+	 *
+	 * Two things this gets right that the obvious version does not, both of
+	 * which shipped broken:
+	 *
+	 * 1. **Merge the required deps before deciding, not after.** The old order
+	 *    checked `node_modules` first and returned early when it was absent — so
+	 *    a project's *very first* launch installed whatever the scaffold happened
+	 *    to write and never added anything from `REQUIRED_DEPS`. The result was a
+	 *    shell missing a dependency for its whole first session: the canvas looked
+	 *    fine until the user opened a page, and the focused view then died on an
+	 *    unresolved import. It "fixed itself" on the next launch, which is the
+	 *    worst possible shape for a bug.
+	 * 2. **Listed is not installed.** A dep can sit in `package.json` while its
+	 *    directory is missing, because an install was interrupted or the tree was
+	 *    pruned. Trusting the manifest leaves the app permanently broken in a way
+	 *    that reads as "already installed". So the tree is what is checked.
 	 */
 	private async needsInstall(caretDir: string): Promise<boolean> {
 		const pkgPath = path.join(caretDir, "package.json")
+
+		let added = false
 		try {
-			await fs.access(path.join(caretDir, "node_modules"))
 			const pkg = JSON.parse(await fs.readFile(pkgPath, "utf-8"))
-			let added = false
 			for (const [dep, version] of Object.entries(REQUIRED_DEPS)) {
-				if (!pkg.dependencies?.[dep]) {
+				// `devDependencies` counts: the scaffold puts the build-time ones
+				// there, and duplicating them into `dependencies` would rewrite the
+				// manifest on every single launch.
+				if (!pkg.dependencies?.[dep] && !pkg.devDependencies?.[dep]) {
 					pkg.dependencies = { ...pkg.dependencies, [dep]: version }
 					added = true
 				}
 			}
-			if (added) {
-				await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2))
-			}
-			return added
+			if (added) await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2))
+		} catch {
+			// No manifest to reason about; let the install rebuild from scratch.
+			return true
+		}
+
+		if (added) return true
+
+		try {
+			await fs.access(path.join(caretDir, "node_modules"))
 		} catch {
 			return true
 		}
+
+		for (const dep of Object.keys(REQUIRED_DEPS)) {
+			try {
+				await fs.access(path.join(caretDir, "node_modules", dep))
+			} catch {
+				Logger.info(`[design] ${dep} is listed but not installed — reinstalling`)
+				return true
+			}
+		}
+		return false
 	}
 
 	private spawnVite(cwd: string): Promise<number> {
