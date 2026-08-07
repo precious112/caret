@@ -137,6 +137,66 @@ describe("editJSXText with caretId", () => {
 		output.should.containEql("Old Title")
 	})
 
+	it("applying the same edit twice writes it once — the FIND YOUR LANE bug, replayed", async () => {
+		// The transport delivered every inline edit twice (the canvas relay
+		// re-posted into its own window at top level). Apply #1 wrote the file;
+		// apply #2's stale guard rejected the AST path, and the raw fallback then
+		// found "Find your lane" INSIDE "Find your lanes" — the old text is a
+		// prefix of the new — and produced "Find your laness". The editor must be
+		// idempotent whatever the transport does.
+		const source = `<div>
+  <h2 data-caret-id="category-title">Find your lane</h2>
+</div>`
+		await fs.writeFile(tmpFile, source)
+
+		const first = await editJSXText(tmpFile, 2, "h2", "Find your lanes", "Find your lane", "category-title")
+		first.should.be.true()
+
+		const second = await editJSXText(tmpFile, 2, "h2", "Find your lanes", "Find your lane", "category-title")
+		second.should.be.true(
+			"the duplicate must report success — a failure toast on an applied edit reads as 'editing is broken'",
+		)
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("Find your lanes")
+		output.should.not.containEql("laness")
+		output.match(/Find your lanes/g)!.length.should.equal(1)
+	})
+
+	it("a duplicate whose old text is NOT a prefix of the new is also a silent success", async () => {
+		// The prefix shape is the corrupting one; the disjoint shape used to fail
+		// loudly instead ("can't be edited inline") — which is what "text edits
+		// stopped working on that node" looked like. Both duplicates must land as
+		// success with a single write.
+		const source = `<div>
+  <h2 data-caret-id="hero">Old headline</h2>
+</div>`
+		await fs.writeFile(tmpFile, source)
+		;(await editJSXText(tmpFile, 2, "h2", "Fresh copy", "Old headline", "hero")).should.be.true()
+		;(await editJSXText(tmpFile, 2, "h2", "Fresh copy", "Old headline", "hero")).should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("Fresh copy")
+		output.should.not.containEql("Old headline")
+	})
+
+	it("the raw fallback refuses the prefix trap even with no element to anchor on", async () => {
+		// Element lookup misses entirely (wrong line, no caretId), so only the
+		// unique-occurrence fallback runs. The file already carries the applied
+		// edit; the stale oldText matches only as a substring of it. Writing
+		// there is the corruption; the right answer is success-without-write.
+		const source = `<div>
+  <p>Find your lanes</p>
+</div>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXText(tmpFile, 99, "h2", "Find your lanes", "Find your lane")
+		result.should.be.true()
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.equal(source)
+	})
+
 	it("should fall back to line-based lookup when caretId is not provided", async () => {
 		const source = `<div>
   <h1>Editable</h1>

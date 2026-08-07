@@ -941,8 +941,21 @@ function generateFocusedPageView(): string {
 		      if (!iframe?.contentWindow) return
 
 		      if (e.data?.source === "caret-vite" && e.source === iframe.contentWindow) {
-		        log("relay: iframe->parent type=" + e.data.type)
-		        window.parent.postMessage(e.data, "*")
+		        // Forward up only when there IS an up. In the VS Code webview the
+		        // canvas was itself an iframe, so this hop carried the message to the
+		        // host. In the desktop app the canvas is the top-level document —
+		        // window.parent === window — and re-posting here lands the message
+		        // back on this same window, where the preload forwards it to main a
+		        // SECOND time. Every inline edit then applied twice: the first write
+		        // succeeded, the duplicate hit the raw text fallback, and because the
+		        // old text was a prefix of the new one, "lane" -> "lanes" became
+		        // "laness". The original event already reaches every listener on this
+		        // window (including the preload), so at top level there is nothing to
+		        // relay to.
+		        if (window.parent !== window) {
+		          log("relay: iframe->parent type=" + e.data.type)
+		          window.parent.postMessage(e.data, "*")
+		        }
 		        return
 		      }
 

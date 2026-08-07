@@ -150,14 +150,43 @@ export async function editJSXText(
 
 		// Stale-target guard: the client captured oldText from the DOM, but the
 		// file may have shifted since (HMR, external edits). Only mutate content
-		// that still matches what the user saw; otherwise fall through to the
-		// unique-occurrence text replace, and from there to the AI-edit fallback.
+		// that still matches what the user saw.
+		//
+		// Two distinct non-matching cases, and they must not share a fate:
+		//
+		// - Current text already equals **newText**: this edit has been applied
+		//   once and is arriving again (a transport layer delivered it twice —
+		//   observed). Report success and write nothing. Applying it anyway is
+		//   how "Find your lane" -> "Find your lanes" produced "Find your
+		//   laness": the raw fallback matched the old text as a prefix of the new.
+		// - Current text is something else entirely: this node is not the target.
+		//   Skip it and let the guarded unique-occurrence fallback look for the
+		//   user's text elsewhere in the file.
 		const normalize = (s: string) => s.replace(/\s+/g, " ").trim()
 		const matchesOld = (current: string) => !oldText || normalize(current) === normalize(oldText)
+		const alreadyApplied = (current: string) => normalize(current) === normalize(newText)
+
+		const settle = (current: string): "write" | "done" | "skip" => {
+			if (matchesOld(current)) return "write"
+			if (alreadyApplied(current)) return "done"
+			// Neither the text the user saw nor the one they asked for: leave this
+			// node alone and let the unique-occurrence fallback look elsewhere — a
+			// wrong-element hit with the real text further down the file is a case
+			// it genuinely rescues. The fallback carries its own guard against the
+			// one dangerous shape (oldText found inside an already-applied newText).
+			return "skip"
+		}
 
 		for (const child of element.children || []) {
 			if (child.type === "JSXText" && typeof child.value === "string" && child.value.trim()) {
-				if (!matchesOld(child.value)) {
+				const verdict = settle(child.value)
+				if (verdict === "done") {
+					console.log(
+						`[design] AST: text at ${filePath}:${lineNumber} already matches newText — duplicate edit, no write`,
+					)
+					return true
+				}
+				if (verdict === "skip") {
 					console.warn(`[design] AST: text at ${filePath}:${lineNumber} no longer matches oldText — stale target`)
 					continue
 				}
@@ -169,7 +198,9 @@ export async function editJSXText(
 				return true
 			}
 			if (child.type === "JSXExpressionContainer" && child.expression && child.expression.type === "StringLiteral") {
-				if (!matchesOld(child.expression.value)) continue
+				const verdict = settle(child.expression.value)
+				if (verdict === "done") return true
+				if (verdict === "skip") continue
 				child.expression.value = newText
 				const output = recast.print(ast).code
 				await writeFileAtomic(filePath, output)
@@ -182,7 +213,10 @@ export async function editJSXText(
 			if (attr.type !== "JSXAttribute") continue
 			const name = attr.name.type === "JSXIdentifier" ? attr.name.name : ""
 			if (["label", "title", "placeholder", "alt", "children"].includes(name)) {
-				if (attr.value?.type === "StringLiteral" && matchesOld(attr.value.value)) {
+				if (attr.value?.type === "StringLiteral") {
+					const verdict = settle(attr.value.value)
+					if (verdict === "done") return true
+					if (verdict === "skip") continue
 					attr.value.value = newText
 					const output = recast.print(ast).code
 					await writeFileAtomic(filePath, output)
@@ -210,6 +244,24 @@ async function fallbackTextReplace(filePath: string, source: string, oldText: st
 		console.warn(`[design] fallback: oldText appears multiple times, refusing ambiguous replace: "${oldText.slice(0, 50)}"`)
 		return false
 	}
+
+	// The prefix trap. `indexOf` matches substrings, so once this edit has been
+	// applied, an oldText that is contained in newText still "matches" — inside
+	// the new text. Replacing there is the corruption this function shipped:
+	// "Find your lane" found inside "Find your lanes" turned it into
+	// "Find your laness". If the sole occurrence of oldText sits within an
+	// occurrence of newText, the edit already happened; say so and write nothing.
+	if (newText.includes(oldText)) {
+		let cursor = source.indexOf(newText)
+		while (cursor !== -1) {
+			if (idx >= cursor && idx + oldText.length <= cursor + newText.length) {
+				console.log(`[design] fallback: newText already present at offset ${cursor} — duplicate edit, no write`)
+				return true
+			}
+			cursor = source.indexOf(newText, cursor + 1)
+		}
+	}
+
 	const updated = source.slice(0, idx) + newText + source.slice(idx + oldText.length)
 	await writeFileAtomic(filePath, updated)
 	console.log(`[design] fallback: replaced text at offset ${idx}`)

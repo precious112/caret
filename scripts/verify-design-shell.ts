@@ -75,8 +75,13 @@ const FIXTURE_PAGES = [
 	{ id: "contact", title: "Contact" },
 	{ id: "dashboard", title: "Dashboard" },
 ]
-// FIXTURE_PAGES plus the "listing" and "fragmented" pages seeded separately
-const TOTAL_PAGES = FIXTURE_PAGES.length + 2
+// FIXTURE_PAGES plus the pages seeded separately: "listing", "fragmented", and
+// "renamed" (the folder/meta id mismatch of scenario `p`). This arithmetic
+// breaking silently is exactly what happened when `renamed` was added — three
+// scenarios failed with "expected 6 frames, got 7" — so if you seed another
+// page below, this line is the other half of that change.
+const EXTRA_SEEDED_PAGES = 3
+const TOTAL_PAGES = FIXTURE_PAGES.length + EXTRA_SEEDED_PAGES
 
 // JSX fragments used to break the source-capture plugin (its old regex only
 // matched jsxDEV-only imports). Scenario (o) asserts exact line resolution
@@ -197,6 +202,17 @@ async function provisionNodeModules(caretDir: string): Promise<void> {
 	const hash = crypto.createHash("sha256").update(pkgText).digest("hex").slice(0, 16)
 	const cacheDir = path.join(os.tmpdir(), "caret-design-shell-cache", hash)
 	const cachedModules = path.join(cacheDir, "node_modules")
+
+	// A cache that exists is not a cache that works: an interrupted install
+	// leaves the directory present and the vite binary absent, and every later
+	// run then fails with "vite did not start" — two whole suite runs were lost
+	// to exactly that. The binary the suite is about to spawn is the validity
+	// check, so a poisoned cache heals itself instead of failing forever.
+	if (fsSync.existsSync(cachedModules) && !fsSync.existsSync(path.join(cachedModules, ".bin", "vite"))) {
+		log(`cached node_modules has no vite binary — discarding poisoned cache: ${cacheDir}`)
+		await fs.rm(cacheDir, { recursive: true, force: true })
+	}
+
 	if (!fsSync.existsSync(cachedModules)) {
 		log(`installing fixture dependencies into cache (first run, ~60s): ${cacheDir}`)
 		await fs.mkdir(cacheDir, { recursive: true })
@@ -774,8 +790,21 @@ async function main() {
 			10000,
 			"element-selected message",
 		)
-		const sel = ((await page.evaluate(() => (window as any).__SELECTED__)) as any[])[0]
+		// Exactly one, not at-least-one. At top level `window.parent === window`,
+		// and the focused view's iframe relay used to re-post every message onto
+		// its own window — so each user action reached the host TWICE. In the
+		// desktop app that duplicate applied every inline edit twice and corrupted
+		// text ("lane" -> "lanes" -> "laness"). One click, one message, is the
+		// contract this pins.
+		await page.waitForTimeout(600)
+		const selected = (await page.evaluate(() => (window as any).__SELECTED__)) as any[]
+		const sel = selected[0]
 		await page.close()
+		if (selected.length !== 1) {
+			throw new Error(
+				`one click delivered ${selected.length} element-selected messages — the iframe relay is duplicating again`,
+			)
+		}
 		if (!String(sel.filePath).includes("pages/fragmented")) throw new Error(`wrong file: ${JSON.stringify(sel)}`)
 		if (sel.lineNumber !== FRAGMENT_H1_LINE)
 			throw new Error(`resolved line ${sel.lineNumber}, expected ${FRAGMENT_H1_LINE} (source capture broken?)`)
