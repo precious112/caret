@@ -45,6 +45,7 @@ import { acceptVariant, discardPending, generationQuestions, recipeCards, recipe
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
+import { clearSecret, type SecretName, secretStatus, setSecret } from "./secrets"
 import {
 	abandonWizard,
 	answerWizard,
@@ -299,6 +300,15 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	})
 
 	// ── generated assets ──────────────────────────────────────────────────────
+
+	ipcMain.handle("secrets:status", (_event, name: string) => secretStatus(name as SecretName))
+
+	ipcMain.handle("secrets:set", async (_event, name: string, value: string) => {
+		const result = await setSecret(name as SecretName, value)
+		return result.ok ? { ok: true } : { ok: false, error: result.error }
+	})
+
+	ipcMain.handle("secrets:clear", (_event, name: string) => clearSecret(name as SecretName))
 
 	ipcMain.handle("generate:questions", () => generationQuestions())
 

@@ -1311,6 +1311,55 @@ async function main(): Promise<void> {
 			: `${marked} photograph recipe(s) shown, disabled, and explaining that the free lanes still work`
 	})
 
+	await scenario("bj. the image key is stored in the OS keychain and never read back", async () => {
+		// The lane that costs money was, until this landed, configurable only by an
+		// environment variable — which is a test setup, not a product. This drives
+		// the field a real person would use.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
+		const section = chrome.getByTestId("image-key-section")
+		await section.waitFor({ timeout: 30_000 })
+
+		// The offer has to say most projects never need this, or a key field reads
+		// as the whole feature being paywalled.
+		const copy = await section.innerText()
+		assert(/need no account/i.test(copy), `the key section says: ${copy.replace(/\n/g, " ")}`)
+		assert(/keychain/i.test(copy), "the key section does not say where the key goes")
+
+		const field = section.getByTestId("gemini-key")
+		assert((await field.getAttribute("type")) === "password", "the key field is not masked")
+
+		await field.fill("test-key-do-not-use-0000")
+		await section.getByTestId("gemini-key-save").click()
+		await section.getByText("A key is stored.").waitFor({ timeout: 15_000 })
+
+		// The value must not survive in the renderer, and must not be readable
+		// back through IPC — a key a compromised renderer can read is one it can
+		// send somewhere.
+		assert((await field.inputValue()) === "", "the key was left sitting in the field")
+		const leaked = await chrome.evaluate(async () => {
+			const prefs = (await (window as any).caret.invoke("prefs:get")) as Record<string, unknown>
+			return JSON.stringify(prefs).includes("test-key-do-not-use-0000")
+		})
+		assert(!leaked, "the raw key came back through prefs:get")
+
+		// And on disk it is ciphertext, not the key.
+		const prefsPath = path.join(userData, "preferences.json")
+		const stored = await fs.readFile(prefsPath, "utf-8").catch(() => "")
+		if (stored) {
+			assert(!stored.includes("test-key-do-not-use-0000"), "the key was written to preferences.json in plain text")
+			assert(stored.includes('"secrets"'), "no encrypted secret was written")
+		}
+
+		await section.getByTestId("gemini-key-clear").click()
+		await waitFor(
+			"the key to be forgotten",
+			async () => ((await section.getByTestId("gemini-key-clear").count()) === 0 ? true : null),
+			15_000,
+		)
+
+		return "key stored encrypted, absent from prefs:get and from preferences.json in the clear, then removed"
+	})
+
 	// The paid lane, driven for real. Skipped rather than faked without
 	// credentials: a mocked pass here would certify the plumbing and say nothing
 	// about the thing that actually costs money and can actually refuse.

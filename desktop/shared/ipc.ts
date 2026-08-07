@@ -390,6 +390,13 @@ export interface AssetEntryWire {
 	posterUrl: string | null
 }
 
+export interface SecretStatusWire {
+	/** False when the OS offers no keychain — storing is refused, not downgraded. */
+	available: boolean
+	present: boolean
+	reason?: string
+}
+
 export interface AssetAddResult {
 	added: string[]
 	/** Files that could not be added, each with a reason the user can act on. */
@@ -561,6 +568,17 @@ export interface IpcRequests {
 
 	"prefs:get": () => Record<string, unknown>
 	"prefs:set": (patch: Record<string, unknown>) => void
+
+	/**
+	 * Whether a credential is set, and whether this machine can store one.
+	 *
+	 * Deliberately not a getter for the value. The renderer never needs the key
+	 * itself, and one that can be read into a web context is one a compromised
+	 * renderer can send somewhere.
+	 */
+	"secrets:status": (name: string) => SecretStatusWire
+	"secrets:set": (name: string, value: string) => WriteResult
+	"secrets:clear": (name: string) => void
 
 	"canvas:message": (projectPath: string, message: DesignInboundWire) => void
 	/**

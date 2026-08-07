@@ -33,6 +33,19 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
+import { getSecret } from "./secrets"
+
+/**
+ * The raster lane's credentials, keychain first.
+ *
+ * The stored key is the shipped path; the environment is the test-only Vertex
+ * switch and a fallback for machines with no keychain. Resolved per call rather
+ * than cached, so entering a key makes the lane work without a restart — the
+ * alternative is a settings field that appears to do nothing.
+ */
+function rasterConfig() {
+	return resolveRasterConfig({ apiKey: getSecret("geminiApiKey") })
+}
 
 /** How many options the picker shows. Free here, so the number is a taste call. */
 const VARIANT_COUNT = 8
@@ -78,7 +91,7 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 
 	const palette = derivePalette(tokens)
 
-	const rasterConfig = resolveRasterConfig()
+	const raster = rasterConfig()
 
 	// The catalogue is shown whole and the unavailable ones say why. Quietly
 	// offering fewer options than the library has teaches the user nothing about
@@ -97,7 +110,7 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 			specimen: dataUrl(specimen?.svg ?? ""),
 			surface: palette.surface,
 			transparent: generator?.transparent ?? false,
-			...(recipe.lane === "raster" && !rasterConfig ? { unavailable: NO_RASTER_REASON } : {}),
+			...(recipe.lane === "raster" && !raster ? { unavailable: NO_RASTER_REASON } : {}),
 		}
 	})
 }
@@ -178,7 +191,7 @@ async function generateRasterVariants(
 	tokens: Awaited<ReturnType<typeof readFoundationTokens>>,
 	surface: string,
 ): Promise<GeneratedVariantWire[]> {
-	const config = resolveRasterConfig()
+	const config = rasterConfig()
 	const recipe = findAssetRecipe(recipeId)
 	if (!recipe) return []
 	if (!config) {

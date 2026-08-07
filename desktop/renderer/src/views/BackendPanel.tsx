@@ -17,7 +17,7 @@
 import { Check, ChevronRight, Copy, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
-import type { AgentClientConfig, BackendReportWire, ModelGroupWire, ProjectState } from "../../../shared/ipc"
+import type { AgentClientConfig, BackendReportWire, ModelGroupWire, ProjectState, SecretStatusWire } from "../../../shared/ipc"
 import { invoke } from "../ipc"
 import { cn } from "../lib/utils"
 
@@ -171,6 +171,8 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 					otherwise for a project.
 				</p>
 
+				<ImageKeySection />
+
 				<McpSection project={project} />
 
 				<button
@@ -181,6 +183,103 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 				</button>
 			</div>
 		</div>
+	)
+}
+
+/**
+ * The one credential the user ever types for generated assets.
+ *
+ * Deliberately small and deliberately caveated. Three of the four asset lanes
+ * need no account at all, so a key field presented as *the* way to generate
+ * anything would misdescribe the feature — most projects never need this. It is
+ * also the monetization boundary in §11: the editor is free forever, this key is
+ * the user's own, and Caret takes no cut of it.
+ *
+ * The value is never read back. The field shows whether a key is stored, not
+ * what it is, because a key the renderer can read is a key a compromised
+ * renderer can send somewhere.
+ */
+function ImageKeySection() {
+	const [status, setStatus] = useState<SecretStatusWire | null>(null)
+	const [value, setValue] = useState("")
+	const [error, setError] = useState<string | null>(null)
+	const [busy, setBusy] = useState(false)
+
+	const refresh = useCallback(async () => {
+		setStatus((await invoke("secrets:status", "geminiApiKey")) ?? null)
+	}, [])
+
+	useEffect(() => {
+		void refresh()
+	}, [refresh])
+
+	const save = async () => {
+		setBusy(true)
+		setError(null)
+		try {
+			const result = await invoke("secrets:set", "geminiApiKey", value)
+			if (result?.ok) {
+				setValue("")
+				await refresh()
+			} else {
+				setError(result?.error ?? "Could not store that key.")
+			}
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	return (
+		<section className="mt-8 border-t border-shell-border pt-6" data-testid="image-key-section">
+			<h2 className="font-medium">Generated photographs</h2>
+			<p className="mt-1 text-[11.5px] leading-relaxed text-shell-muted">
+				Only photographs need this. Washes, textures, patterns, shapes and dividers are generated on your machine and need
+				no account. The key is yours, billed to you directly, and is stored in your OS keychain — never in{" "}
+				<code>.caret/</code>, which travels with the project.
+			</p>
+
+			{status && !status.available ? (
+				<p className="mt-3 rounded-lg border border-amber-500/40 p-3 text-[11.5px] leading-relaxed text-shell-muted">
+					{status.reason}
+				</p>
+			) : (
+				<div className="mt-3 flex items-center gap-2">
+					<input
+						className="min-w-0 flex-1 rounded-lg border border-shell-border bg-transparent px-3 py-1.5 font-mono text-[12.5px] outline-none"
+						data-testid="gemini-key"
+						onChange={(event) => setValue(event.target.value)}
+						onKeyDown={(event) => event.key === "Enter" && save()}
+						placeholder={status?.present ? "A key is stored. Type a new one to replace it." : "Google Gemini API key"}
+						type="password"
+						value={value}
+					/>
+					<button
+						className="rounded-lg bg-caret-accent px-3 py-1.5 text-[12.5px] text-white disabled:opacity-50"
+						data-testid="gemini-key-save"
+						disabled={busy || !value.trim()}
+						onClick={save}
+						type="button">
+						Save
+					</button>
+					{status?.present && (
+						<button
+							className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-shell-muted hover:bg-white/5"
+							data-testid="gemini-key-clear"
+							disabled={busy}
+							onClick={async () => {
+								await invoke("secrets:clear", "geminiApiKey")
+								await refresh()
+							}}
+							type="button">
+							Remove
+						</button>
+					)}
+				</div>
+			)}
+
+			{status?.present && <p className="mt-2 text-[11.5px] text-emerald-300">A key is stored.</p>}
+			{error && <p className="mt-2 text-[11.5px] text-red-400">{error}</p>}
+		</section>
 	)
 }
 

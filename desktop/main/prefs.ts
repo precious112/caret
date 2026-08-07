@@ -36,6 +36,14 @@ export interface Prefs {
 	 * not consent to rewrite the next one.
 	 */
 	appWritesAllowed: string[]
+	/**
+	 * Encrypted credentials, keyed by name. Ciphertext only.
+	 *
+	 * Written and read through `secrets.ts`, never directly: the encryption key
+	 * lives in the OS keychain, and a call site that reached in here would get
+	 * base64 noise and quietly treat it as a key.
+	 */
+	secrets: Record<string, string>
 }
 
 const DEFAULTS: Prefs = {
@@ -49,6 +57,7 @@ const DEFAULTS: Prefs = {
 	backendModel: "",
 	backendEffort: "",
 	appWritesAllowed: [],
+	secrets: {},
 }
 
 const MAX_RECENTS = 12
