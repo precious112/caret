@@ -113,6 +113,12 @@ export interface RunOutcome {
 /** State pushes are coalesced to this interval so token streaming isn't one IPC per character. */
 const PUSH_INTERVAL_MS = 60
 
+/** A prompt's first line, sized for a list row. */
+function firstLine(text: string): string {
+	const line = text.trim().split("\n")[0] ?? ""
+	return line.length > 60 ? `${line.slice(0, 57)}…` : line
+}
+
 let activityCounter = 0
 
 export class AgentConversation {
@@ -173,12 +179,19 @@ export class AgentConversation {
 			this.transcript = request.resumeSessionId ? this.transcript : emptyTranscript()
 		}
 
+		// The session title is what the History panel shows, and a list reading
+		// "Chat, Chat, Chat" identifies nothing. A chat is named by its opening
+		// message — the user's own words are the best available summary of what
+		// the conversation was about.
+		const sessionTitle =
+			request.kind === "chat" ? firstLine(request.displayPrompt ?? request.prompt) || request.title : request.title
+
 		const session = await backend.startSession({
 			workingDirectory: this.deps.projectPath,
 			mode: request.mode,
 			model: this.deps.model(),
 			effort: this.deps.effort(),
-			title: request.title,
+			title: sessionTitle,
 			resumeSessionId: request.resumeSessionId,
 			systemPrompt: await this.deps.systemPrompt(),
 		})

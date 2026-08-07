@@ -10,6 +10,7 @@ import { FolderOpen, FolderX } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import type { ProjectSummary } from "../../../shared/ipc"
+import caretIcon from "../assets/caret-icon.png"
 import { invoke } from "../ipc"
 import { cn } from "../lib/utils"
 
@@ -27,7 +28,8 @@ export function ProjectPicker({ onOpen }: { onOpen(projectPath: string): void })
 
 	return (
 		<div className="titlebar-drag flex h-full flex-col items-center justify-center gap-8 px-8" data-testid="project-picker">
-			<div className="text-center">
+			<div className="flex flex-col items-center text-center">
+				<img alt="" className="mb-4 size-16" draggable={false} src={caretIcon} />
 				<h1 className="text-2xl font-medium tracking-tight">Caret</h1>
 				<p className="mt-1 text-shell-muted">A design layer that lives in your repo.</p>
 			</div>

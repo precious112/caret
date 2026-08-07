@@ -12,6 +12,7 @@ import { forwardRef } from "react"
 
 import type { ProjectState } from "../../../shared/ipc"
 import type { Surface } from "../App"
+import caretIcon from "../assets/caret-icon.png"
 import { invoke, platform } from "../ipc"
 import { cn } from "../lib/utils"
 
@@ -37,6 +38,7 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar(
 			)}
 			data-testid="top-bar"
 			ref={ref}>
+			<img alt="Caret" className="size-[18px] shrink-0" draggable={false} src={caretIcon} />
 			<span className="truncate text-[13px] font-medium">{project.name}</span>
 
 			<StatusDot label={project.canvasUrl ? "Preview running" : "Starting preview…"} ok={project.canvasUrl !== null} />

@@ -103,6 +103,13 @@ export type BackendEvent =
 	| { type: "tool-end"; callId: string; name: string; ok: boolean; summary?: string }
 	| { type: "file-changed"; path: string }
 	| { type: "permission"; requestId: string; tool: string; path?: string; summary: string }
+	/**
+	 * The backend settled a permission by a path that never went through Caret —
+	 * its own config allowed it, a timeout rejected it. Without this, the ask
+	 * stays on screen as live buttons while the agent visibly moves on: a ghost
+	 * request nobody can act on.
+	 */
+	| { type: "permission-resolved"; requestId: string; allowed: boolean }
 	| { type: "usage"; inputTokens?: number; outputTokens?: number; costUsd?: number }
 	| { type: "done"; text: string }
 	| { type: "error"; message: string; recoverable: boolean }

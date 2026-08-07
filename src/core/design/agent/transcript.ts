@@ -108,6 +108,21 @@ export function applyEvent(state: TranscriptState, event: BackendEvent): void {
 			})
 			return
 
+		case "permission-resolved": {
+			// Settled backend-side without Caret in the loop — its own config, a
+			// timeout. The buttons must leave the screen the moment they stop
+			// meaning anything. Only a still-pending ask resolves here: our own
+			// replies echo back as the same event, and that echo must not stamp
+			// "settled by the backend" over the user's actual decision.
+			const pending = state.entries.find(
+				(e) => e.kind === "permission" && e.requestId === event.requestId && e.status === "pending",
+			)
+			if (pending) {
+				resolvePermission(state, event.requestId, event.allowed ? "allowed" : "denied", "settled by the backend")
+			}
+			return
+		}
+
 		case "usage":
 			state.usage = {
 				inputTokens: state.usage.inputTokens + (event.inputTokens ?? 0),
@@ -121,6 +136,15 @@ export function applyEvent(state: TranscriptState, event: BackendEvent): void {
 			return
 
 		case "done":
+			// A pending ask cannot outlive its turn: the agent has moved on and the
+			// buttons no longer do anything. Leaving them live is the ghost-request
+			// experience — an Allow that arrives after the fact, answering nothing.
+			for (const entry of state.entries) {
+				if (entry.kind === "permission" && entry.status === "pending") {
+					entry.status = "denied"
+					entry.automatic = "the turn ended before this was answered"
+				}
+			}
 			return
 	}
 }

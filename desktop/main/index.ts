@@ -5,7 +5,7 @@
  * project-specific lives on a {@link ProjectWindow}; this file only decides what
  * exists and when.
  */
-import { app, dialog, shell } from "electron"
+import { app, dialog, nativeImage, shell } from "electron"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
@@ -55,6 +55,14 @@ async function main(): Promise<void> {
 	installCrashHandlers()
 
 	await app.whenReady()
+
+	// In dev the dock shows Electron's own icon; the packaged app gets its icon
+	// from `build/icon.png` via electron-builder. This closes the dev gap so the
+	// app is recognisably Caret in both.
+	if (process.platform === "darwin" && app.dock) {
+		const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "assets", "icons", "icon.png"))
+		if (!icon.isEmpty()) app.dock.setIcon(icon)
+	}
 	loadPrefs()
 
 	// Where the bundled coding backend lives. Only the main process knows this,

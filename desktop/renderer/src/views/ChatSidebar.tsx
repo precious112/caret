@@ -232,11 +232,23 @@ function useComposerKeys(send: () => void) {
  */
 function Composer(props: ComposerProps) {
 	const onKeyDown = useComposerKeys(props.send)
+
+	// A textarea does not grow on its own. Height tracks content up to the
+	// max-height ceiling (10rem, from `max-h-40`); past it, the box holds still
+	// and the text scrolls inside. Driven by the draft value rather than input
+	// events so sending — which clears the draft — also collapses the box.
+	useEffect(() => {
+		const el = props.inputRef.current
+		if (!el) return
+		el.style.height = "auto"
+		el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+	}, [props.draft, props.inputRef])
+
 	return (
 		<footer className="shrink-0 p-2.5">
 			<div className="rounded-xl border border-shell-border bg-shell-bg focus-within:border-white/20">
 				<textarea
-					className="max-h-40 min-h-[46px] w-full resize-none bg-transparent px-3 pt-2.5 leading-relaxed outline-none placeholder:text-shell-muted"
+					className="max-h-40 min-h-[46px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2.5 leading-relaxed outline-none placeholder:text-shell-muted"
 					data-testid="chat-input"
 					disabled={!props.ready}
 					onChange={(event) => props.setDraft(event.target.value)}
@@ -335,7 +347,21 @@ function NoBackend({ detail, onOpenBackendSetup }: { detail?: string | null; onO
 	)
 }
 
-function SessionList({ sessions, onPick }: { sessions: AgentSessionWire[]; onPick(id: string): void }) {
+/**
+ * Sessions the History list should not carry.
+ *
+ * Visual edits create one session per click of the pencil, so a working
+ * afternoon buries the actual conversations under dozens of "Edit" rows. The
+ * pill already reported each one when it happened, and provenance keeps the
+ * durable record — the History list is for conversations someone might want to
+ * reopen. Syncs stay listed: their transcripts answer "what did that sync do".
+ * (Titles are Caret's own, set at session creation, so matching on them is
+ * matching on our own constants — "AI edit" covers pre-lane sessions.)
+ */
+const HIDDEN_SESSION_TITLES = new Set(["Edit", "AI edit"])
+
+function SessionList({ sessions: allSessions, onPick }: { sessions: AgentSessionWire[]; onPick(id: string): void }) {
+	const sessions = allSessions.filter((session) => !HIDDEN_SESSION_TITLES.has(session.title))
 	return (
 		<div className="max-h-56 overflow-y-auto border-b border-shell-border" data-testid="chat-sessions">
 			{sessions.length === 0 ? (
@@ -470,18 +496,44 @@ function Permission({
 	)
 }
 
+/** Beyond this, the list is a wall — the count says the rest. */
+const FILE_CHANGES_SHOWN = 5
+
 function FileChanges({ files }: { files: string[] }) {
+	const [expanded, setExpanded] = useState(false)
 	if (files.length === 0) return null
+
+	// Unbounded, a big turn's file list eats the whole sidebar — eleven lines of
+	// paths crowding out the conversation they belong to.
+	const shown = expanded ? files : files.slice(0, FILE_CHANGES_SHOWN)
+	const hidden = files.length - shown.length
+
 	return (
 		<div className="mt-7 border-t border-shell-border pt-2.5" data-testid="chat-files">
 			<p className="mb-1.5 text-[11px] tracking-wide text-shell-muted uppercase">
 				Changed {files.length > 1 ? `· ${files.length}` : ""}
 			</p>
-			{files.map((file) => (
+			{shown.map((file) => (
 				<p className="truncate text-[11.5px] text-shell-muted" key={file} title={file}>
 					{file.split("/").slice(-2).join("/")}
 				</p>
 			))}
+			{hidden > 0 && (
+				<button
+					className="mt-0.5 text-[11.5px] text-shell-muted underline-offset-2 hover:text-shell-text hover:underline"
+					onClick={() => setExpanded(true)}
+					type="button">
+					+{hidden} more…
+				</button>
+			)}
+			{expanded && files.length > FILE_CHANGES_SHOWN && (
+				<button
+					className="mt-0.5 text-[11.5px] text-shell-muted underline-offset-2 hover:text-shell-text hover:underline"
+					onClick={() => setExpanded(false)}
+					type="button">
+					Show fewer
+				</button>
+			)}
 		</div>
 	)
 }

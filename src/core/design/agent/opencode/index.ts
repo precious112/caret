@@ -543,6 +543,13 @@ export class EventMapper {
 				return
 			}
 
+			case "permission.replied": {
+				const replied = event.properties as { sessionID: string; requestID: string; reply: string }
+				if (replied.sessionID !== this.sessionId) return
+				yield { type: "permission-resolved", requestId: replied.requestID, allowed: replied.reply !== "reject" }
+				return
+			}
+
 			case "session.error": {
 				const properties = event.properties as {
 					sessionID?: string
