@@ -11,6 +11,8 @@
  * separate Agent SDK credit pool rather than normal Claude Code limits. The
  * setup screen says so; this file is where the fact comes from.
  */
+
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { spawn } from "child_process"
 import { randomUUID } from "crypto"
 
@@ -227,7 +229,13 @@ class ClaudeSession implements BackendSession {
 		const queue = new EventQueue<BackendEvent>()
 
 		const run = query({
-			prompt: input.images?.length ? `${input.text}\n\n(Caret attached ${input.images.length} screenshot(s).)` : input.text,
+			// Images go as real content blocks, which needs the streaming-input form
+			// of `prompt`. The string form cannot carry them, and what stood here
+			// before was a string that *said* "Caret attached 2 screenshot(s)" while
+			// discarding them — so the model was told to look at pictures it had
+			// never been given, and would confidently describe what it "saw". That
+			// is worse than dropping them: a silent drop is at least detectable.
+			prompt: input.images?.length ? streamed(input) : input.text,
 			options: {
 				cwd: this.options.workingDirectory,
 				model: this.options.model,
@@ -313,6 +321,42 @@ class ClaudeSession implements BackendSession {
 	async close(): Promise<void> {
 		await this.abort()
 	}
+}
+
+/**
+ * A turn carrying images, in the SDK's streaming-input form.
+ *
+ * One message with a text block and one image block per screenshot. Yielded
+ * from an async generator because that is the only `prompt` shape the SDK
+ * accepts content blocks through — a plain string has nowhere to put them.
+ *
+ * Data URLs are split rather than passed whole: the API wants the media type
+ * and the base64 payload as separate fields, and handing it `data:image/png;…`
+ * as the payload is a 400 that reads like the image was malformed.
+ */
+async function* streamed(input: SendInput): AsyncIterable<SDKUserMessage> {
+	const images = (input.images ?? [])
+		.map((url) => {
+			const match = /^data:([^;,]+);base64,(.+)$/s.exec(url)
+			return match ? { media_type: match[1], data: match[2] } : null
+		})
+		.filter((image): image is { media_type: string; data: string } => image !== null)
+
+	yield {
+		type: "user",
+		parent_tool_use_id: null,
+		session_id: "",
+		message: {
+			role: "user",
+			content: [
+				{ type: "text", text: input.text },
+				...images.map((image) => ({
+					type: "image" as const,
+					source: { type: "base64" as const, media_type: image.media_type as "image/png", data: image.data },
+				})),
+			],
+		},
+	} as SDKUserMessage
 }
 
 function pathOf(input: Record<string, unknown>): string | undefined {
