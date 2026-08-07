@@ -18,7 +18,13 @@ export async function readPageMeta(workspacePath: string, pageId: string): Promi
 		// (e.g. no `states`). Default every field so callers never hit undefined.
 		const raw = (JSON.parse(content) ?? {}) as Partial<PageMeta>
 		return {
-			id: typeof raw.id === "string" ? raw.id : pageId,
+			// **The directory is the identity, not `meta.json`'s claim about it.**
+			// The folder name is the import path and the URL route, so a stored id
+			// that disagrees is broken data that breaks quietly: the canvas card
+			// renders and thumbnails but cannot be opened, `<a href="/id">` goes
+			// nowhere, flow steps dangle, and `get_screenshot` misses. Preferring
+			// the stored value was how AI-written meta.json silently did all four.
+			id: pageId,
 			title: typeof raw.title === "string" ? raw.title : pageId,
 			type: typeof raw.type === "string" ? raw.type : "page",
 			states: Array.isArray(raw.states) ? raw.states : [],

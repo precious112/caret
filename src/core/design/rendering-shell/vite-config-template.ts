@@ -33,7 +33,14 @@ function caretRouterPlugin() {
       try {
         const metaPath = join(pagesDir, p, "meta.json")
         const meta = JSON.parse(readFileSync(metaPath, "utf-8"))
-        return JSON.stringify({ ...meta, id: meta.id || p, ...(isBroken ? { broken: true } : {}) })
+        // The directory wins, it does not merely fill in. \`routes[].name\` is the
+        // directory, and the canvas decides a card is openable with
+        // \`routes.some(r => r.name === page.id)\` — so a meta.json whose id
+        // disagreed with its folder produced a page that rendered and
+        // thumbnailed perfectly and silently could not be opened. The folder is
+        // the real identity anyway: it is the import path and the URL, so an id
+        // that differs also breaks \`<a href="/id">\`, flow steps and screenshots.
+        return JSON.stringify({ ...meta, id: p, ...(isBroken ? { broken: true } : {}) })
       } catch {
         return JSON.stringify({ id: p, title: p, type: "page", states: [], tags: [], ...(isBroken ? { broken: true } : {}) })
       }
@@ -267,7 +274,8 @@ function caretApiPlugin() {
               let meta
               try {
                 meta = JSON.parse(readFileSync(join(pagesDir, p, "meta.json"), "utf-8"))
-                meta.id = meta.id || p
+                // The directory is the identity — see the router plugin above.
+                meta.id = p
               } catch {
                 meta = { id: p, title: p, type: "page", states: [], tags: [] }
               }

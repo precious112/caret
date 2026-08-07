@@ -166,6 +166,17 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 		path.join(fragmentedDir, "meta.json"),
 		JSON.stringify({ id: "fragmented", title: "Fragmented", type: "page", states: [], tags: ["fixture"] }, null, 2),
 	)
+
+	// A page whose meta.json claims an id its folder does not have. AI-written
+	// meta.json does this, and it used to render and thumbnail perfectly while
+	// being silently impossible to open — see scenario `p`.
+	const renamedDir = path.join(caretDir, "pages", "renamed")
+	await fs.mkdir(renamedDir, { recursive: true })
+	await fs.writeFile(path.join(renamedDir, "index.tsx"), PAGE_TEMPLATE("renamed", "Renamed"))
+	await fs.writeFile(
+		path.join(renamedDir, "meta.json"),
+		JSON.stringify({ id: "a-different-id", title: "Renamed", type: "page", states: [], tags: ["fixture"] }, null, 2),
+	)
 	for (const [file, flow] of Object.entries(FIXTURE_FLOWS)) {
 		await fs.writeFile(path.join(caretDir, "flows", file), JSON.stringify(flow, null, 2))
 	}
@@ -769,6 +780,35 @@ async function main() {
 		if (sel.lineNumber !== FRAGMENT_H1_LINE)
 			throw new Error(`resolved line ${sel.lineNumber}, expected ${FRAGMENT_H1_LINE} (source capture broken?)`)
 		return `clicked h1 in a fragment file resolves to ${sel.filePath}:${sel.lineNumber} exactly`
+	})
+
+	await scenario("p. a page opens from the canvas even when meta.json disagrees about its id", async () => {
+		// The canvas decides a card is openable with
+		// `routes.some(r => r.name === page.id)` — route names being folders. When
+		// the id came from meta.json instead, a page with a mismatched id rendered
+		// and thumbnailed perfectly and silently could not be opened, with no
+		// error anywhere. The folder is the identity; this pins that.
+		const { page } = await openCanvas(ctx)
+
+		const card = page.locator('.caret-canvas-frame:has-text("Renamed")')
+		await card.waitFor({ timeout: 20000 })
+
+		const cursor = await card.evaluate((element) => getComputedStyle(element as HTMLElement).cursor)
+		if (cursor !== "pointer") {
+			await page.close()
+			throw new Error(`the card is not clickable (cursor=${cursor}) — its meta.json id is winning over its folder`)
+		}
+
+		await card.click()
+		await page.waitForSelector(".caret-focused-iframe", { timeout: 15000 })
+		const opened = await page.evaluate(
+			() => (document.querySelector(".caret-focused-iframe") as HTMLIFrameElement | null)?.src ?? "",
+		)
+		await page.close()
+
+		// The folder name is what the route and the editor must both use.
+		if (!opened.includes("page=renamed")) throw new Error(`focused the wrong page: ${opened}`)
+		return "a folder/meta id mismatch still opens, on the folder's own id"
 	})
 
 	await browser.close()
