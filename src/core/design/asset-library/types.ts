@@ -28,7 +28,7 @@ export type RecipeKind = "photo" | "texture" | "pattern" | "gradient" | "mark"
  * answer. It also **filters** rather than ranks — a section divider offered as
  * a hero background is not a worse match, it is the wrong object.
  */
-export type AssetPurpose = "background" | "overlay" | "accent" | "divider"
+export type AssetPurpose = "background" | "overlay" | "accent" | "divider" | "mark" | "object3d"
 
 /**
  * How a recipe is realised. Only `raster` costs money, and only `raster`

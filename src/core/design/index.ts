@@ -91,6 +91,20 @@ export {
 	type ImageResult,
 } from "./asset-library/raster/gemini"
 export {
+	NO_TRIPO_REASON,
+	resolveTripoConfig,
+	TripoClient,
+	type TripoConfig,
+	type TripoProgress,
+} from "./asset-library/tripo/client"
+export {
+	decideOptimization,
+	isRecommendedOptimizer,
+	OPTIMIZATION_BOUNDS,
+	type OptimizationDecision,
+	RECOMMENDED_OPTIMIZER_MATCHERS,
+} from "./asset-library/tripo/optimize"
+export {
 	ASSET_TYPES,
 	ASSETS_DIR,
 	type AssetEntry,

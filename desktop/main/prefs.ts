@@ -52,6 +52,14 @@ export interface Prefs {
 	 * cannot see, which is a bug this project actually shipped.
 	 */
 	visionChecks: Record<string, { sees: boolean; reason?: string; at: number }>
+	/**
+	 * Per-task model overrides for the generation lanes.
+	 *
+	 * The lanes inherit the session model by default; these exist because the
+	 * right model for chat and the right model for a specific job are often not
+	 * the same one — mesh optimization has a recommended set of its own.
+	 */
+	laneModels: { mark?: string; model3d?: string }
 }
 
 const DEFAULTS: Prefs = {
@@ -67,6 +75,7 @@ const DEFAULTS: Prefs = {
 	appWritesAllowed: [],
 	secrets: {},
 	visionChecks: {},
+	laneModels: {},
 }
 
 const MAX_RECENTS = 12

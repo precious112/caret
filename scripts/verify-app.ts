@@ -1321,7 +1321,7 @@ async function main(): Promise<void> {
 		// environment variable — which is a test setup, not a product. This drives
 		// the field a real person would use.
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
-		const section = chrome.getByTestId("image-key-section")
+		const section = chrome.getByTestId("gemini-key-section")
 		await section.waitFor({ timeout: 30_000 })
 
 		// The offer has to say most projects never need this, or a key field reads
@@ -2176,6 +2176,140 @@ async function main(): Promise<void> {
 
 		return `asked "${questionText.slice(0, 50)}…", finished → ${tokens.typography.displayFamily ?? tokens.typography.fontFamily}, ${tokens.color.brand.seed}`
 	})
+
+	// ── the authored and 3D lanes, for real ────────────────────────────────────
+	// Both spend someone's money or credits, so both are gated on the credentials
+	// actually being present and skipped honestly otherwise — a run with skips
+	// never reports CERTIFIED.
+
+	const claudeReady = await new Promise<boolean>((resolve) => {
+		child_process.execFile("claude", ["auth", "status"], { timeout: 10_000 }, (err, stdout) => {
+			try {
+				resolve(!err && Boolean((JSON.parse(stdout) as { loggedIn?: boolean }).loggedIn))
+			} catch {
+				resolve(false)
+			}
+		})
+	})
+
+	if (!claudeReady) {
+		skip("bk. a mark is drawn, watched converging, and indexed", "the Claude CLI is not signed in on this machine")
+	} else {
+		await scenario("bk. a mark is drawn, watched converging, and indexed", async () => {
+			// The loop needs a model that accepts images, and the fixture's selected
+			// backend is the bundled one — so the scenario walks the same road a
+			// user would: switch the backend to Claude in the UI, then draw.
+			await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
+			const claudeRow = chrome.getByTestId("backend-claude")
+			await claudeRow.waitFor({ timeout: 30_000 })
+			await claudeRow.getByRole("button").first().click()
+			await chrome.getByText("Back to canvas").click()
+
+			await chrome.getByTestId("top-bar").getByRole("button", { name: "Assets" }).click()
+			await chrome.getByTestId("assets-generate").click()
+			const panel = chrome.getByTestId("generate-asset")
+			await panel.waitFor({ timeout: 15_000 })
+
+			const question = panel.getByTestId("generate-question")
+			await question.waitFor({ timeout: 15_000 })
+			await question.locator('[data-generate-choice="mark"]').click()
+
+			const flow = panel.getByTestId("generate-mark")
+			await flow.waitFor({ timeout: 15_000 })
+			// A fact, not a style prompt — the field's whole contract.
+			await flow.getByTestId("mark-subject").fill("a compass rose")
+			await flow.getByTestId("mark-generate").click()
+
+			// The vision probe plus three rounds of a real model. Minutes.
+			const result = flow.getByTestId("mark-result")
+			await result.waitFor({ timeout: 480_000 })
+
+			// The convergence was streamed, not just claimed: at least one round's
+			// render arrived as an image that actually decodes.
+			const roundImages = await flow.locator('[data-testid="mark-rounds"] img').count()
+			assert(roundImages >= 1, "no round renders were streamed to the UI")
+			const decoded = await flow
+				.locator('[data-testid="mark-rounds"] img')
+				.first()
+				.evaluate((img: HTMLImageElement) => img.naturalWidth)
+			assert(decoded > 0, "a streamed round render did not decode")
+			await shot(chrome, "23-mark-rounds")
+
+			await flow.getByTestId("mark-tag").fill("compass-mark")
+			await flow.getByTestId("mark-save").click()
+
+			const raw = await waitFor(
+				"the mark to reach the index",
+				async () => {
+					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+					return text.includes('"compass-mark"') ? text : null
+				},
+				30_000,
+			)
+			const entry = (JSON.parse(raw) as { assets: Array<Record<string, unknown>> }).assets.find(
+				(asset) => asset.tag === "compass-mark",
+			)
+			assert(entry?.kind === "vector", `the mark was indexed as ${entry?.kind}`)
+			const origin = entry?.origin as Record<string, unknown> | undefined
+			assert(origin?.lane === "authored", `the lane was recorded as ${origin?.lane}`)
+			assert((origin?.answers as Record<string, string>)?.subject === "a compass rose", "the subject was not recorded")
+
+			return `${roundImages} round(s) streamed live, saved as @compass-mark with the subject and rounds in provenance`
+		})
+	}
+
+	if (!process.env.TRIPO_API_KEY) {
+		skip("bl. an image becomes an optimized 3D model", "no TRIPO_API_KEY in this environment")
+	} else {
+		await scenario("bl. an image becomes an optimized 3D model", async () => {
+			await chrome.getByTestId("assets-generate").click()
+			const panel = chrome.getByTestId("generate-asset")
+			await panel.waitFor({ timeout: 15_000 })
+
+			const question = panel.getByTestId("generate-question")
+			await question.waitFor({ timeout: 15_000 })
+			await question.locator('[data-generate-choice="object3d"]').click()
+
+			const flow = panel.getByTestId("generate-model3d")
+			await flow.waitFor({ timeout: 15_000 })
+			// Pointing, never typing: the source is an asset already in the library.
+			await flow.locator("[data-model3d-source]").first().click()
+			await flow.getByTestId("model3d-generate").click()
+
+			// Tripo's queue plus two tasks plus the optimizer's decision. Long.
+			const result = flow.getByTestId("model3d-result")
+			await result.waitFor({ timeout: 900_000 })
+			await shot(chrome, "24-model3d-result")
+
+			await flow.getByTestId("model3d-tag").fill("bench-object")
+			await flow.getByTestId("model3d-save").click()
+
+			const raw = await waitFor(
+				"the model to reach the index",
+				async () => {
+					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+					return text.includes('"bench-object"') ? text : null
+				},
+				30_000,
+			)
+			const entry = (JSON.parse(raw) as { assets: Array<Record<string, unknown>> }).assets.find(
+				(asset) => asset.tag === "bench-object",
+			)
+			assert(entry?.kind === "model", `the model was indexed as ${entry?.kind}`)
+			assert(Number(entry?.bytes) > 1_000, `the glb is only ${entry?.bytes} bytes`)
+
+			const origin = entry?.origin as Record<string, unknown> | undefined
+			assert(origin?.lane === "model3d", `the lane was recorded as ${origin?.lane}`)
+			assert(origin?.producer === "tripo", `the producer was recorded as ${origin?.producer}`)
+			// The whole pipeline is reconstructible from provenance: source, task
+			// ids, the optimizer's decision and what it saved.
+			const resolved = String(origin?.resolved ?? "")
+			assert(resolved.includes("taskIds"), "the Tripo task ids were not recorded")
+			assert(resolved.includes("draftBytes"), "the draft weight was not recorded")
+
+			return `glb landed at ${Math.round(Number(entry?.bytes) / 1024)}KB with the full pipeline in provenance`
+		})
+	}
 }
 
 async function cleanup(): Promise<void> {

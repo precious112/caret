@@ -21,7 +21,7 @@ export type AssetOrigin =
 	| {
 			type: "generated"
 			/** Which lane produced it — see the Phase 6.7 four-lane split. */
-			lane: "raster" | "generator" | "iconset" | "authored"
+			lane: "raster" | "generator" | "iconset" | "authored" | "model3d"
 			/** Model id, generator id, or icon-set name. */
 			producer: string
 			/** Recipe that composed the request, when one did. */

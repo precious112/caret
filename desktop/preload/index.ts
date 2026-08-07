@@ -48,6 +48,12 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"secrets:clear": true,
 
 	"generate:discard": true,
+	"generate:mark": true,
+	"generate:markAccept": true,
+	"generate:model3d": true,
+	"generate:model3dAccept": true,
+	"generate:taskModels": true,
+	"generate:setTaskModel": true,
 	"generate:questions": true,
 	"generate:recipes": true,
 	"generate:variants": true,
@@ -99,6 +105,7 @@ const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {
 	"interview:prompt": true,
 	"assets:changed": true,
 	"agent:state": true,
+	"generate:progress": true,
 	log: true,
 }
 

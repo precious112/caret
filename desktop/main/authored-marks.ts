@@ -43,10 +43,16 @@ export interface MarkRequest {
 	tokens: FoundationTokens | null
 	/** Overrides the project's backend model for this lane only. */
 	modelOverride?: string
+	/**
+	 * Called as the loop moves. The round updates carry the render itself,
+	 * because the only honest way to fill a minute of waiting is to show the
+	 * thing the model is looking at while it decides what it got wrong.
+	 */
+	onProgress?(update: { stage: string; round?: number; previewPng?: Buffer }): void
 }
 
 export type MarkResult =
-	| { ok: true; svg: string; rounds: number; model: string; transcript: string[] }
+	| { ok: true; svg: string; rounds: number; model: string; transcript: string[]; previewPng: Buffer }
 	| { ok: false; reason: string; needsAnotherModel?: boolean }
 
 /**
@@ -78,11 +84,14 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 
 	const palette = derivePalette(request.tokens)
 	const transcript: string[] = []
+	const progress = request.onProgress ?? (() => {})
 	let session: BackendSession | null = null
 	let best = ""
+	let bestPng: Buffer | null = null
 	let rounds = 0
 
 	try {
+		progress({ stage: "Asking the model for a first attempt" })
 		session = await backend.startSession({
 			workingDirectory: request.projectPath,
 			// It draws; it does not touch the repository. Read-only is the boundary
@@ -99,6 +108,7 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 		for (let round = 1; round <= MARK_ROUNDS; round++) {
 			const svg = extractSvg(reply)
 			if (!svg) {
+				progress({ stage: `Round ${round}: the reply had no SVG — asking again` })
 				reply = await turn(session, { text: "That reply contained no <svg> element. Send the SVG itself, nothing else." })
 				transcript.push(reply)
 				continue
@@ -106,6 +116,7 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 
 			const png = await renderSvg(svg, palette.surface)
 			if (!png) {
+				progress({ stage: `Round ${round}: the SVG did not render — asking for a correction` })
 				reply = await turn(session, {
 					text: "That SVG did not render — a browser could draw nothing from it. Send a corrected version.",
 				})
@@ -114,9 +125,12 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 			}
 
 			best = svg
+			bestPng = png
 			rounds = round
+			progress({ stage: `Round ${round} rendered`, round, previewPng: png })
 			if (round === MARK_ROUNDS) break
 
+			progress({ stage: `Showing the model its own round ${round}` })
 			reply = await turn(session, {
 				text: critiquePrompt(request.brief, round),
 				images: [`data:image/png;base64,${png.toString("base64")}`],
@@ -130,8 +144,8 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 		await session?.close().catch(() => {})
 	}
 
-	if (!best) return { ok: false, reason: "The model never produced an SVG that rendered." }
-	return { ok: true, svg: best, rounds, model: model || "(backend default)", transcript }
+	if (!best || !bestPng) return { ok: false, reason: "The model never produced an SVG that rendered." }
+	return { ok: true, svg: best, rounds, model: model || "(backend default)", transcript, previewPng: bestPng }
 }
 
 const SYSTEM_PROMPT = `You are drawing a single vector mark — a logo, monogram or symbol — as SVG, inside a design tool.
@@ -251,6 +265,51 @@ async function renderSvg(svg: string, surface: string): Promise<Buffer | null> {
 	} finally {
 		window?.destroy()
 	}
+}
+
+interface PendingMark {
+	svg: string
+	subject: string
+	rounds: number
+	model: string
+	at: number
+}
+
+/** One held mark per project, same lifetime rules as the raster lane's cache. */
+const pendingMarks = new Map<string, PendingMark>()
+
+export function holdMark(projectPath: string, mark: { svg: string; subject: string; rounds: number; model: string }): void {
+	pendingMarks.set(projectPath, { ...mark, at: Date.now() })
+}
+
+/** Commits the held mark as an ordinary asset. The SVG never left main. */
+export async function acceptMark(projectPath: string, tag: string): Promise<{ ok: boolean; tag?: string; error?: string }> {
+	const held = pendingMarks.get(projectPath)
+	if (!held) return { ok: false, error: "No mark is waiting. Generate one first." }
+
+	const { addGeneratedAsset } = await import("../../src/core/design")
+	const result = await addGeneratedAsset({
+		projectPath,
+		tag: tag.trim() || "mark",
+		extension: ".svg",
+		bytes: Buffer.from(held.svg, "utf-8"),
+		description: `A mark: ${held.subject}. Authored by ${held.model} in ${held.rounds} render-compare round(s).`,
+		alt: held.subject,
+		origin: {
+			type: "generated",
+			lane: "authored",
+			producer: held.model,
+			answers: { subject: held.subject },
+			resolved: JSON.stringify({ rounds: held.rounds }),
+		},
+	})
+
+	if (result.ok) pendingMarks.delete(projectPath)
+	return result.ok ? { ok: true, tag: result.entry.tag } : { ok: false, error: result.reason }
+}
+
+export function discardMark(projectPath: string): void {
+	pendingMarks.delete(projectPath)
 }
 
 /** True when every pixel matches the first one — nothing was drawn. */

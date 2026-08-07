@@ -71,6 +71,20 @@ export const GENERATION_QUESTIONS: GenerationQuestion[] = [
 				purposes: ["divider"],
 				tags: [],
 			},
+			{
+				id: "mark",
+				label: "A logo or a mark",
+				hint: "Drawn as vector by a model that is shown its own work and corrects it.",
+				purposes: ["mark"],
+				tags: [],
+			},
+			{
+				id: "object3d",
+				label: "A 3D object",
+				hint: "Built from an image in your library, then optimized so it doesn't weigh the page down.",
+				purposes: ["object3d"],
+				tags: [],
+			},
 		],
 	},
 	{

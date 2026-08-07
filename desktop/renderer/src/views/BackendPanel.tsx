@@ -171,7 +171,33 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 					otherwise for a project.
 				</p>
 
-				<ImageKeySection />
+				<KeySection
+					blurb={
+						<>
+							Only photographs need this. Washes, textures, patterns, shapes and dividers are generated on your
+							machine and need no account. The key is yours, billed to you directly, and is stored in your OS
+							keychain — never in <code>.caret/</code>, which travels with the project.
+						</>
+					}
+					name="geminiApiKey"
+					placeholder="Google Gemini API key"
+					testId="gemini-key"
+					title="Generated photographs"
+				/>
+
+				<KeySection
+					blurb={
+						<>
+							Only 3D objects need this. Tripo builds the model from an image in your library; a model of your
+							choosing then decides how far to optimize it so it doesn't weigh the page down. Same storage rules as
+							the key above.
+						</>
+					}
+					name="tripoApiKey"
+					placeholder="Tripo API key"
+					testId="tripo-key"
+					title="Generated 3D objects"
+				/>
 
 				<McpSection project={project} />
 
@@ -199,15 +225,27 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
  * what it is, because a key the renderer can read is a key a compromised
  * renderer can send somewhere.
  */
-function ImageKeySection() {
+function KeySection({
+	name,
+	title,
+	blurb,
+	placeholder,
+	testId,
+}: {
+	name: string
+	title: string
+	blurb: React.ReactNode
+	placeholder: string
+	testId: string
+}) {
 	const [status, setStatus] = useState<SecretStatusWire | null>(null)
 	const [value, setValue] = useState("")
 	const [error, setError] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 
 	const refresh = useCallback(async () => {
-		setStatus((await invoke("secrets:status", "geminiApiKey")) ?? null)
-	}, [])
+		setStatus((await invoke("secrets:status", name)) ?? null)
+	}, [name])
 
 	useEffect(() => {
 		void refresh()
@@ -217,7 +255,7 @@ function ImageKeySection() {
 		setBusy(true)
 		setError(null)
 		try {
-			const result = await invoke("secrets:set", "geminiApiKey", value)
+			const result = await invoke("secrets:set", name, value)
 			if (result?.ok) {
 				setValue("")
 				await refresh()
@@ -230,13 +268,9 @@ function ImageKeySection() {
 	}
 
 	return (
-		<section className="mt-8 border-t border-shell-border pt-6" data-testid="image-key-section">
-			<h2 className="font-medium">Generated photographs</h2>
-			<p className="mt-1 text-[11.5px] leading-relaxed text-shell-muted">
-				Only photographs need this. Washes, textures, patterns, shapes and dividers are generated on your machine and need
-				no account. The key is yours, billed to you directly, and is stored in your OS keychain — never in{" "}
-				<code>.caret/</code>, which travels with the project.
-			</p>
+		<section className="mt-8 border-t border-shell-border pt-6" data-testid={`${testId}-section`}>
+			<h2 className="font-medium">{title}</h2>
+			<p className="mt-1 text-[11.5px] leading-relaxed text-shell-muted">{blurb}</p>
 
 			{status && !status.available ? (
 				<p className="mt-3 rounded-lg border border-amber-500/40 p-3 text-[11.5px] leading-relaxed text-shell-muted">
@@ -246,16 +280,16 @@ function ImageKeySection() {
 				<div className="mt-3 flex items-center gap-2">
 					<input
 						className="min-w-0 flex-1 rounded-lg border border-shell-border bg-transparent px-3 py-1.5 font-mono text-[12.5px] outline-none"
-						data-testid="gemini-key"
+						data-testid={testId}
 						onChange={(event) => setValue(event.target.value)}
 						onKeyDown={(event) => event.key === "Enter" && save()}
-						placeholder={status?.present ? "A key is stored. Type a new one to replace it." : "Google Gemini API key"}
+						placeholder={status?.present ? "A key is stored. Type a new one to replace it." : placeholder}
 						type="password"
 						value={value}
 					/>
 					<button
 						className="rounded-lg bg-caret-accent px-3 py-1.5 text-[12.5px] text-white disabled:opacity-50"
-						data-testid="gemini-key-save"
+						data-testid={`${testId}-save`}
 						disabled={busy || !value.trim()}
 						onClick={save}
 						type="button">
@@ -264,10 +298,10 @@ function ImageKeySection() {
 					{status?.present && (
 						<button
 							className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-shell-muted hover:bg-white/5"
-							data-testid="gemini-key-clear"
+							data-testid={`${testId}-clear`}
 							disabled={busy}
 							onClick={async () => {
-								await invoke("secrets:clear", "geminiApiKey")
+								await invoke("secrets:clear", name)
 								await refresh()
 							}}
 							type="button">

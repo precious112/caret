@@ -450,6 +450,59 @@ export interface RecipeCardWire {
 	unavailable?: string
 }
 
+/**
+ * Progress from a long-running generation job.
+ *
+ * Marks and 3D are not variant lanes — one result, minutes of waiting — so the
+ * renderer cannot sit on a spinner and call it feedback. The mark loop streams
+ * each round's render as it happens, which turns the wait into the one thing
+ * worth watching: the model correcting its own work.
+ */
+export interface GenerateProgressWire {
+	job: "mark" | "model3d"
+	/** Short, present-tense, for the status line. */
+	stage: string
+	detail?: string
+	/** Mark rounds only: which round, and what it rendered. */
+	round?: number
+	preview?: string
+}
+
+/** What the mark loop came back with. The SVG stays in main until accepted. */
+export interface MarkOutcomeWire {
+	ok: boolean
+	/** Preview of the final round, as a data URL. */
+	preview?: string
+	rounds?: number
+	model?: string
+	reason?: string
+	/** True when the fix is picking a model that accepts images. */
+	needsAnotherModel?: boolean
+}
+
+/** What the 3D pipeline came back with. The glb stays in main until accepted. */
+export interface Model3dOutcomeWire {
+	ok: boolean
+	/** Bytes before and after the optimization pass. */
+	draftBytes?: number
+	optimizedBytes?: number
+	/** What the model decided and why, verbatim from its structured answer. */
+	optimization?: { faceLimit: number; textureSize: number; reason: string }
+	model?: string
+	reason?: string
+	needsAnotherModel?: boolean
+}
+
+/** A backend model annotated for a specific task's picker. */
+export interface TaskModelWire {
+	id: string
+	label: string
+	providerName: string
+	free?: boolean
+	/** In the named-recommended set for this task. */
+	recommended?: boolean
+}
+
 /** One generated option, ready to be looked at and picked. */
 export interface GeneratedVariantWire {
 	variant: number
@@ -535,6 +588,38 @@ export interface IpcRequests {
 		aspect: string,
 		count: number,
 	) => GeneratedVariantWire[]
+	/**
+	 * Runs the mark loop: emit SVG, render, show the model its own work, correct.
+	 *
+	 * Awaited for the whole run — progress arrives on `generate:progress`. The
+	 * subject is a fact ("a compass rose"), not a style prompt; everything about
+	 * how it should look is composed by Caret from the foundation.
+	 */
+	"generate:mark": (projectPath: string, subject: string) => MarkOutcomeWire
+	/** Commits the held mark. Main holds the SVG; the renderer never carries it. */
+	"generate:markAccept": (projectPath: string, tag: string) => WriteResult & { tag?: string }
+
+	/**
+	 * Image → 3D through Tripo, then an LLM-directed optimization pass.
+	 *
+	 * `sourceTag` names an image asset already in the library — uploaded or
+	 * generated, both are assets by the time this runs, so one picker covers
+	 * both. The LLM never touches mesh bytes: it reads the draft's stats and the
+	 * intended use and decides the convert parameters, inside a bounded schema.
+	 */
+	"generate:model3d": (projectPath: string, sourceTag: string) => Model3dOutcomeWire
+	"generate:model3dAccept": (projectPath: string, tag: string) => WriteResult & { tag?: string }
+
+	/**
+	 * The backend's models, annotated for a task's picker.
+	 *
+	 * `recommended` marks the named set for that task — matched against what the
+	 * backend actually reports, never a hardcoded id list that goes stale.
+	 */
+	"generate:taskModels": (task: "mark" | "model3d") => TaskModelWire[]
+	/** Per-task model override. Empty string clears back to the session model. */
+	"generate:setTaskModel": (task: "mark" | "model3d", model: string) => void
+
 	/** Commits the chosen variant as an ordinary asset, with its provenance. */
 	"generate:accept": (
 		projectPath: string,
@@ -644,6 +729,8 @@ export interface IpcEvents {
 	"assets:changed": (projectPath: string) => void
 	/** The chat moved on: a token streamed, a permission was raised, a turn ended. */
 	"agent:state": (projectPath: string, state: AgentStateWire) => void
+	/** A long-running generation job (mark loop, 3D pipeline) moved a step. */
+	"generate:progress": (projectPath: string, update: GenerateProgressWire) => void
 	log: (line: string) => void
 }
 

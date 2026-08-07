@@ -39,13 +39,16 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
+import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
 import { resolveNotification } from "./electron-host"
 import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
+import { acceptModel3d, discardModel3d, generateModel3d } from "./generate-3d"
 import { acceptVariant, discardPending, generationQuestions, recipeCards, recipeVariants } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import { clearSecret, type SecretName, secretStatus, setSecret } from "./secrets"
+import { type LaneTask, listTaskModels, setTaskModel, taskModel } from "./task-models"
 import {
 	abandonWizard,
 	answerWizard,
@@ -312,10 +315,70 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("generate:questions", () => generationQuestions())
 
+	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string) => {
+		const tokens = await readFoundationTokens(projectPath).catch(() => null)
+		const window = windows.get(projectPath)
+
+		const result = await authorMark({
+			projectPath,
+			brief: subject,
+			tokens,
+			modelOverride: taskModel("mark") || undefined,
+			onProgress: (update) =>
+				window?.sendToChrome("generate:progress", projectPath, {
+					job: "mark",
+					stage: update.stage,
+					...(update.round !== undefined ? { round: update.round } : {}),
+					...(update.previewPng ? { preview: `data:image/png;base64,${update.previewPng.toString("base64")}` } : {}),
+				}),
+		})
+
+		if (!result.ok) return { ok: false, reason: result.reason, needsAnotherModel: result.needsAnotherModel }
+
+		holdMark(projectPath, { svg: result.svg, subject, rounds: result.rounds, model: result.model })
+		return {
+			ok: true,
+			preview: `data:image/png;base64,${result.previewPng.toString("base64")}`,
+			rounds: result.rounds,
+			model: result.model,
+		}
+	})
+
+	ipcMain.handle("generate:markAccept", async (_event, projectPath: string, tag: string) => {
+		const result = await acceptMark(projectPath, tag)
+		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+		return result.ok ? { ok: true, tag: result.tag } : { ok: false, error: result.error }
+	})
+
+	ipcMain.handle("generate:model3d", async (_event, projectPath: string, sourceTag: string) => {
+		const window = windows.get(projectPath)
+		return generateModel3d(projectPath, sourceTag, (update) =>
+			window?.sendToChrome("generate:progress", projectPath, {
+				job: "model3d",
+				stage: update.stage,
+				...(update.detail ? { detail: update.detail } : {}),
+			}),
+		)
+	})
+
+	ipcMain.handle("generate:model3dAccept", async (_event, projectPath: string, tag: string) => {
+		const result = await acceptModel3d(projectPath, tag)
+		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+		return result.ok ? { ok: true, tag: result.tag } : { ok: false, error: result.error }
+	})
+
+	ipcMain.handle("generate:taskModels", (_event, task: LaneTask) => listTaskModels(task))
+
+	ipcMain.handle("generate:setTaskModel", (_event, task: LaneTask, model: string) => setTaskModel(task, model))
+
 	// Photographs that were generated and not chosen are held in memory so a pick
 	// hands over the picture the user pointed at rather than a fresh one. Closing
 	// the picker is the moment they stop being candidates.
-	ipcMain.handle("generate:discard", (_event, projectPath: string) => discardPending(projectPath))
+	ipcMain.handle("generate:discard", (_event, projectPath: string) => {
+		discardPending(projectPath)
+		discardMark(projectPath)
+		discardModel3d(projectPath)
+	})
 
 	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>) =>
 		recipeCards(projectPath, answers),
