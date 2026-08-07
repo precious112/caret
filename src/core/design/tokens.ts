@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { runExclusive, writeFileAtomic } from "./file-mutation-queue"
 import type { FoundationTokens } from "./types"
 
 /**
@@ -18,11 +19,21 @@ export async function readFoundationTokens(workspacePath: string): Promise<Found
 
 /**
  * Writes foundation tokens to .caret/tokens/foundation.json
+ *
+ * Atomic and serialized, like every other design-layer write. This was the last
+ * one that wasn't, and it is the file with the most concurrent readers: the
+ * rules generator regenerates on every token change, the canvas's Vite plugin
+ * serves it, the healer reads it, and `get_tokens` hands it to an agent. A
+ * reader that catches the write mid-flight gets a truncated file — observed as
+ * "Unexpected end of JSON input" in a certification run, where the failure was
+ * at least visible. In the rules generator it would silently produce a project
+ * whose always-on context has no foundation in it.
  */
 export async function writeFoundationTokens(workspacePath: string, tokens: FoundationTokens): Promise<void> {
 	const dir = path.join(workspacePath, ".caret", "tokens")
+	const target = path.join(dir, "foundation.json")
 	await fs.mkdir(dir, { recursive: true })
-	await fs.writeFile(path.join(dir, "foundation.json"), JSON.stringify(tokens, null, 2))
+	await runExclusive(target, () => writeFileAtomic(target, JSON.stringify(tokens, null, 2)))
 }
 
 /**

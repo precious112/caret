@@ -24,6 +24,26 @@ import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
 import { NO_MODEL_REASON, resolveVerifyModel, solidPng } from "./verify-support"
 
 const KEEP = process.argv.includes("--keep")
+
+/**
+ * `--only ee,gg` runs just those scenarios, by the letter before the dot.
+ *
+ * Not a way to certify anything — a partial run is reported as such and can
+ * never say CERTIFIED. It exists because iterating on one scenario otherwise
+ * costs a full suite, and a suite that is expensive to fix is a suite that
+ * stays broken. Setup, launch and teardown still run in full, so a scenario
+ * that depends on an earlier one must be named alongside it.
+ */
+const ONLY = (() => {
+	const index = process.argv.indexOf("--only")
+	if (index === -1) return null
+	return new Set(
+		(process.argv[index + 1] ?? "")
+			.split(",")
+			.map((name) => name.trim())
+			.filter(Boolean),
+	)
+})()
 const SHOTS = path.resolve("release/verify-shots")
 
 interface ScenarioResult {
@@ -78,6 +98,7 @@ class Inconclusive extends Error {}
 let appDiedAt: string | null = null
 
 async function scenario(name: string, run: () => Promise<string>): Promise<void> {
+	if (ONLY && !ONLY.has(name.split(".")[0])) return
 	try {
 		const detail = await run()
 		results.push({ name, passed: true, detail })
@@ -1121,6 +1142,195 @@ async function main(): Promise<void> {
 		return "video indexed by the healer and shown as a seeked frame, not an image"
 	})
 
+	await scenario("be. @ picks an asset inside the app's own canvas", async () => {
+		// The picker is certified in verify:design-shell, but that runs the shell in
+		// a browser. Here it runs where it ships: a WebContentsView, with the page
+		// in a child frame, reached through the main process. The canvas has changed
+		// meaning across hosts before — `window.parent` is the same window at top
+		// level, which is what duplicated every inline edit — so "it worked in the
+		// harness" is not evidence about the app.
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			// No helper functions in here, however much they would tidy it up: this
+			// body is serialized into the main process, and esbuild's keepNames wraps
+			// every function-valued const in a `__name` helper that does not exist
+			// there. The first version of this scenario failed on exactly that.
+			//
+			// The canvas view is waited for, not assumed: it appears only once the
+			// design server is up, which is well after the window exists.
+			let canvas: any = null
+			const viewDeadline = Date.now() + 120000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				let deadline = Date.now() + 30000
+				let ready = false
+				while (Date.now() < deadline && !ready) {
+					ready = await wc.executeJavaScript(`!!document.querySelector('.caret-canvas-frame')`).catch(() => false)
+					if (!ready) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!ready) return { error: "no page card ever appeared on the canvas" }
+
+				await wc.executeJavaScript(`(document.querySelector('.caret-canvas-frame')).click(), true`)
+
+				deadline = Date.now() + 30000
+				let pageFrame: any = null
+				while (Date.now() < deadline && !pageFrame) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+					if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!pageFrame) return { error: "the focused page never became a frame of the canvas" }
+
+				deadline = Date.now() + 30000
+				let painter = false
+				while (Date.now() < deadline && !painter) {
+					painter = await pageFrame
+						.executeJavaScript(`!!document.querySelector('.caret-focused-paint-btn')`)
+						.catch(() => false)
+					if (!painter) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!painter) return { error: "the paint control never appeared in the focused page" }
+
+				// Clicked until the overlay is actually up, not once and hoped for.
+				// Focusing a page runs the caret-id precompute, which can write the
+				// source and bounce the iframe through HMR — a click that lands in
+				// that window sets state on a tree that is about to be replaced.
+				let overlayUp = false
+				for (let attempt = 0; attempt < 5 && !overlayUp; attempt++) {
+					await pageFrame
+						.executeJavaScript(
+							`(() => { const b = document.querySelector('.caret-focused-paint-btn'); if (b) b.click(); return !!b })()`,
+						)
+						.catch(() => false)
+					const attemptDeadline = Date.now() + 4000
+					while (Date.now() < attemptDeadline && !overlayUp) {
+						overlayUp = await pageFrame
+							.executeJavaScript(`!!document.querySelector('.caret-overlay')`)
+							.catch(() => false)
+						if (!overlayUp) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!overlayUp) return { error: "paint mode never engaged after five clicks" }
+
+				// Real mouse events, because the painter takes pointer capture and a
+				// dispatched PointerEvent has no pointer to capture. Coordinates are
+				// in the view's space, so the iframe's own offset is added.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const from = { x: Math.round(offset.x) + 120, y: Math.round(offset.y) + 160 }
+				const to = { x: from.x + 320, y: from.y + 220 }
+				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
+				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
+				for (let step = 1; step <= 6; step++) {
+					wc.sendInputEvent({
+						type: "mouseMove",
+						x: Math.round(from.x + ((to.x - from.x) * step) / 6),
+						y: Math.round(from.y + ((to.y - from.y) * step) / 6),
+						button: "left",
+						buttons: 1,
+					})
+					await new Promise((r) => setTimeout(r, 40))
+				}
+				wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 })
+
+				deadline = Date.now() + 20000
+				let box = false
+				while (Date.now() < deadline && !box) {
+					box = await pageFrame
+						.executeJavaScript(`!!document.querySelector('.caret-overlay-prompt input')`)
+						.catch(() => false)
+					if (!box) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!box) {
+					// Distinguishing the three ways this fails is the difference between
+					// one more run and five: the overlay never mounted, the drag never
+					// registered, or the rect came out too small for the prompt.
+					const state = await pageFrame
+						.executeJavaScript(`(() => ({
+							overlay: !!document.querySelector('.caret-overlay'),
+							rect: !!document.querySelector('.caret-overlay-rect'),
+							size: (() => { const r = document.querySelector('.caret-overlay-rect'); if (!r) return null; const b = r.getBoundingClientRect(); return Math.round(b.width) + 'x' + Math.round(b.height) })(),
+							iframeOffset: ${JSON.stringify(offset)},
+							dragged: ${JSON.stringify({ from, to })},
+						}))()`)
+						.catch((e: any) => ({ probeFailed: String(e) }))
+					return { error: `painting a region did not open an instruction box: ${JSON.stringify(state)}` }
+				}
+
+				// Typed the way a keystroke arrives: through the native setter and an
+				// input event, which is exactly what React's value tracker needs and
+				// what the picker listens for.
+				await pageFrame.executeJavaScript(`(() => {
+					const input = document.querySelector('.caret-overlay-prompt input')
+					input.focus()
+					const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+					setter.call(input, 'Put @her')
+					input.dispatchEvent(new Event('input', { bubbles: true }))
+					return true
+				})()`)
+
+				// Polled to a decoded thumbnail, not merely to a row: an <img> that
+				// exists but never paints is the exact failure a wrong asset URL
+				// produces, and it looks fine in a DOM assertion.
+				deadline = Date.now() + 30000
+				let option: { tag: string; decoded: number } | null = null
+				while (Date.now() < deadline) {
+					option = await pageFrame
+						.executeJavaScript(`(() => {
+							const row = document.querySelector('[data-caret-asset-option]')
+							if (!row) return null
+							const img = row.querySelector('img')
+							return { tag: row.getAttribute('data-caret-asset-option'), decoded: img ? img.naturalWidth : 0 }
+						})()`)
+						.catch(() => null)
+					if (option && option.decoded > 0) break
+					await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!option) return { error: "the picker never opened, or opened with no options in it" }
+
+				const picked = await pageFrame.executeJavaScript(`(() => {
+					const input = document.querySelector('.caret-overlay-prompt input')
+					input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+					return input.value
+				})()`)
+
+				// Leave the page as it was found: paint mode off, back on the canvas.
+				await pageFrame
+					.executeJavaScript(`(() => {
+						const input = document.querySelector('.caret-overlay-prompt input')
+						if (input) input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+						return true
+					})()`)
+					.catch(() => {})
+				await wc
+					.executeJavaScript(
+						`(() => { const b = document.querySelector('.caret-focused-toolbar-btn'); b && b.click(); return true })()`,
+					)
+					.catch(() => {})
+
+				return { option, picked }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the canvas failed: ${(outcome as any).error}`)
+		const { option, picked } = outcome as { option: { tag: string; decoded: number }; picked: string }
+		assert(option.tag === "hero-shot-2x", `the picker offered "${option.tag}"`)
+		assert(option.decoded > 0, "the picker's thumbnail never decoded inside the app")
+		assert(picked.includes("@hero-shot-2x"), `Enter did not put the tag in the box: "${picked}"`)
+
+		return `picked @${option.tag} from a decoded thumbnail in the real canvas view`
+	})
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message
@@ -1617,7 +1827,9 @@ main()
 					? // Never "all pass" with something unrun — that reads as full
 						// coverage to anyone skimming a CI log.
 						`${results.length - skipped.length} passed, ${skipped.length} SKIPPED (not certified)`
-					: `CERTIFIED: all ${results.length} scenarios pass`,
+					: ONLY
+						? `${results.length} passed — PARTIAL RUN (--only), not a certification`
+						: `CERTIFIED: all ${results.length} scenarios pass`,
 		)
 		process.exit(failed.length === 0 ? 0 : 1)
 	})

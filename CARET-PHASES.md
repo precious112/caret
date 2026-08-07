@@ -345,6 +345,8 @@ rules generation and user-block survival, watch-and-heal and idempotence, proven
 interview surfaces, screenshot capture, and the asset pipeline. A scenario only counts as
 driving the app if a user could reach the same state by clicking — a harness that supplies the
 counterpart (an MCP call, a queued task) certifies the half it wrote, nothing more.
+`--only <letters>` runs a subset while iterating; it reports **PARTIAL RUN** and can never say
+CERTIFIED, because a suite that costs fifteen minutes to re-run is a suite that stays broken.
 
 **Deliverable:** Caret runs standalone; an external agent pointed at the MCP server reads and
 writes the design layer safely, always with the project's foundations in context.
@@ -589,6 +591,10 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       surfaces, because the AI-edit box is react-grab's and lives in a shadow root — it cannot
       be a component, and a second implementation would drift on what a tag is. Enter chooses
       the asset without also sending the instruction (both handlers sit on the same element).
+      **Certified inside the app**, in the real `WebContentsView` with the page in a child
+      frame, not only in the shell harness — the canvas has changed meaning across hosts
+      before. The react-grab prompt box itself is still driven by no suite: entering its mode
+      means synthesizing a third-party component's own menu.
 - [x] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
       >2×) joins the expanded reference — the selection payload now carries the target's
       rendered box, and an overlay edit uses the painted region as its box. The prompt states
