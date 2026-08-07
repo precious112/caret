@@ -68,14 +68,19 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 
 	const chooseRecipe = useCallback(
 		async (card: RecipeCardWire, withAspect?: string) => {
+			// An unavailable lane is shown, never picked. The card says what is
+			// missing; clicking through to an empty variant screen would not.
+			if (card.unavailable) return
+
 			const ratio = withAspect ?? card.aspects[0]
 			setRecipe(card)
 			setAspect(ratio)
 			setChosen(null)
+			setVariants([])
 			setBusy(true)
+			setStage("variant")
 			try {
 				setVariants((await invoke("generate:variants", project.path, card.id, answers, ratio, 8)) ?? [])
-				setStage("variant")
 			} finally {
 				setBusy(false)
 			}
@@ -174,9 +179,13 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							<div className="grid grid-cols-2 gap-4">
 								{recipes.map((card) => (
 									<button
-										className="overflow-hidden rounded-xl border border-shell-border text-left hover:border-caret-accent disabled:opacity-50"
+										className={cn(
+											"overflow-hidden rounded-xl border border-shell-border text-left disabled:opacity-50",
+											card.unavailable ? "cursor-default opacity-60" : "hover:border-caret-accent",
+										)}
 										data-generate-recipe={card.id}
-										disabled={busy}
+										data-generate-unavailable={card.unavailable ? "" : undefined}
+										disabled={busy || Boolean(card.unavailable)}
 										key={card.id}
 										onClick={() => chooseRecipe(card)}
 										type="button">
@@ -194,7 +203,9 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 										</span>
 										<span className="block border-t border-shell-border p-3">
 											<span className="block text-sm font-medium">{card.name}</span>
-											<span className="mt-0.5 block text-xs text-shell-muted">{card.use}</span>
+											<span className="mt-0.5 block text-xs text-shell-muted">
+												{card.unavailable ?? card.use}
+											</span>
 										</span>
 									</button>
 								))}
@@ -229,26 +240,53 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							))}
 						</div>
 
-						<div className="grid grid-cols-4 gap-3">
-							{variants.map((variant) => (
-								<button
-									className={cn(
-										"overflow-hidden rounded-lg border",
-										chosen === variant.variant ? "border-caret-accent" : "border-shell-border",
-									)}
-									data-generate-variant={variant.variant}
-									key={variant.variant}
-									onClick={() => {
-										setChosen(variant.variant)
-										setTag(suggest(recipe, answers))
-										setStage("name")
-									}}
-									type="button">
-									<span className="block" style={{ backgroundColor: variant.surface }}>
-										<img alt="" className="block w-full" src={variant.preview} />
-									</span>
-								</button>
-							))}
+						{busy && (
+							<p className="mb-3 text-xs text-shell-muted" data-testid="generate-working">
+								{recipe.lane === "raster"
+									? "Generating four photographs on your own key. About fifteen seconds each, running together."
+									: "Composing…"}
+							</p>
+						)}
+
+						{/*
+						 * Fewer options means bigger ones. Eight cheap generator variants
+						 * read fine at four across; four photographs do not — at that size
+						 * you can see that they differ and not whether any is any good,
+						 * which is the only question this screen asks.
+						 */}
+						<div className={cn("grid gap-3", variants.length > 4 ? "grid-cols-4" : "grid-cols-2")}>
+							{variants.map((variant) =>
+								variant.error ? (
+									// The lane's own words, per variant. A content refusal on
+									// one framing says nothing about the other three, and
+									// collapsing them into one message would throw away good
+									// images to report a bad one.
+									<p
+										className="rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
+										data-generate-variant-error={variant.variant}
+										key={variant.variant}>
+										{variant.error}
+									</p>
+								) : (
+									<button
+										className={cn(
+											"overflow-hidden rounded-lg border",
+											chosen === variant.variant ? "border-caret-accent" : "border-shell-border",
+										)}
+										data-generate-variant={variant.variant}
+										key={variant.variant}
+										onClick={() => {
+											setChosen(variant.variant)
+											setTag(suggest(recipe, answers))
+											setStage("name")
+										}}
+										type="button">
+										<span className="block" style={{ backgroundColor: variant.surface }}>
+											<img alt="" className="block w-full" src={variant.preview} />
+										</span>
+									</button>
+								),
+							)}
 						</div>
 
 						<button

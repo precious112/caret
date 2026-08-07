@@ -9,8 +9,9 @@
 import { countRecognisedTags, LIBRARY_TAGS } from "../foundation-library"
 import type { FoundationTokens } from "../types"
 import { findGenerator, GENERATORS, type Generator, runGenerator } from "./generators"
+import { FREE_LANES } from "./lanes"
 import { derivePalette } from "./palette"
-import { ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
+import { ALL_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
 import { ASPECTS, type AssetRecipe, type GeneratorPalette, type RecipeInput, type RecipeRequest } from "./types"
 
 export { findGenerator, GENERATORS, type Generator, type GeneratorInput, runGenerator } from "./generators"
@@ -26,8 +27,21 @@ export {
 	narrowForAnswers,
 	proposeTag,
 } from "./interview"
+export { FREE_LANES, lanesWithRaster } from "./lanes"
 export { DEFAULT_PALETTE, derivePalette, hexToHsl, hslToHex, normalizeHex } from "./palette"
-export { ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
+export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./raster/config"
+export {
+	composePrompt,
+	type GeminiBackend,
+	type GeminiConfig,
+	GeminiImages,
+	type GeminiModel,
+	type ImageRequest,
+	type ImageResult,
+} from "./raster/gemini"
+export { foundationWords, keyWords, paletteWords } from "./raster/palette-words"
+export { RASTER_RECIPES } from "./raster/recipes"
+export { ALL_RECIPES, ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
 export {
 	ASPECTS,
 	type AssetPurpose,
@@ -39,8 +53,8 @@ export {
 	type RecipeRequest,
 } from "./types"
 
-/** Lanes with a runner in this build. Grows one entry per lane as they land. */
-export const RUNNABLE_LANES: ReadonlySet<string> = new Set(["generator"])
+/** Kept for callers that predate `FREE_LANES`. Same set, clearer name there. */
+export const RUNNABLE_LANES: ReadonlySet<string> = FREE_LANES
 
 /**
  * Recipes worth offering for a set of vibe tags, best first.
@@ -51,9 +65,9 @@ export const RUNNABLE_LANES: ReadonlySet<string> = new Set(["generator"])
  * a considered narrowing and is not one. Silent theatre is the worst failure
  * available to the screen whose entire job is injecting taste.
  */
-export function narrowRecipes(tags: string[], limit = 6): AssetRecipe[] {
+export function narrowRecipes(tags: string[], limit = 6, lanes: ReadonlySet<string> = FREE_LANES): AssetRecipe[] {
 	const wanted = new Set(tags.map((tag) => tag.toLowerCase()))
-	const pool = runnableRecipes(RUNNABLE_LANES)
+	const pool = runnableRecipes(lanes)
 	if (wanted.size === 0) return pool.slice(0, limit)
 
 	return [...pool]
@@ -92,7 +106,7 @@ export function canNarrow(tags: string[]): { ok: true } | { ok: false; reason: s
 
 /** Named for the asset library specifically — `findRecipe` is the palette one. */
 export function findAssetRecipe(id: string): AssetRecipe | undefined {
-	return ASSET_RECIPES.find((recipe) => recipe.id === id)
+	return ALL_RECIPES.find((recipe) => recipe.id === id)
 }
 
 /** The tags a project's own foundation contributes to the narrowing. */
@@ -143,7 +157,7 @@ export function composeVariants(input: VariantInput): GeneratedVariant[] {
 			answers: input.answers ?? {},
 			tags: tagsFromFoundation(tokens),
 		}
-		const request = recipe.realise(composeInput)
+		const request = finalise(recipe.realise(composeInput), recipe, aspectKey)
 		variants.push({
 			variant,
 			request,
@@ -165,6 +179,24 @@ export function composeVariants(input: VariantInput): GeneratedVariant[] {
 		})
 	}
 	return variants
+}
+
+/**
+ * Fills in the parts of a request no recipe should have to remember.
+ *
+ * The negative constraints are assembled here — the recipe's own, then the
+ * documented slop tells — so a new recipe cannot ship having quietly forgotten
+ * them, which is the failure that would take the whole anti-slop argument out
+ * silently. The aspect is overwritten for the same reason: the user picked one,
+ * the recipe declared a default, and only one of those can be right.
+ */
+function finalise(request: RecipeRequest, recipe: AssetRecipe, aspect: string): RecipeRequest {
+	if (request.lane !== "raster") return request
+	return {
+		...request,
+		aspect,
+		avoid: [...new Set([...request.avoid, ...recipe.avoid, ...SLOP_TELLS])],
+	}
 }
 
 /** FNV-1a over the recipe id. Stable across processes, unlike a string hash. */

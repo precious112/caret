@@ -417,6 +417,7 @@ export interface RecipeCardWire {
 	name: string
 	use: string
 	kind: string
+	lane: string
 	aspects: string[]
 	/** An inline `data:` URL of variant 0, ready for an `<img>`. */
 	specimen: string
@@ -431,6 +432,15 @@ export interface RecipeCardWire {
 	 */
 	surface: string
 	transparent: boolean
+	/**
+	 * Set when this recipe's lane cannot run here — a photograph with no key.
+	 *
+	 * Carried on the card rather than filtered out of the list, so the picker can
+	 * show what it *would* offer and say what is missing. Silently having fewer
+	 * options than the library does is the version of this that teaches the user
+	 * nothing.
+	 */
+	unavailable?: string
 }
 
 /** One generated option, ready to be looked at and picked. */
@@ -442,6 +452,8 @@ export interface GeneratedVariantWire {
 	height: number
 	/** As on `RecipeCardWire`, and for the same reason. */
 	surface: string
+	/** Set when this variant could not be produced. The lane's own words. */
+	error?: string
 }
 
 /** Renderer → main. Each entry is an `ipcRenderer.invoke` channel. */
@@ -489,6 +501,16 @@ export interface IpcRequests {
 	/** Opens a native file picker filtered to supported asset types. */
 	"assets:pickFiles": () => string[]
 
+	/**
+	 * Drops photographs that were generated and never chosen.
+	 *
+	 * Only the raster lane holds anything: a model's output cannot be recomposed
+	 * from a seed, so the bytes have to survive between "show me options" and
+	 * "I'll take that one". They live in memory, not in `.caret/` — an option
+	 * nobody picked is not a decision, and writing it there would make it look
+	 * like one.
+	 */
+	"generate:discard": (projectPath: string) => void
 	/** The generation interview's questions. Caret owns these; no model invents them. */
 	"generate:questions": () => GenerationQuestionWire[]
 	/**

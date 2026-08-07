@@ -13,6 +13,7 @@
  * not being there. The other three lanes land with their runners.
  */
 import { findGenerator } from "./generators"
+import { RASTER_RECIPES } from "./raster/recipes"
 import type { AssetRecipe } from "./types"
 
 /**
@@ -184,6 +185,17 @@ export const ASSET_RECIPES: AssetRecipe[] = [
 ]
 
 /**
+ * Every recipe Caret knows, across every lane.
+ *
+ * The lane a recipe belongs to decides whether it can *run* here, never whether
+ * it exists — `runnableRecipes` is the filter, and it takes the set of lanes
+ * this build can actually execute. Keeping the catalogue whole means the picker
+ * can say "this needs a key" rather than silently having fewer options than the
+ * library does.
+ */
+export const ALL_RECIPES: AssetRecipe[] = [...ASSET_RECIPES, ...RASTER_RECIPES]
+
+/**
  * Every recipe whose lane can actually run, and whose generator exists.
  *
  * The generator check is not paranoia: recipes and generators are separate
@@ -192,7 +204,7 @@ export const ASSET_RECIPES: AssetRecipe[] = [
  * which is the worst possible time to discover it.
  */
 export function runnableRecipes(lanes: ReadonlySet<string>): AssetRecipe[] {
-	return ASSET_RECIPES.filter((recipe) => {
+	return ALL_RECIPES.filter((recipe) => {
 		if (!lanes.has(recipe.lane)) return false
 		if (recipe.lane !== "generator") return true
 		const request = recipe.realise({

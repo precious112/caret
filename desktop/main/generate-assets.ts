@@ -22,15 +22,40 @@ import {
 	findAssetRecipe,
 	findGenerator,
 	GENERATION_QUESTIONS,
+	GeminiImages,
 	type GenerationAnswers,
+	lanesWithRaster,
+	NO_RASTER_REASON,
 	narrowForAnswers,
 	proposeTag,
 	readFoundationTokens,
+	resolveRasterConfig,
 } from "../../src/core/design"
+import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
 
 /** How many options the picker shows. Free here, so the number is a taste call. */
 const VARIANT_COUNT = 8
+
+/**
+ * How many photographs are generated per round.
+ *
+ * Four, not eight. Every one of these is a paid API call on the user's own key
+ * and about fifteen seconds of waiting, so the number that is a taste call in
+ * the free lane is a spending decision here. Four is enough to choose from and
+ * cheap enough to run again.
+ */
+const RASTER_VARIANT_COUNT = 4
+
+/**
+ * How many image calls are in flight at once.
+ *
+ * Two, and the number is quota rather than taste. Four at once reliably trips
+ * the per-minute image quota on an ordinary project — observed as two of four
+ * variants returning "Resource has been exhausted" — and retrying a burst only
+ * re-bursts it.
+ */
+const RASTER_CONCURRENCY = 2
 
 export function generationQuestions(): GenerationQuestionWire[] {
 	return GENERATION_QUESTIONS.map((question) => ({
@@ -53,7 +78,12 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 
 	const palette = derivePalette(tokens)
 
-	return narrowForAnswers(answers, tokens).map((recipe) => {
+	const rasterConfig = resolveRasterConfig()
+
+	// The catalogue is shown whole and the unavailable ones say why. Quietly
+	// offering fewer options than the library has teaches the user nothing about
+	// what exists or what it would take to have it.
+	return narrowForAnswers(answers, tokens, lanesWithRaster(true)).map((recipe) => {
 		const aspect = defaultAspect(recipe, answers)
 		const [specimen] = composeVariants({ recipe, tokens, aspect, answers, count: 1 })
 		const generator = specimen?.request.lane === "generator" ? findGenerator(specimen.request.generatorId) : undefined
@@ -63,11 +93,47 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 			use: recipe.use,
 			kind: recipe.kind,
 			aspects: recipe.aspects,
+			lane: recipe.lane,
 			specimen: dataUrl(specimen?.svg ?? ""),
 			surface: palette.surface,
 			transparent: generator?.transparent ?? false,
+			...(recipe.lane === "raster" && !rasterConfig ? { unavailable: NO_RASTER_REASON } : {}),
 		}
 	})
+}
+
+/**
+ * Photographs that have been generated but not yet chosen.
+ *
+ * The generator lane needs nothing like this: `accept` recomposes from the
+ * recipe and the seed and gets byte-identical output. **A model's output is not
+ * reproducible that way** — asking the same question again costs money and
+ * returns a different picture — so the bytes have to survive between "show me
+ * options" and "I'll take that one", and this is the only honest place for them
+ * to live. In memory rather than on disk: an option nobody picked is not a
+ * decision, and writing it into `.caret/` would make it look like one.
+ */
+const pendingRaster = new Map<string, { bytes: Buffer; mime: string; resolved: string; model: string; at: number }>()
+
+/** Ten minutes. Long enough to think, short enough not to be a memory leak. */
+const PENDING_TTL_MS = 10 * 60 * 1000
+
+function pendingKey(projectPath: string, recipeId: string, aspect: string, variant: number): string {
+	return `${projectPath}::${recipeId}::${aspect}::${variant}`
+}
+
+function prunePending(): void {
+	const cutoff = Date.now() - PENDING_TTL_MS
+	for (const [key, value] of pendingRaster) {
+		if (value.at < cutoff) pendingRaster.delete(key)
+	}
+}
+
+/** Drops everything a project is holding — called when the picker closes. */
+export function discardPending(projectPath: string): void {
+	for (const key of pendingRaster.keys()) {
+		if (key.startsWith(`${projectPath}::`)) pendingRaster.delete(key)
+	}
 }
 
 export async function recipeVariants(
@@ -82,6 +148,10 @@ export async function recipeVariants(
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
 	const palette = derivePalette(tokens)
 
+	if (recipe.lane === "raster") {
+		return generateRasterVariants(projectPath, recipe.id, answers, aspect, tokens, palette.surface)
+	}
+
 	return composeVariants({ recipe, tokens, aspect, answers, count }).map((variant) => ({
 		variant: variant.variant,
 		preview: dataUrl(variant.svg ?? ""),
@@ -89,6 +159,103 @@ export async function recipeVariants(
 		height: variant.height,
 		surface: palette.surface,
 	}))
+}
+
+/**
+ * Four photographs, in parallel, each with its own failure.
+ *
+ * Parallel because these are ~15s apiece and four in sequence is a minute of
+ * staring at nothing. Per-variant failures rather than one collective one
+ * because a content refusal on one framing says nothing about the other three —
+ * collapsing them into "generation failed" would throw away three good images
+ * to report one bad one.
+ */
+async function generateRasterVariants(
+	projectPath: string,
+	recipeId: string,
+	answers: GenerationAnswers,
+	aspect: string,
+	tokens: Awaited<ReturnType<typeof readFoundationTokens>>,
+	surface: string,
+): Promise<GeneratedVariantWire[]> {
+	const config = resolveRasterConfig()
+	const recipe = findAssetRecipe(recipeId)
+	if (!recipe) return []
+	if (!config) {
+		return [{ variant: 0, preview: "", width: 0, height: 0, surface, error: NO_RASTER_REASON }]
+	}
+
+	prunePending()
+	const client = new GeminiImages(config)
+	const composed = composeVariants({ recipe, tokens, aspect, answers, count: RASTER_VARIANT_COUNT })
+
+	return inPool(composed, RASTER_CONCURRENCY, async (variant): Promise<GeneratedVariantWire> => {
+		if (variant.request.lane !== "raster") {
+			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: "not a raster recipe" }
+		}
+
+		const ask = () =>
+			client.generate({
+				prompt: variant.request.lane === "raster" ? variant.request.prompt : "",
+				avoid: variant.request.lane === "raster" ? variant.request.avoid : [],
+				aspect: variant.request.lane === "raster" ? variant.request.aspect : aspect,
+			})
+
+		let result = await ask()
+		if (!result.ok && result.retryable) {
+			// The pool keeps the burst small; this catches what still slips
+			// through, for the price of one extra call and only for the variant
+			// that actually failed. A refusal is never retried — that spends money
+			// to be told the same thing again.
+			await new Promise((resolve) => setTimeout(resolve, 6000))
+			result = await ask()
+		}
+
+		if (!result.ok) {
+			Logger.warn(`[generate] raster variant ${variant.variant} failed: ${result.reason}`)
+			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: result.reason }
+		}
+
+		pendingRaster.set(pendingKey(projectPath, recipeId, aspect, variant.variant), {
+			bytes: result.bytes,
+			mime: result.mime,
+			resolved: result.resolved,
+			model: result.model,
+			at: Date.now(),
+		})
+
+		return {
+			variant: variant.variant,
+			preview: `data:${result.mime};base64,${result.bytes.toString("base64")}`,
+			width: variant.width,
+			height: variant.height,
+			surface,
+		}
+	})
+}
+
+/**
+ * Runs `work` over `items` with at most `limit` in flight, preserving order.
+ *
+ * Not an optimisation — a correctness fix. Four image calls fired at once trip
+ * the per-minute quota on an ordinary Google Cloud project, and two of every
+ * four came back "Resource has been exhausted" in a real run. Retrying a burst
+ * just re-burst it. Limiting the burst is the thing that actually helps, and
+ * two at a time still halves the wait against running them one by one.
+ */
+async function inPool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+	const results = new Array<R>(items.length)
+	let next = 0
+
+	const runner = async (): Promise<void> => {
+		while (next < items.length) {
+			const index = next++
+			results[index] = await work(items[index])
+		}
+	}
+
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner))
+	return results
 }
 
 /**
@@ -112,6 +279,10 @@ export async function acceptVariant(
 	if (!recipe) return { ok: false, error: `No such recipe: "${recipeId}".` }
 
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+	if (recipe.lane === "raster") {
+		return acceptRasterVariant(projectPath, recipe, answers, aspect, variant, tag, tokens)
+	}
+
 	const composed = composeVariants({ recipe, tokens, aspect, answers, count: variant + 1 })[variant]
 	if (!composed?.svg) return { ok: false, error: "That option could not be regenerated." }
 
@@ -135,6 +306,59 @@ export async function acceptVariant(
 		},
 	})
 
+	return result.ok ? { ok: true, tag: result.entry.tag } : { ok: false, error: result.reason }
+}
+
+/**
+ * Writes the chosen photograph from the pending set.
+ *
+ * Deliberately never regenerates. Re-asking the model would spend money to
+ * produce a *different* picture from the one the user pointed at, which is the
+ * single most surprising thing this surface could do — so an expired pick is a
+ * refusal that says to choose again, not a silent substitution.
+ */
+async function acceptRasterVariant(
+	projectPath: string,
+	recipe: NonNullable<ReturnType<typeof findAssetRecipe>>,
+	answers: GenerationAnswers,
+	aspect: string,
+	variant: number,
+	tag: string,
+	tokens: Awaited<ReturnType<typeof readFoundationTokens>>,
+): Promise<WriteResult & { tag?: string }> {
+	prunePending()
+	const held = pendingRaster.get(pendingKey(projectPath, recipe.id, aspect, variant))
+	if (!held) {
+		return {
+			ok: false,
+			error: "That image is no longer held in memory. Generate again and pick one — re-asking the model would produce a different picture.",
+		}
+	}
+
+	const palette = derivePalette(tokens)
+	const [composed] = composeVariants({ recipe, tokens, aspect, answers, count: variant + 1 }).slice(variant)
+	const extension = held.mime.includes("jpeg") ? ".jpg" : held.mime.includes("webp") ? ".webp" : ".png"
+
+	const result = await addGeneratedAsset({
+		projectPath,
+		tag: tag.trim() || proposeTag(recipe, answers),
+		extension,
+		bytes: held.bytes,
+		description: describeVariant(recipe, composed, palette),
+		alt: "",
+		origin: {
+			type: "generated",
+			lane: "raster",
+			producer: held.model,
+			recipeId: recipe.id,
+			answers,
+			// The prompt as sent, negatives included. For a paid lane this is the
+			// only record of what the money bought.
+			resolved: held.resolved,
+		},
+	})
+
+	if (result.ok) discardPending(projectPath)
 	return result.ok ? { ok: true, tag: result.entry.tag } : { ok: false, error: result.reason }
 }
 

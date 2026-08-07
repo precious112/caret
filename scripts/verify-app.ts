@@ -1262,9 +1262,136 @@ async function main(): Promise<void> {
 		const rules = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
 		assert(rules.includes("hero-wash"), "the generated asset never reached the rules files")
 
-		await chrome.getByTestId("assets-view").getByText("Done").click()
 		return `${cardCount} recipes narrowed from 2 clicked questions, ${variantCount} distinct variants, saved as @hero-wash with reproducible provenance`
 	})
+
+	await scenario("bh. the paid lane is offered honestly and refuses without credentials", async () => {
+		// The lane that costs money is the one whose *absence* has to be handled
+		// well: three of the four need no account, so "generation needs a key"
+		// would be a lie that hides most of the feature. The catalogue is shown
+		// whole and the unavailable entry says what is missing.
+		await chrome.getByTestId("assets-generate").click()
+		const panel = chrome.getByTestId("generate-asset")
+		await panel.waitFor({ timeout: 15_000 })
+
+		for (const choice of ["background", "recede"]) {
+			const question = panel.getByTestId("generate-question")
+			await question.waitFor({ timeout: 15_000 })
+			await question.locator(`[data-generate-choice="${choice}"]`).click()
+		}
+
+		const recipes = panel.getByTestId("generate-recipes")
+		await recipes.waitFor({ timeout: 20_000 })
+
+		// Photograph recipes are in the list whether or not this machine can run
+		// them — the point is that the user learns they exist.
+		const photoCount = await recipes.locator('[data-generate-recipe="workbench"]').count()
+		assert(photoCount === 1, "the photograph recipes were hidden rather than shown as unavailable")
+
+		const configured = Boolean(
+			process.env.GEMINI_API_KEY || process.env.CARET_VERTEX_PROJECT || process.env.GOOGLE_CLOUD_PROJECT,
+		)
+		const marked = await recipes.locator("[data-generate-unavailable]").count()
+
+		if (configured) {
+			assert(marked === 0, "a photograph recipe was marked unavailable with credentials present")
+		} else {
+			assert(marked > 0, "no photograph recipe said it needs a key")
+			const card = recipes.locator('[data-generate-recipe="workbench"]')
+			const said = await card.innerText()
+			// The refusal has to say the rest still works, or it reads as the whole
+			// feature being locked behind a payment.
+			assert(/needs no account/i.test(said), `the unavailable card says: ${said.replace(/\n/g, " ")}`)
+			assert(await card.isDisabled(), "an unavailable recipe was still clickable")
+		}
+
+		await panel.getByText("Cancel").click()
+		return configured
+			? "photograph recipes offered as runnable — credentials present in this environment"
+			: `${marked} photograph recipe(s) shown, disabled, and explaining that the free lanes still work`
+	})
+
+	// The paid lane, driven for real. Skipped rather than faked without
+	// credentials: a mocked pass here would certify the plumbing and say nothing
+	// about the thing that actually costs money and can actually refuse.
+	if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
+		skip("bi. a photograph is generated, picked and indexed", "no Gemini or Vertex credentials in this environment")
+	} else {
+		await scenario("bi. a photograph is generated, picked and indexed", async () => {
+			await chrome.getByTestId("assets-generate").click()
+			const panel = chrome.getByTestId("generate-asset")
+			await panel.waitFor({ timeout: 15_000 })
+
+			for (const choice of ["background", "recede"]) {
+				const question = panel.getByTestId("generate-question")
+				await question.waitFor({ timeout: 15_000 })
+				await question.locator(`[data-generate-choice="${choice}"]`).click()
+			}
+
+			const recipes = panel.getByTestId("generate-recipes")
+			await recipes.waitFor({ timeout: 20_000 })
+			await recipes.locator('[data-generate-recipe="workbench"]').click()
+
+			const variants = panel.getByTestId("generate-variants")
+			await variants.waitFor({ timeout: 20_000 })
+			// The wait is the feature here: four paid calls at ~15s apiece, run
+			// together rather than in sequence.
+			await variants.locator("[data-generate-variant] img").first().waitFor({ timeout: 180_000 })
+
+			const rendered = await waitFor(
+				"a generated photograph to decode",
+				async () => {
+					const width = await variants
+						.locator("[data-generate-variant] img")
+						.first()
+						.evaluate((img: HTMLImageElement) => img.naturalWidth)
+					return width > 0 ? width : null
+				},
+				60_000,
+			)
+			assert(rendered > 100, `the photograph decoded at ${rendered}px`)
+
+			const failures = await variants.locator("[data-generate-variant-error]").count()
+			const usable = await variants.locator("[data-generate-variant]").count()
+			assert(usable > 0, "every variant failed")
+
+			await shot(chrome, "22-generate-photographs")
+			await variants.locator("[data-generate-variant]").first().click()
+
+			const name = panel.getByTestId("generate-name")
+			await name.waitFor({ timeout: 15_000 })
+			await name.getByTestId("generate-tag").fill("hero-bench")
+			await name.getByTestId("generate-save").click()
+
+			const raw = await waitFor(
+				"the photograph to reach the index",
+				async () => {
+					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
+					return text.includes('"hero-bench"') ? text : null
+				},
+				30_000,
+			)
+
+			const entry = (JSON.parse(raw) as { assets: Array<Record<string, unknown>> }).assets.find(
+				(asset) => asset.tag === "hero-bench",
+			)
+			assert(entry?.kind === "image", `the photograph was indexed as ${entry?.kind}`)
+			assert(Number(entry?.bytes) > 50_000, `the photograph is only ${entry?.bytes} bytes`)
+			// Intrinsic size probed from the real file header, not from the request.
+			assert(Number(entry?.width) > 100, `the photograph measured ${entry?.width}x${entry?.height}`)
+
+			const origin = entry?.origin as Record<string, unknown> | undefined
+			assert(origin?.lane === "raster", `the lane was recorded as ${origin?.lane}`)
+			assert(String(origin?.producer ?? "").includes("gemini"), `the model was recorded as ${origin?.producer}`)
+			// For a paid lane the resolved prompt is the only record of what the
+			// money bought, and it has to carry the negative constraints too.
+			assert(String(origin?.resolved ?? "").includes("Do not include:"), "the slop constraints are not in the record")
+			assert(String(origin?.resolved ?? "").includes("workbench"), "the resolved prompt is not the recipe's")
+
+			await chrome.getByTestId("assets-view").getByText("Done").click()
+			return `${usable} photograph(s) generated (${failures} refused), picked one, indexed at ${entry?.width}x${entry?.height} with the prompt recorded`
+		})
+	}
 
 	await scenario("be. @ picks an asset inside the app's own canvas", async () => {
 		// The picker is certified in verify:design-shell, but that runs the shell in

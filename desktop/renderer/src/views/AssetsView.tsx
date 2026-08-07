@@ -185,6 +185,10 @@ export function AssetsView({ project, onClose }: { project: ProjectState; onClos
 				<GenerateAsset
 					onClose={async () => {
 						setGenerating(false)
+						// Photographs generated and not chosen are held in main so a pick
+						// hands back the exact picture. Closing is when they stop being
+						// candidates, and holding megabytes of unwanted images is not free.
+						await invoke("generate:discard", project.path)
 						// The watcher fires too, but not before this returns — refreshing
 						// here is what makes the new asset visible the instant the panel
 						// closes rather than a beat later.

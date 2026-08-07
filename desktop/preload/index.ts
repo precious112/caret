@@ -43,6 +43,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"assets:setPoster": true,
 	"assets:pickFiles": true,
 
+	"generate:discard": true,
 	"generate:questions": true,
 	"generate:recipes": true,
 	"generate:variants": true,

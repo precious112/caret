@@ -14,6 +14,7 @@
  * would return the taste problem to the person who does not have it.
  */
 import type { FoundationTokens } from "../types"
+import { FREE_LANES } from "./lanes"
 import { ASSET_RECIPES, runnableRecipes } from "./recipes"
 import type { AssetPurpose, AssetRecipe } from "./types"
 
@@ -117,7 +118,11 @@ export function findChoice(questionId: string, choiceId: string): GenerationChoi
  * object, and no amount of tag overlap should be able to promote it. Vibe tags
  * are a preference and behave like one.
  */
-export function narrowForAnswers(answers: GenerationAnswers, tokens: FoundationTokens | null): AssetRecipe[] {
+export function narrowForAnswers(
+	answers: GenerationAnswers,
+	tokens: FoundationTokens | null,
+	lanes: ReadonlySet<string> = FREE_LANES,
+): AssetRecipe[] {
 	const purposes = new Set<AssetPurpose>()
 	const tags: string[] = [...(tokens?.vibe.tags ?? [])]
 
@@ -129,7 +134,7 @@ export function narrowForAnswers(answers: GenerationAnswers, tokens: FoundationT
 	}
 
 	const wanted = new Set(tags.map((tag) => tag.toLowerCase()))
-	const pool = runnableRecipes(new Set(["generator"])).filter(
+	const pool = runnableRecipes(lanes).filter(
 		(recipe) => purposes.size === 0 || recipe.purposes.some((purpose) => purposes.has(purpose)),
 	)
 

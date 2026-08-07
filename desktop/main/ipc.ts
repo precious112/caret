@@ -41,7 +41,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { resolveNotification } from "./electron-host"
 import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
-import { acceptVariant, generationQuestions, recipeCards, recipeVariants } from "./generate-assets"
+import { acceptVariant, discardPending, generationQuestions, recipeCards, recipeVariants } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
@@ -301,6 +301,11 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	// ── generated assets ──────────────────────────────────────────────────────
 
 	ipcMain.handle("generate:questions", () => generationQuestions())
+
+	// Photographs that were generated and not chosen are held in memory so a pick
+	// hands over the picture the user pointed at rather than a fresh one. Closing
+	// the picker is the moment they stop being candidates.
+	ipcMain.handle("generate:discard", (_event, projectPath: string) => discardPending(projectPath))
 
 	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>) =>
 		recipeCards(projectPath, answers),
