@@ -22,6 +22,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "SimulationView.tsx"), generateSimulationView()),
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
+		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
 	])
 }
@@ -1173,6 +1174,7 @@ function generateOverlayPainter(): string {
 		import React, { useState, useRef, useCallback } from "react"
 		import { domToCanvas } from "modern-screenshot"
 		import { bridge } from "../bridge"
+		import { ackEdit } from "../edit-pill"
 
 		interface Props {
 		  onClose: () => void
@@ -1234,6 +1236,10 @@ function generateOverlayPainter(): string {
 		          scale: 1,
 		          filter: (node: Node) => {
 		            const el = node as Element
+		            // Caret's own chrome must never appear in the screenshot the agent
+		            // is asked to reproduce — including the edit pill, which by the
+		            // second overlay edit of a session is still on screen.
+		            if (el.hasAttribute && el.hasAttribute("data-caret-edit-pill")) return false
 		            return !(el.classList && (el.classList.contains("caret-overlay") || el.classList.contains("caret-focused-fab")))
 		          },
 		        })
@@ -1262,6 +1268,8 @@ function generateOverlayPainter(): string {
 		          filePath: focusedPage?.filePath || "",
 		        },
 		      })
+		      // The pill takes over from here: instant ack, live narration, cancel.
+		      ackEdit(instruction.trim())
 
 		      setRect(null)
 		      setInstruction("")
@@ -1889,9 +1897,225 @@ function generateBridge(): string {
 	`
 }
 
+/**
+ * The edit pill: the live surface for a canvas-initiated AI edit.
+ *
+ * The gap it closes was read as a freeze: Enter on an AI edit, then seconds of
+ * nothing (up to a minute on a slow model), then a toast. The chat sidebar had
+ * the feedback all along — but feedback belongs where the intent was expressed,
+ * and edits are deliberately decoupled from the chat's UI.
+ *
+ * Lifecycle: `ackEdit()` shows it instantly and locally, before any backend
+ * round-trip; `edit-status` pushes drive the live line, the inline permission
+ * prompt and the terminal states; `edit-result` doubles as a resolve signal so
+ * the pill also settles on hosts that never send statuses (the browser-only
+ * shell harness). Plain DOM on purpose — it renders inside the user's page,
+ * where the canvas gets no React runtime of its own to lean on.
+ */
+function generateEditPill(): string {
+	return dedent`
+		import { bridge } from "./bridge"
+
+		let root: HTMLDivElement | null = null
+		let active = false
+		let glowTarget: HTMLElement | null = null
+		let hideTimer: number | null = null
+
+		export function editPillActive(): boolean {
+		  return active
+		}
+
+		const GLOW_CLASS = "caret-edit-glow"
+
+		function ensureStyles() {
+		  if (document.getElementById("caret-edit-pill-style")) return
+		  const style = document.createElement("style")
+		  style.id = "caret-edit-pill-style"
+		  style.textContent = \`
+		    @keyframes caret-pill-spin { to { transform: rotate(360deg) } }
+		    @keyframes caret-edit-pulse {
+		      0%, 100% { box-shadow: 0 0 0 2px rgba(11,122,255,0.55), 0 0 18px 2px rgba(11,122,255,0.25) }
+		      50%      { box-shadow: 0 0 0 2px rgba(11,122,255,0.25), 0 0 10px 1px rgba(11,122,255,0.12) }
+		    }
+		    .\${GLOW_CLASS} { animation: caret-edit-pulse 1.6s ease-in-out infinite; border-radius: 4px; }
+		  \`
+		  document.head.appendChild(style)
+		}
+
+		function setGlow(el: HTMLElement | null) {
+		  if (glowTarget && glowTarget !== el) glowTarget.classList.remove(GLOW_CLASS)
+		  glowTarget = el
+		  if (el) el.classList.add(GLOW_CLASS)
+		}
+
+		function ensureRoot(): HTMLDivElement {
+		  if (root && document.body.contains(root)) return root
+		  root = document.createElement("div")
+		  root.setAttribute("data-caret-edit-pill", "")
+		  root.style.cssText = [
+		    "position:fixed", "left:50%", "bottom:18px", "transform:translateX(-50%)",
+		    "z-index:2147483000", "max-width:min(560px, calc(100vw - 32px))",
+		    "background:rgba(18,21,28,0.92)", "backdrop-filter:blur(8px)",
+		    "border:1px solid rgba(255,255,255,0.09)", "border-radius:12px",
+		    "padding:10px 14px", "color:#e6e9ef",
+		    "font-family:ui-sans-serif,system-ui,sans-serif", "font-size:12.5px",
+		    "box-shadow:0 8px 28px rgba(0,0,0,0.45)",
+		    "display:flex", "flex-direction:column", "gap:6px",
+		  ].join(";")
+		  document.body.appendChild(root)
+		  return root
+		}
+
+		function clearHideTimer() {
+		  if (hideTimer !== null) { clearTimeout(hideTimer); hideTimer = null }
+		}
+
+		function hide(afterMs: number) {
+		  clearHideTimer()
+		  hideTimer = window.setTimeout(() => {
+		    root?.remove()
+		    root = null
+		  }, afterMs)
+		}
+
+		function esc(s: string): string {
+		  const div = document.createElement("div")
+		  div.textContent = s
+		  return div.innerHTML
+		}
+
+		let instruction = ""
+
+		function render(html: string) {
+		  ensureStyles()
+		  ensureRoot().innerHTML = html
+		}
+
+		function headerRow(body: string, showCancel: boolean): string {
+		  const cancel = showCancel
+		    ? '<button data-pill-cancel title="Cancel this edit" style="all:unset;cursor:pointer;color:#8b93a7;padding:0 2px;font-size:14px;line-height:1">×</button>'
+		    : ""
+		  return '<div style="display:flex;align-items:center;gap:9px">' + body + '<div style="flex:1"></div>' + cancel + "</div>"
+		}
+
+		const SPINNER = '<span style="display:inline-block;width:11px;height:11px;border:2px solid rgba(11,122,255,0.35);border-top-color:#0b7aff;border-radius:50%;animation:caret-pill-spin 0.8s linear infinite;flex-shrink:0"></span>'
+
+		function wire() {
+		  if (!root) return
+		  root.querySelector("[data-pill-cancel]")?.addEventListener("click", () => {
+		    bridge.send({ type: "edit-cancel", payload: {} })
+		    render(headerRow('<span style="color:#8b93a7">Cancelling…</span>', false))
+		  })
+		  for (const btn of Array.from(root.querySelectorAll("[data-pill-perm]"))) {
+		    btn.addEventListener("click", () => {
+		      const decision = (btn as HTMLElement).getAttribute("data-pill-perm")
+		      const requestId = (btn as HTMLElement).getAttribute("data-pill-req") || ""
+		      bridge.send({ type: "edit-permission", payload: { requestId, decision } })
+		      showWorking(undefined)
+		    })
+		  }
+		}
+
+		function showWorking(detail?: string) {
+		  const line = detail
+		    ? '<div style="color:#8b93a7;font-size:11.5px;padding-left:20px">' + esc(detail) + "</div>"
+		    : ""
+		  render(
+		    headerRow(SPINNER + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Working on it — “' + esc(instruction) + '”</span>', true) + line,
+		  )
+		  wire()
+		}
+
+		/**
+		 * Instant, local acknowledgement — called at the submit site, before any
+		 * backend round-trip. This is the 200ms that kills "did it freeze?".
+		 */
+		export function ackEdit(text: string, target?: Element | null) {
+		  active = true
+		  instruction = text
+		  clearHideTimer()
+		  setGlow((target as HTMLElement) || null)
+		  showWorking()
+		}
+
+		// Held briefly past resolve so the plugin's own edit-result toast handler
+		// can tell "the pill already told them" from an inline edit's result.
+		let engagedUntil = 0
+
+		export function editPillEngaged(): boolean {
+		  return active || Date.now() < engagedUntil
+		}
+
+		function resolveDone() {
+		  if (!active) return
+		  active = false
+		  engagedUntil = Date.now() + 1500
+		  setGlow(null)
+		  render(headerRow('<span style="color:#4ade80">✓</span><span>Edit applied</span>', false))
+		  hide(2200)
+		}
+
+		function resolveFailed(message?: string) {
+		  if (!active) return
+		  active = false
+		  engagedUntil = Date.now() + 1500
+		  setGlow(null)
+		  render(headerRow('<span style="color:#f87171">✕</span><span style="min-width:0">' + esc(message || "The edit failed") + "</span>", false))
+		  hide(7000)
+		}
+
+		bridge.on("edit-status", (payload: any) => {
+		  if (!payload || typeof payload !== "object") return
+		  if (!active && payload.phase === "working") {
+		    // A status can arrive before ackEdit on hosts where submit happens in a
+		    // different frame — adopt it rather than dropping the narration.
+		    active = true
+		    instruction = payload.instruction || instruction
+		  }
+		  if (!active) return
+
+		  if (payload.phase === "working") {
+		    if (payload.instruction) instruction = payload.instruction
+		    showWorking(payload.detail)
+		  } else if (payload.phase === "needs-permission" && payload.permission) {
+		    const p = payload.permission
+		    render(
+		      headerRow('<span style="color:#0b7aff">●</span><span>Needs your OK</span>', true) +
+		      '<div style="color:#8b93a7;font-size:11.5px;padding-left:20px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.summary || "") + "</div>" +
+		      '<div style="display:flex;gap:8px;padding-left:20px">' +
+		        '<button data-pill-perm="allow" data-pill-req="' + esc(p.requestId) + '" style="all:unset;cursor:pointer;background:#0b7aff;color:#fff;padding:3px 10px;border-radius:7px;font-size:12px">Allow</button>' +
+		        '<button data-pill-perm="allow-always" data-pill-req="' + esc(p.requestId) + '" style="all:unset;cursor:pointer;color:#8b93a7;padding:3px 6px;font-size:12px">Always</button>' +
+		        '<button data-pill-perm="deny" data-pill-req="' + esc(p.requestId) + '" style="all:unset;cursor:pointer;color:#8b93a7;padding:3px 6px;font-size:12px">Deny</button>' +
+		      "</div>",
+		    )
+		    wire()
+		  } else if (payload.phase === "done") {
+		    resolveDone()
+		  } else if (payload.phase === "cancelled") {
+		    active = false
+		    engagedUntil = Date.now() + 1500
+		    setGlow(null)
+		    render(headerRow('<span style="color:#8b93a7">Cancelled</span>', false))
+		    hide(1800)
+		  } else if (payload.phase === "failed") {
+		    resolveFailed(payload.error)
+		  }
+		})
+
+		// The resolve signal on hosts that never push statuses (the browser-only
+		// shell harness), and a second, idempotent one everywhere else.
+		bridge.on("edit-result", (payload: any) => {
+		  if (!active || !payload || typeof payload !== "object") return
+		  if (payload.success) resolveDone()
+		  else resolveFailed(payload.error)
+		})
+	`
+}
+
 function generateCaretGrabPlugin(): string {
 	return dedent`
 		import { bridge } from "./bridge"
+		import { ackEdit, editPillEngaged } from "./edit-pill"
 
 		function log(...args: unknown[]) {
 		  console.log("[caret-grab]", ...args)
@@ -2117,6 +2341,7 @@ function generateCaretGrabPlugin(): string {
 		        componentStack: "",
 		      },
 		    })
+		    ackEdit(text, document.querySelector("[data-rg-selected]"))
 		    card.remove()
 		  }
 
@@ -2131,6 +2356,9 @@ function generateCaretGrabPlugin(): string {
 		  log("initializing caret-grab-plugin")
 
 		  bridge.on("edit-result", (payload: any) => {
+		    // AI/overlay edits resolve at the pill; a toast on top would say the
+		    // same thing twice in two visual languages. Inline edits keep the toast.
+		    if (editPillEngaged()) return
 		    if (payload.success) {
 		      log("edit-result: SUCCESS")
 		      showToast("Edit applied", "success")
@@ -2237,6 +2465,7 @@ function generateCaretGrabPlugin(): string {
 		                componentStack: "",
 		              },
 		            })
+		            ackEdit(prompt, selectedEl)
 		            input.removeEventListener("keydown", handler, true)
 		            input.removeEventListener("input", onInput)
 		          }

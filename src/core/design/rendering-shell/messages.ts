@@ -105,6 +105,9 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 		typeof p.newValue === "string",
 	"ai-edit-request": (p) => isStr(p.instruction) && isStr(p.filePath),
 	"overlay-edit": (p) => isStr(p.instruction),
+	"edit-cancel": () => true,
+	"edit-permission": (p) =>
+		isStr(p.requestId) && (p.decision === "allow" || p.decision === "deny" || p.decision === "allow-always"),
 	"page-focused": (p) => isStr(p.filePath),
 	"flow-edge-create": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
 	"flow-edge-delete": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
@@ -133,10 +136,27 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
+	// The edit pill's controls: cancel the in-flight edit, answer its permission.
+	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }
+	| {
+			source: "caret-vite"
+			type: "edit-permission"
+			payload: { requestId: string; decision: "allow" | "deny" | "allow-always" }
+	  }
+
+/** Live narration of a canvas-initiated AI edit, rendered by the pill. */
+export interface EditStatusPayload {
+	phase: "working" | "needs-permission" | "done" | "failed" | "cancelled"
+	instruction?: string
+	detail?: string
+	permission?: { requestId: string; summary: string }
+	error?: string
+}
 
 /** Host → canvas. */
 export type DesignOutboundMessage =
 	| { source: "caret-host"; type: "edit-result"; payload: EditResultPayload }
+	| { source: "caret-host"; type: "edit-status"; payload: EditStatusPayload }
 	| { source: "caret-host"; type: "precompute-result"; payload: PrecomputeResultPayload }
 
 export type DesignMessage = DesignInboundMessage | DesignOutboundMessage

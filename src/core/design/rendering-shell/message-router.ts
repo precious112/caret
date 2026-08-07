@@ -13,7 +13,7 @@ import { Logger } from "@/shared/services/Logger"
 import type { AgentTask } from "../agent/bridge"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
-import { bridgeFor, hostFor } from "../services"
+import { bridgeFor, editLaneFor, hostFor } from "../services"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { buildVisualEditPrompt } from "../visual-editing/context-builder"
 import { precomputePage } from "../visual-editing/page-precompute"
@@ -51,10 +51,18 @@ function sendEditResult(workspacePath: string, payload: { success: boolean; erro
 /**
  * Hands a task to the connected agent, turning the no-agent case into a visible
  * edit-result rather than a swallowed rejection. Returns whether it was accepted.
+ *
+ * Visual edits go to the edit lane when the host wired one: their own
+ * conversation, narrated to the canvas pill, never touching the chat. Sync and
+ * flow-sync stay on the chat bridge — those are conversations the user follows
+ * in the sidebar. Hosts without a lane fall back to the chat bridge, which is
+ * the old behaviour.
  */
 async function requestAgent(workspacePath: string, task: AgentTask): Promise<boolean> {
+	const bridge =
+		task.kind === "visual-edit" ? (editLaneFor(workspacePath) ?? bridgeFor(workspacePath)) : bridgeFor(workspacePath)
 	try {
-		await bridgeFor(workspacePath).request(task)
+		await bridge.request(task)
 		return true
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
@@ -160,6 +168,14 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 
 		case "design-sync-now":
 			await deps.onSyncRequested()
+			break
+
+		case "edit-cancel":
+			await editLaneFor(workspacePath)?.cancel()
+			break
+
+		case "edit-permission":
+			await editLaneFor(workspacePath)?.respondToPermission(message.payload.requestId, message.payload.decision)
 			break
 	}
 }

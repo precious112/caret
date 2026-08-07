@@ -99,6 +99,9 @@ export class ProjectWindow {
 		this.agent = new AgentService({
 			projectPath: this.projectPath,
 			onState: (state) => this.sendToChrome("agent:state", this.projectPath, state),
+			// The pill lives where the intent was expressed: in the canvas, not the
+			// chat. This is the entire live surface a canvas edit gets.
+			onEditStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "edit-status", payload: status }),
 		})
 
 		this.session = new DesignSession({

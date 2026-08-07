@@ -13,6 +13,7 @@
  */
 import { type AgentBridge, NullBridge } from "./agent/bridge"
 import type { AgentConversation } from "./agent/conversation"
+import type { EditLaneBridge } from "./agent/edit-lane"
 import { type DesignHost, nullDesignHost } from "./host"
 
 export interface ProjectServices {
@@ -27,10 +28,16 @@ export interface ProjectServices {
 	 * itself, not a task handed to it.
 	 */
 	conversation: AgentConversation | null
+	/**
+	 * Canvas-initiated AI work (visual edits, overlay edits), on its own
+	 * conversation so it never touches the chat's transcript. Null on hosts that
+	 * haven't wired one — `visual-edit` tasks then fall back to the chat bridge.
+	 */
+	editLane: EditLaneBridge | null
 }
 
 const registry = new Map<string, ProjectServices>()
-const fallback: ProjectServices = { host: nullDesignHost, bridge: new NullBridge(), conversation: null }
+const fallback: ProjectServices = { host: nullDesignHost, bridge: new NullBridge(), conversation: null, editLane: null }
 
 /** Installs the services for an open project. Called when its window opens. */
 export function registerProjectServices(workspacePath: string, services: Partial<ProjectServices>): void {
@@ -61,4 +68,12 @@ export function setProjectBridge(workspacePath: string, bridge: AgentBridge): vo
 
 export function setProjectConversation(workspacePath: string, conversation: AgentConversation | null): void {
 	registerProjectServices(workspacePath, { conversation })
+}
+
+export function editLaneFor(workspacePath: string): EditLaneBridge | null {
+	return registry.get(workspacePath)?.editLane ?? null
+}
+
+export function setProjectEditLane(workspacePath: string, editLane: EditLaneBridge | null): void {
+	registerProjectServices(workspacePath, { editLane })
 }

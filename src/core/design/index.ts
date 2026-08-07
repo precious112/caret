@@ -33,6 +33,7 @@ export {
 	type RunOutcome,
 	type RunRequest,
 } from "./agent/conversation"
+export { EditLaneBridge, type EditStatus } from "./agent/edit-lane"
 export { setBundledBackendDirectory } from "./agent/opencode/binary"
 export { type AppWritePolicy, classify, type PermissionRuling, rulePermission } from "./agent/permissions"
 export { BACKEND_IDS, disposeBackends, getBackend, probeBackends } from "./agent/registry"
@@ -141,11 +142,13 @@ export { caretDirectoryExists, ensureCaretDirectoryExists, ensureCaretGitignore 
 export {
 	bridgeFor,
 	conversationFor,
+	editLaneFor,
 	hostFor,
 	type ProjectServices,
 	registerProjectServices,
 	setProjectBridge,
 	setProjectConversation,
+	setProjectEditLane,
 	unregisterProjectServices,
 } from "./services"
 export { DesignSession, type DesignSessionOptions } from "./session"
