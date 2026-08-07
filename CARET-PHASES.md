@@ -553,7 +553,7 @@ protecting — with an escape hatch on every question that is a real control, ne
 
 ---
 
-## [~] Phase 6.6: Assets — supply, tagging, and `@` references
+## [x] Phase 6.6: Assets — supply, tagging, and `@` references
 
 **Added 2026-08-02.** The design layer has type, colour, spacing, and (7.5) components. It has
 nothing for the actual *content*: the photograph in the hero, the logo, the product shot, the
@@ -620,9 +620,9 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       regenerated. Same tolerated-and-healed posture as pages.
 - [x] Sync prompt tables every referenced asset and instructs the copy into the app's own
       public directory with the path rewritten — never a hotlink to `/caret-assets/`
-- [ ] Sync records each asset copy in the mapping so Phase 9 can detect drift (lands with the
-      Phase 9 manifest)
-- [~] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
+- [ ] Sync records each asset copy in the mapping so Phase 9 can detect drift — **deferred to
+      the Phase 9 manifest**, where the record belongs; logged in [BACKLOG.md](./BACKLOG.md)
+- [x] Kinds: raster, SVG, video and 3D (`glb`/`gltf`) are all assets on the same terms —
       stored, tagged, served, `@`-referenceable, synced. What differs is only the library
       thumbnail. **Video shows a real frame** and that frame is kept, so `get_asset` hands an
       agent a look at a video rather than a sentence about one — the browser decoded it to
@@ -631,7 +631,10 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       healer-ignored, dropped when the video's bytes change), not an asset with its own tag:
       a poster is a view of a decision, not a second decision. **3D stills are deferred** —
       they need a WebGL renderer in the chrome, and ~1MB of dependency for a 112×80 thumbnail
-      is not a trade worth making before anything else needs one.
+      is not a trade worth making before anything else needs one; revisit after 6.7, when a
+      generation lane may make the renderer shared infrastructure rather than a thumbnail's
+      private cost. Logged in [BACKLOG.md](./BACKLOG.md), along with the one surface the click
+      certification does not reach (the inline-edit fallback card's picker).
 - [x] **Agent vision, certified.** `get_screenshot` captures a fresh isolated render (settled:
       fonts ready, images decoded), refuses unknown pages by naming the ones that exist, and
       pairs the image with a text sibling so a client that drops image content degrades

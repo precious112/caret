@@ -26,3 +26,45 @@ So sync is never at risk; the only downside is an occasional "uncommitted change
   - `precomputeFiles(paths)` in `src/core/design/visual-editing/post-generation-hook.ts` (reuse `precomputeAndApply`).
   - Call from `onDesignTaskCompleted` (`src/core/design/sync/sync-completion.ts`) before `commitDesignLayer`.
 - Secondary: add `package-lock.json` to the design-layer `.gitignore` (`CARET_GITIGNORE` in `src/core/design/scaffold.ts`) to stop lock churn.
+
+---
+
+## 3D assets (`glb`/`gltf`) have no still image
+
+**Status:** deferred, deliberately · **Severity:** cosmetic in the library, real for agents · **From:** Phase 6.6
+
+**Symptom:** a `.glb` shows the text badge `3D` in the asset library, the `@` picker and the chat composer, where a video shows a real frame. `get_asset` hands an agent the model's metadata and a sentence, never a look at it.
+
+**Why the other kinds work:** raster and vector are their own thumbnail, and video costs nothing extra — the browser already decoded a frame to display the row, so the poster is captured from the element that was going to render anyway (`desktop/renderer/src/views/AssetsView.tsx`) and stored as a derived file in `.caret/assets/.posters/`.
+
+**Why 3D doesn't:** nothing in the chrome can rasterise a glTF scene. It needs a WebGL renderer (three.js + a loader, ~1MB), plus decisions a video frame never forces — camera placement, framing, lighting, and a background that suits both light and dark rows. That is a rendering feature wearing a thumbnail's clothes.
+
+**Why deferred rather than dropped:** 3D is a first-class asset on every other term (stored, tagged, served, `@`-referenceable, synced), so only the preview is missing. Revisit **after Phase 6.7's generation lanes land** — if a lane ever produces or edits 3D, the renderer stops being a 1MB dependency bought for a 112×80 thumbnail and becomes shared infrastructure. Picking it up before then is paying full price for the smallest possible benefit.
+
+**When picked up:** reuse the poster pipeline as-is (`setPoster` in `src/core/design/assets/store.ts`, `assets:setPoster` in `desktop/main/ipc.ts`, PNG data-URL only) — it was written kind-agnostic for this. Only the capture step is new.
+
+---
+
+## The inline-edit fallback card's `@` picker has no verify scenario
+
+**Status:** untested surface · **Severity:** unknown — the code path is shared, the wiring is not · **From:** Phase 6.6
+
+**Symptom:** none observed. This is a gap in certification, not a known bug.
+
+**What is covered:** `verify:app` drives the picker by **clicking** in the two boxes that ship it — `be` (the canvas AI-edit box, in a real `WebContentsView` with the page in a child frame) and `bf` (the chat composer). `verify:design-shell` `r`/`s` cover the shell in a browser.
+
+**What is not:** the third attach site, `showAiEditFallback` in `src/core/design/rendering-shell/canvas-template.ts`. It appears only *after an inline edit has already failed*, and no scenario in either suite provokes a failing inline edit, so nothing has ever clicked an asset in that card.
+
+**Why this matters more than it looks:** every defect the user found in this feature was an interaction with the surrounding surface, not a bug in the picker — inherited `pointer-events: none` from react-grab's body, react-grab reading an outside press as a dismissal, and an element replaced between mousedown and mouseup. All three were invisible to keyboard selection and to unit tests. A shared implementation is therefore *not* evidence that a third host behaves; it is exactly the assumption that let those three ship.
+
+**When picked up:** the hard part is provoking the fallback deterministically. Cheapest route is a test-only hook that forces the inline editor to report failure for one edit, then reuse `be`'s click-through assertions verbatim.
+
+---
+
+## Sync does not record asset copies in the mapping
+
+**Status:** deferred, gated · **Severity:** none today · **From:** Phase 6.6, lands with Phase 9
+
+**Symptom:** sync copies every referenced asset into the app's own public directory and rewrites the path (never a hotlink to `/caret-assets/`), but nothing records that a copy happened, so Phase 9 cannot tell that an asset drifted from its design-layer original.
+
+**Why deferred:** the record belongs in the Phase 9 sync manifest, which does not exist yet. Writing a second, private ledger now would guarantee two sources of truth to reconcile later.
