@@ -2018,6 +2018,7 @@ function generateAssetPicker(): string {
 		 */
 		export function attachAssetPicker(input: HTMLInputElement | HTMLTextAreaElement): () => void {
 		  let popup: HTMLDivElement | null = null
+		  let rows: HTMLDivElement[] = []
 		  let matches: AssetSummary[] = []
 		  let highlighted = 0
 		  let anchor: { start: number } | null = null
@@ -2027,16 +2028,45 @@ function generateAssetPicker(): string {
 		  const close = () => {
 		    popup?.remove()
 		    popup = null
+		    rows = []
 		    matches = []
 		    anchor = null
+		  }
+
+		  /** The highlight, and nothing else. Kept apart from building the list. */
+		  const paint = () => {
+		    rows.forEach((row, i) => {
+		      row.style.background = i === highlighted ? "rgba(11,122,255,0.18)" : "transparent"
+		    })
 		  }
 
 		  const render = () => {
 		    if (!popup) {
 		      popup = document.createElement("div")
 		      popup.setAttribute("data-caret-asset-picker", "")
+		      // react-grab's own escape hatch, and it is required rather than
+		      // optional: in prompt mode it treats any pointerdown outside the
+		      // selection as "dismiss" and puts up "Discard?", and one inside the
+		      // selection as "submit". Both fire from a window-level capture
+		      // listener, so the picker has to be invisible to it — the attribute is
+		      // matched through composedPath(), which is why this works even though
+		      // the popup lives in document.body. Their own textarea carries it too.
+		      popup.setAttribute("data-react-grab-ignore-events", "")
 		      Object.assign(popup.style, {
-		        position: "fixed", zIndex: "2147483000", minWidth: "260px", maxWidth: "360px",
+		        // Both of these are about being *hittable*, not visible, and the
+		        // difference is what made this so misleading: the list rendered
+		        // perfectly and simply received nothing.
+		        //
+		        // pointer-events is an inherited property, and react-grab sets none
+		        // on the body while it is active so the page cannot be clicked out
+		        // from under it. Our popup is a body child, so it inherited that and
+		        // every press fell through to the document — where react-grab read it
+		        // as a dismissal and offered to discard the user's text.
+		        //
+		        // The z-index matches their overlay's, which is the maximum; being
+		        // later in the body settles the tie in our favour.
+		        pointerEvents: "auto",
+		        position: "fixed", zIndex: "2147483647", minWidth: "260px", maxWidth: "360px",
 		        maxHeight: "260px", overflowY: "auto", background: "#15161a",
 		        border: "1px solid #2c2e36", borderRadius: "10px", padding: "4px",
 		        boxShadow: "0 12px 32px rgba(0,0,0,0.45)", fontFamily: "system-ui, sans-serif",
@@ -2059,6 +2089,7 @@ function generateAssetPicker(): string {
 		    }
 
 		    popup.innerHTML = ""
+		    rows = []
 		    if (matches.length === 0) {
 		      const empty = document.createElement("div")
 		      empty.textContent = cached.length === 0
@@ -2075,10 +2106,19 @@ function generateAssetPicker(): string {
 		      Object.assign(row.style, {
 		        display: "flex", gap: "10px", alignItems: "center", padding: "6px",
 		        borderRadius: "7px", cursor: "pointer",
-		        background: i === highlighted ? "rgba(11,122,255,0.18)" : "transparent",
 		      })
-		      row.addEventListener("mouseenter", () => { highlighted = i; render() })
-		      row.addEventListener("click", () => accept(asset))
+		      // Hovering repaints the highlight; it must never rebuild the list. It
+		      // did, and replacing the element under the cursor meant mousedown and
+		      // mouseup landed on different nodes, so no click ever fired and picking
+		      // an asset silently left the bare "@" behind.
+		      row.addEventListener("mouseenter", () => { highlighted = i; paint() })
+		      // Chosen on mousedown, not click: one event, before focus can move,
+		      // and it cannot be split across a re-render.
+		      row.addEventListener("mousedown", (event) => {
+		        event.preventDefault()
+		        accept(asset, true)
+		      })
+		      rows.push(row)
 
 		      const thumb = document.createElement("div")
 		      Object.assign(thumb.style, {
@@ -2119,14 +2159,42 @@ function generateAssetPicker(): string {
 
 		      popup!.appendChild(row)
 		    })
+		    paint()
 		  }
 
-		  const accept = (asset: AssetSummary) => {
+		  /**
+		   * Closes once the current press has finished being delivered.
+		   *
+		   * react-grab ignores any event whose composedPath contains our popup, and
+		   * that path is hit-tested per event. Removing the popup on mousedown would
+		   * put the pointerup and click of the *same gesture* on the page instead,
+		   * where react-grab is watching for exactly that — a press outside its
+		   * selection means dismiss, and dismissing with text typed raises
+		   * "Discard?" over the user's instruction. So the element stays until the
+		   * gesture it belongs to has finished being delivered.
+		   */
+		  const closeAfterGesture = () => {
+		    const finish = () => {
+		      window.removeEventListener("click", finish, true)
+		      close()
+		    }
+		    window.addEventListener("click", finish, true)
+		    // A press that never produces a click — dragged off the row, cancelled by
+		    // the OS — must not leave the list on screen forever.
+		    window.setTimeout(finish, 600)
+		  }
+
+		  const accept = (asset: AssetSummary, viaPointer?: boolean) => {
 		    if (!anchor) return
 		    const caret = input.selectionStart ?? input.value.length
 		    const next = input.value.slice(0, anchor.start) + "@" + asset.tag + " " + input.value.slice(caret)
 		    setValue(input, next, anchor.start + asset.tag.length + 2)
-		    close()
+		    // Cleared now so a second press cannot insert twice; only the element's
+		    // removal is deferred.
+		    anchor = null
+		    matches = []
+		    if (viaPointer) closeAfterGesture()
+		    else close()
 		    input.focus()
 		  }
 
@@ -2154,7 +2222,7 @@ function generateAssetPicker(): string {
 		      event.preventDefault()
 		      event.stopImmediatePropagation()
 		      highlighted = (highlighted + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length
-		      render()
+		      paint()
 		      return
 		    }
 		    if (event.key === "Enter" || event.key === "Tab") {

@@ -1296,11 +1296,27 @@ async function main(): Promise<void> {
 				}
 				if (!option) return { error: "the picker never opened, or opened with no options in it" }
 
-				const picked = await pageFrame.executeJavaScript(`(() => {
-					const input = document.querySelector('.caret-overlay-prompt input')
-					input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-					return input.value
+				// Picked with a real mouse press on the row, hovering first — the way a
+				// person picks, and the way it was reported broken. Hovering used to
+				// rebuild the list, replacing the element between press and release so
+				// no click ever fired; and react-grab reads any press outside its
+				// selection as "dismiss", which put a "Discard?" prompt on screen
+				// instead of an asset in the box.
+				const rowBox = await pageFrame.executeJavaScript(`(() => {
+					const row = document.querySelector('[data-caret-asset-option]')
+					const r = row.getBoundingClientRect()
+					return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
 				})()`)
+				const at = { x: Math.round(offset.x + rowBox.x), y: Math.round(offset.y + rowBox.y) }
+				wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+				await new Promise((r) => setTimeout(r, 300))
+				wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 })
+				wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 })
+				await new Promise((r) => setTimeout(r, 400))
+
+				const picked = await pageFrame.executeJavaScript(
+					`(document.querySelector('.caret-overlay-prompt input') || {}).value || ''`,
+				)
 
 				// Leave the page as it was found: paint mode off, back on the canvas.
 				await pageFrame
@@ -1326,9 +1342,9 @@ async function main(): Promise<void> {
 		const { option, picked } = outcome as { option: { tag: string; decoded: number }; picked: string }
 		assert(option.tag === "hero-shot-2x", `the picker offered "${option.tag}"`)
 		assert(option.decoded > 0, "the picker's thumbnail never decoded inside the app")
-		assert(picked.includes("@hero-shot-2x"), `Enter did not put the tag in the box: "${picked}"`)
+		assert(picked.includes("@hero-shot-2x"), `clicking the row did not put the tag in the box: "${picked}"`)
 
-		return `picked @${option.tag} from a decoded thumbnail in the real canvas view`
+		return `clicked @${option.tag} from a decoded thumbnail in the real canvas view`
 	})
 
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {

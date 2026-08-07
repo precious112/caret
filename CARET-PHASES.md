@@ -591,10 +591,14 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
       surfaces, because the AI-edit box is react-grab's and lives in a shadow root — it cannot
       be a component, and a second implementation would drift on what a tag is. Enter chooses
       the asset without also sending the instruction (both handlers sit on the same element).
-      **Certified inside the app**, in the real `WebContentsView` with the page in a child
-      frame, not only in the shell harness — the canvas has changed meaning across hosts
-      before. The react-grab prompt box itself is still driven by no suite: entering its mode
-      means synthesizing a third-party component's own menu.
+      **Certified by clicking, in both boxes and inside the app** — in the real
+      `WebContentsView` with the page in a child frame, not only in the shell harness, since
+      the canvas has changed meaning across hosts before. Living beside react-grab needs three
+      things, each of which failed silently on its own: `pointer-events: auto` (it sets `none`
+      on the body while active, and the property is inherited, so the list painted perfectly
+      and received nothing), `data-react-grab-ignore-events` (in prompt mode it reads any press
+      outside its selection as a dismissal and offers to discard the typed text), and keeping
+      the element in the DOM until the gesture that chose it has finished being delivered.
 - [x] Fit is the agent's judgment, not a crop tool's: `fitWarning` (upscale >1.5×, aspect gap
       >2×) joins the expanded reference — the selection payload now carries the target's
       rendered box, and an overlay edit uses the painted region as its box. The prompt states

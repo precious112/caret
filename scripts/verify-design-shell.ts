@@ -961,9 +961,23 @@ async function main() {
 		)
 		if (thumbWidth !== 240) throw new Error(`the picker thumbnail decoded at ${thumbWidth}px, not the real asset`)
 
-		// Enter chooses the asset. It must NOT also submit: the submit handler is on
-		// the same element, and before the picker consumed the key first, picking an
-		// asset sent a half-written instruction.
+		// **Clicking** the row, which is how a person picks and how this was
+		// reported broken: hovering used to rebuild the list, so the element under
+		// the cursor was replaced between mousedown and mouseup, no click ever
+		// fired, and the bare "@" stayed in the box. Hovering first is the point.
+		await option.hover()
+		await page.waitForTimeout(150)
+		await option.click()
+		await page.waitForTimeout(300)
+		const afterClick = await input.inputValue()
+		if (!afterClick.includes("@hero-shot")) throw new Error(`clicking the row left the box as "${afterClick}"`)
+
+		// Enter must reach the picker before the submit handler on the same
+		// element, or choosing an asset also sends a half-written instruction.
+		await page.fill(".caret-overlay-prompt input, .caret-overlay-prompt textarea", "")
+		await input.click()
+		await page.keyboard.type("Put @her")
+		await page.waitForSelector("[data-caret-asset-picker]", { timeout: 5000 })
 		await page.keyboard.press("Enter")
 		await page.waitForTimeout(400)
 		const afterPick = await input.inputValue()
@@ -982,7 +996,144 @@ async function main() {
 		await page.close()
 		if (!sent[0].includes("@hero-shot")) throw new Error(`the tag did not survive into the instruction: "${sent[0]}"`)
 
-		return `picked from a thumbnail list, Enter did not send, instruction carried the tag: "${sent[0]}"`
+		return `picked by click and by Enter, neither sent early, instruction carried the tag: "${sent[0]}"`
+	})
+
+	await scenario("s. picking in react-grab's own prompt box does not read as 'discard'", async () => {
+		// The AI-edit box belongs to react-grab and lives in its shadow root. In
+		// prompt mode it watches window pointerdown in the capture phase and reads
+		// any press outside its selection as a dismissal — which put "Discard?" on
+		// screen when the user clicked an asset. Their escape hatch is an
+		// attribute matched through composedPath(), so this asserts the outcome
+		// rather than the attribute: no discard prompt, and the tag in the box.
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		await page.goto(`http://localhost:${port}/?page=home&mode=focused`)
+		await page.waitForSelector(".caret-focused-paint-btn", { timeout: 15000 })
+		await page.waitForTimeout(2500)
+
+		await page.evaluate(() => {
+			;(window as any).__POSTED_AI__ = []
+			window.addEventListener("message", (e) => {
+				if (e.data?.type === "ai-edit-request") (window as any).__POSTED_AI__.push(e.data.payload?.instruction || "")
+			})
+			;(window as any).__REACT_GRAB__?.activate?.()
+		})
+		await page.waitForTimeout(500)
+
+		// Driven through the mouse rather than a locator click: react-grab's overlay
+		// sits over the page, so Playwright's actionability check never clears.
+		const target = await page.evaluate(() => {
+			const el = document.querySelector("h1") as HTMLElement
+			const r = el.getBoundingClientRect()
+			return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+		})
+		await page.mouse.move(target.x, target.y)
+		await page.waitForTimeout(300)
+		await page.mouse.click(target.x, target.y, { button: "right" })
+		await page.waitForTimeout(600)
+
+		const aiEdit = page.getByText("AI Edit", { exact: true }).first()
+		try {
+			await aiEdit.waitFor({ timeout: 8000 })
+		} catch {
+			const menu = await page.evaluate(() => {
+				const host = document.querySelector("[data-react-grab]") as HTMLElement | null
+				return host?.shadowRoot?.textContent?.slice(0, 300) ?? "no shadow root"
+			})
+			await page.close()
+			throw new Error(`react-grab's menu never offered AI Edit. Menu text: ${menu}`)
+		}
+		await aiEdit.click()
+
+		const promptBox = page.locator("[data-react-grab-input]").first()
+		await promptBox.waitFor({ timeout: 8000 })
+		await promptBox.click()
+		await page.keyboard.type("Put @her")
+
+		await page.waitForSelector("[data-caret-asset-picker]", { timeout: 8000 })
+		const option = page.locator('[data-caret-asset-option="hero-shot"]')
+		await option.waitFor({ timeout: 8000 })
+		// Which events actually carry the picker on their path is the whole question
+		// here: react-grab's guard is `composedPath().some(hasAttribute)`, so an
+		// event that misses it is an event react-grab will act on.
+		await page.evaluate(() => {
+			;(window as any).__EV__ = []
+			for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "focusout", "blur"]) {
+				window.addEventListener(
+					type,
+					(e: Event) => {
+						const onPath = e.composedPath().some((n) => (n as HTMLElement)?.hasAttribute?.("data-caret-asset-picker"))
+						;(window as any).__EV__.push(`${type}:${onPath ? "picker" : "elsewhere"}`)
+					},
+					true,
+				)
+			}
+		})
+
+		const row = await option.evaluate((el) => {
+			const r = el.getBoundingClientRect()
+			const x = r.x + r.width / 2
+			const y = r.y + r.height / 2
+			// What the browser would actually deliver a press to. react-grab's
+			// overlay sits at the maximum z-index, and losing this hit test is
+			// invisible — the popup still paints, it just never receives anything.
+			const onTop = document.elementFromPoint(x, y) as HTMLElement | null
+			return {
+				x,
+				y,
+				hitsPicker: !!onTop?.closest?.("[data-caret-asset-picker]"),
+				onTop: onTop
+					? `${onTop.tagName.toLowerCase()}${[...onTop.attributes].map((a) => `[${a.name}]`).join("")}`
+					: "nothing",
+				stack: document
+					.elementsFromPoint(x, y)
+					.slice(0, 4)
+					.map((n) => (n as HTMLElement).tagName.toLowerCase())
+					.join(">"),
+				popupRect: (() => {
+					const p = document.querySelector("[data-caret-asset-picker]") as HTMLElement | null
+					if (!p) return "no popup"
+					const b = p.getBoundingClientRect()
+					const cs = getComputedStyle(p)
+					return `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} pe=${cs.pointerEvents} disp=${cs.display} vis=${cs.visibility} parent=${p.parentElement?.tagName.toLowerCase()}`
+				})(),
+				rowRect: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`,
+			}
+		})
+		if (!row.hitsPicker) {
+			await page.close()
+			throw new Error(
+				`${row.onTop} is stacked over the picker (stack ${row.stack}); popup ${row.popupRect}; row ${row.rowRect}`,
+			)
+		}
+		await page.mouse.move(row.x, row.y)
+		await page.waitForTimeout(200)
+		await page.mouse.click(row.x, row.y)
+		await page.waitForTimeout(500)
+
+		const state = await page.evaluate(() => {
+			const host = document.querySelector("[data-react-grab]") as HTMLElement | null
+			const input = host?.shadowRoot?.querySelector("[data-react-grab-input]") as HTMLTextAreaElement | null
+			const popup = document.querySelector("[data-caret-asset-picker]") as HTMLElement | null
+			return {
+				discarding: (host?.shadowRoot?.querySelectorAll("[data-react-grab-discard-prompt]").length ?? 0) > 0,
+				promptBoxPresent: !!input,
+				value: input?.value ?? null,
+				pickerPresent: !!popup,
+				popupHasIgnoreAttr: popup?.hasAttribute("data-react-grab-ignore-events") ?? null,
+				posted: (window as any).__POSTED_AI__ ?? [],
+				events: (window as any).__EV__ ?? [],
+				shadowText: host?.shadowRoot?.textContent?.slice(0, 160) ?? "",
+			}
+		})
+		await page.close()
+
+		if (state.discarding)
+			throw new Error(`choosing an asset put react-grab into its discard prompt: ${JSON.stringify(state)}`)
+		if (!state.promptBoxPresent) throw new Error(`choosing an asset closed react-grab's prompt box: ${JSON.stringify(state)}`)
+		if (!state.value?.includes("@hero-shot")) throw new Error(`the pick did not reach the box: ${JSON.stringify(state)}`)
+
+		return `picked inside react-grab's shadow-root box: "${state.value}", no discard prompt`
 	})
 
 	await browser.close()
