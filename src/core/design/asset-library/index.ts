@@ -29,16 +29,17 @@ export {
 } from "./interview"
 export { FREE_LANES, lanesWithRaster } from "./lanes"
 export { DEFAULT_PALETTE, derivePalette, hexToHsl, hslToHex, normalizeHex } from "./palette"
-export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./raster/config"
-export {
-	composePrompt,
-	type GeminiBackend,
-	type GeminiConfig,
-	GeminiImages,
-	type GeminiModel,
-	type ImageRequest,
-	type ImageResult,
-} from "./raster/gemini"
+/**
+ * The raster lane's runner is deliberately **not** re-exported here.
+ *
+ * `raster/gemini` reaches `@/shared/net`, which reaches undici, which is
+ * node-only — and re-exporting it made this whole barrel unbundleable for a
+ * browser. That matters beyond tooling: the generators are pure and portable by
+ * design, and anything that wants them (the explainer page, and one day the
+ * canvas itself) should not have to drag `child_process` along to get them.
+ * `src/core/design` re-exports the lane from its own modules, so nothing
+ * outside sees a difference.
+ */
 export { foundationWords, keyWords, paletteWords } from "./raster/palette-words"
 export { RASTER_RECIPES } from "./raster/recipes"
 export { ALL_RECIPES, ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"

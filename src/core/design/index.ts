@@ -56,19 +56,14 @@ export {
 	findGenerator,
 	GENERATION_QUESTIONS,
 	GENERATORS,
-	type GeminiConfig,
-	GeminiImages,
 	type GeneratedVariant,
 	type GenerationAnswers,
 	type GenerationChoice,
 	type GenerationQuestion,
 	type Generator,
 	type GeneratorPalette,
-	type ImageRequest,
-	type ImageResult,
 	isComplete,
 	lanesWithRaster,
-	NO_RASTER_REASON,
 	narrowForAnswers,
 	narrowRecipes,
 	proposeTag,
@@ -77,11 +72,22 @@ export {
 	type RecipeLane,
 	type RecipeRequest,
 	RUNNABLE_LANES,
-	resolveRasterConfig,
 	runGenerator,
 	SLOP_TELLS,
 	tagsFromFoundation,
 } from "./asset-library"
+// Imported from the lane's own modules rather than through the asset-library
+// barrel, which stays free of node-only code so the generators remain portable.
+export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./asset-library/raster/config"
+export {
+	composePrompt,
+	type GeminiBackend,
+	type GeminiConfig,
+	GeminiImages,
+	type GeminiModel,
+	type ImageRequest,
+	type ImageResult,
+} from "./asset-library/raster/gemini"
 export {
 	ASSET_TYPES,
 	ASSETS_DIR,
