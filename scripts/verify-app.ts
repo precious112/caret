@@ -281,6 +281,11 @@ const INITIALIZE = {
 }
 
 async function main(): Promise<void> {
+	// A run that starts after a crashed one inherits its orphans — and every one
+	// is an agent loop polling a provider while this suite tries to measure a
+	// clean app. Reap first, reap again in cleanup.
+	reapOrphanedBackends()
+
 	fixture = await buildFixture()
 	log(`fixture at ${fixture}`)
 
@@ -2181,6 +2186,43 @@ async function cleanup(): Promise<void> {
 		log(`fixture kept at ${fixture}`)
 	}
 	if (userData && !KEEP) await fs.rm(userData, { recursive: true, force: true }).catch(() => {})
+	reapOrphanedBackends()
+}
+
+/**
+ * Kills bundled-backend servers this harness orphaned.
+ *
+ * The app spawns `opencode.exe serve` as an ordinary child and kills it in
+ * `before-quit` — which never fires here, because Playwright's teardown
+ * SIGKILLs the app. The server is reparented to PID 1 and its agent loop polls
+ * the provider forever; one session of verify runs left **32** of them running.
+ *
+ * Two conditions, both required, so a real Caret the user has open is never
+ * touched: the command line must name *this repo's* bundled binary, and the
+ * process must already be an orphan (PPID 1) — a live app still holds its
+ * child, so its server never matches.
+ */
+function reapOrphanedBackends(): void {
+	const binary = path.resolve("node_modules/opencode-ai/bin/opencode.exe")
+	try {
+		const table = child_process.execFileSync("ps", ["-eo", "pid=,ppid=,command="], { encoding: "utf-8" })
+		let reaped = 0
+		for (const line of table.split("\n")) {
+			const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+			if (!match) continue
+			const [, pid, ppid, command] = match
+			if (ppid !== "1" || !command.includes(binary)) continue
+			try {
+				process.kill(Number(pid))
+				reaped++
+			} catch {
+				// Already gone, or not ours to kill. Either way, not a failure.
+			}
+		}
+		if (reaped > 0) log(`reaped ${reaped} orphaned backend server(s)`)
+	} catch {
+		// `ps` unavailable or unparseable — skip rather than fail a finished run.
+	}
 }
 
 main()

@@ -44,6 +44,14 @@ export interface Prefs {
 	 * base64 noise and quietly treat it as a key.
 	 */
 	secrets: Record<string, string>
+	/**
+	 * Which backend-and-model pairs have been shown an image successfully.
+	 *
+	 * Keyed `backendId::model`, because the capability belongs to the pair rather
+	 * than to either alone — a capable model behind an adapter that drops images
+	 * cannot see, which is a bug this project actually shipped.
+	 */
+	visionChecks: Record<string, { sees: boolean; reason?: string; at: number }>
 }
 
 const DEFAULTS: Prefs = {
@@ -58,6 +66,7 @@ const DEFAULTS: Prefs = {
 	backendEffort: "",
 	appWritesAllowed: [],
 	secrets: {},
+	visionChecks: {},
 }
 
 const MAX_RECENTS = 12

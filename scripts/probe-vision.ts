@@ -16,7 +16,7 @@
  */
 import { deflateSync } from "zlib"
 
-import { getBackend } from "../src/core/design/agent/registry"
+import { disposeBackends, getBackend } from "../src/core/design/agent/registry"
 
 /** Colours far enough apart that a wrong answer is unambiguous. */
 const COLOURS: Array<{ name: string; rgb: [number, number, number] }> = [
@@ -113,6 +113,9 @@ async function main(): Promise<void> {
 		}
 	} finally {
 		await session.close().catch(() => {})
+		// Against the opencode backend, close() ends the session but the server
+		// child survives — and a leaked agent loop polls the provider forever.
+		await disposeBackends().catch(() => {})
 	}
 
 	const said = answer.trim().toLowerCase()

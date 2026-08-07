@@ -38,6 +38,9 @@ export { setBundledBackendDirectory } from "./agent/opencode/binary"
 export { type AppWritePolicy, classify, type PermissionRuling, rulePermission } from "./agent/permissions"
 export { BACKEND_IDS, disposeBackends, getBackend, probeBackends } from "./agent/registry"
 export type { TranscriptEntry, TranscriptState } from "./agent/transcript"
+// Imported from the lane's own modules rather than through the asset-library
+// barrel, which stays free of node-only code so the generators remain portable.
+export { probeVision, solidPng, type VisionVerdict } from "./agent/vision"
 export {
 	ASPECTS,
 	ASSET_RECIPES,
@@ -54,6 +57,7 @@ export {
 	FREE_LANES,
 	findAssetRecipe,
 	findGenerator,
+	foundationWords,
 	GENERATION_QUESTIONS,
 	GENERATORS,
 	type GeneratedVariant,
@@ -76,8 +80,6 @@ export {
 	SLOP_TELLS,
 	tagsFromFoundation,
 } from "./asset-library"
-// Imported from the lane's own modules rather than through the asset-library
-// barrel, which stays free of node-only code so the generators remain portable.
 export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./asset-library/raster/config"
 export {
 	composePrompt,
