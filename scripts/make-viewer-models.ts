@@ -64,23 +64,32 @@ async function main(): Promise<void> {
 	const [variant] = composeVariants({ recipe, tokens, aspect: "1:1", count: variantIndex + 1 }).slice(variantIndex)
 	if (variant.request.lane !== "raster") throw new Error("object-study is not raster")
 
-	const gemini = new GeminiImages(resolveRasterConfig() ?? { backend: "vertex", project: process.env.CARET_VERTEX_PROJECT })
-	console.log("generating the source image…")
-	const image = await gemini.generate({
-		prompt: variant.request.prompt,
-		avoid: variant.request.avoid,
-		aspect: "1:1",
-	})
-	if (!image.ok) throw new Error(`source image: ${image.reason}`)
+	// --reuse-source skips Gemini when a saved source exists: iterating on the
+	// optimization should not regenerate the object being optimized.
 	const sourceFile = path.join(OUT, "source.png")
-	await fs.writeFile(sourceFile, image.bytes)
-	console.log(`source: ${Math.round(image.bytes.length / 1024)}KB → ${sourceFile}`)
+	let sourceBytes: Buffer
+	if (process.argv.includes("--reuse-source")) {
+		sourceBytes = await fs.readFile(sourceFile)
+		console.log(`reusing source: ${Math.round(sourceBytes.length / 1024)}KB`)
+	} else {
+		const gemini = new GeminiImages(resolveRasterConfig() ?? { backend: "vertex", project: process.env.CARET_VERTEX_PROJECT })
+		console.log("generating the source image…")
+		const image = await gemini.generate({
+			prompt: variant.request.prompt,
+			avoid: variant.request.avoid,
+			aspect: "1:1",
+		})
+		if (!image.ok) throw new Error(`source image: ${image.reason}`)
+		sourceBytes = image.bytes
+		await fs.writeFile(sourceFile, sourceBytes)
+		console.log(`source: ${Math.round(sourceBytes.length / 1024)}KB → ${sourceFile}`)
+	}
 
 	// 2. The draft.
-	const uploaded = await tripo.uploadImage(image.bytes, image.mime)
+	const uploaded = await tripo.uploadImage(sourceBytes, "image/png")
 	if (!uploaded.ok) throw new Error(`upload: ${uploaded.reason}`)
 	console.log("tripo is building the draft…")
-	const draft = await tripo.imageToModel(uploaded.value, image.mime, (update) =>
+	const draft = await tripo.imageToModel(uploaded.value, "image/png", (update) =>
 		process.stdout.write(`\r  ${update.stage} ${update.percent ?? ""}%   `),
 	)
 	if (!draft.ok) throw new Error(`draft: ${draft.reason}`)

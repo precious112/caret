@@ -27,14 +27,18 @@ interface Meta {
 	draftBytes: number
 	optimizedBytes: number
 	decision: { faceLimit: number; textureSize: number; reason: string }
+	corrected?: string | null
 }
 
 async function main(): Promise<void> {
-	const [draft, optimized, source, meta] = await Promise.all([
+	const [draft, optimized, source, meta, aggressive] = await Promise.all([
 		fs.readFile(path.join(MODELS, "draft.glb")),
 		fs.readFile(path.join(MODELS, "optimized.glb")),
 		fs.readFile(path.join(MODELS, "source.png")),
 		fs.readFile(path.join(MODELS, "meta.json"), "utf-8").then((raw) => JSON.parse(raw) as Meta),
+		// The 740KB version the first budget produced — kept as the exhibit that
+		// set the band. Optional: a fresh models/ directory has no cautionary tale.
+		fs.readFile(path.join(MODELS, "aggressive.glb")).catch(() => null),
 	])
 
 	const kb = (bytes: number) => `${Math.round(bytes / 1024).toLocaleString()}KB`
@@ -57,7 +61,7 @@ async function main(): Promise<void> {
   h1 { font-size:19px; font-weight:500; margin:0 0 6px; letter-spacing:-0.01em; }
   .lede { color:var(--muted); max-width:66ch; margin-bottom:36px; }
   .lede strong { color:var(--text); font-weight:500; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .grid { display:grid; grid-template-columns:repeat(var(--panels, 2), 1fr); gap:20px; }
   .panel { border:1px solid var(--border); border-radius:12px; background:var(--panel); overflow:hidden; }
   .panel h2 { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted);
               margin:0; padding:12px 16px; display:flex; justify-content:space-between; align-items:baseline; }
@@ -76,19 +80,29 @@ async function main(): Promise<void> {
 <div class="wrap">
   <h1>The 3D lane, looked at</h1>
   <p class="lede">
-    Both meshes below are real WebGL — drag to orbit, scroll to zoom. Left is the draft Tripo built from a
-    Nano-Banana object study; right is the same object after the optimization an LLM decided.
-    <strong>${kb(meta.draftBytes)} became ${kb(meta.optimizedBytes)} — ${ratio}× lighter</strong> — and whether
-    the object survived that is exactly the judgment this page exists for.
+    Every mesh below is real WebGL — drag to orbit, scroll to zoom, and look at the printed labels on the
+    earpads. Left: the draft Tripo built from a Nano-Banana object study. ${
+		aggressive ? "Middle: what the first budget produced — the melted-label 740KB that set the 3–5MB band. Right:" : "Right:"
+	}
+    the band-enforced optimization. <strong>${kb(meta.draftBytes)} → ${kb(meta.optimizedBytes)}, ${ratio}× lighter,
+    inside the band</strong> — the judgment this page exists for is whether the labels survived this time.
   </p>
 
-  <div class="grid">
+  <div class="grid" style="--panels:${aggressive ? 3 : 2}">
     <div class="panel">
       <h2>Draft <b>${kb(meta.draftBytes)}</b></h2>
       <model-viewer id="draft" camera-controls auto-rotate shadow-intensity="1" exposure="0.9" alt="draft model"></model-viewer>
     </div>
+    ${
+		aggressive
+			? `<div class="panel">
+      <h2>Over-optimized <b>${kb(aggressive.length)}</b></h2>
+      <model-viewer id="aggressive" camera-controls auto-rotate shadow-intensity="1" exposure="0.9" alt="over-optimized model"></model-viewer>
+    </div>`
+			: ""
+	}
     <div class="panel">
-      <h2>Optimized <b>${kb(meta.optimizedBytes)}</b></h2>
+      <h2>Band-enforced <b>${kb(meta.optimizedBytes)}</b></h2>
       <model-viewer id="optimized" camera-controls auto-rotate shadow-intensity="1" exposure="0.9" alt="optimized model"></model-viewer>
     </div>
   </div>
@@ -98,6 +112,7 @@ async function main(): Promise<void> {
     <div>
       <p class="params">${meta.decision.faceLimit.toLocaleString()} faces · ${meta.decision.textureSize}px textures</p>
       <p><strong>The model's own reasoning, recorded in provenance:</strong> ${meta.decision.reason}</p>
+      ${meta.corrected ? `<p style="margin-top:6px"><strong>Corrective pass:</strong> ${meta.corrected}</p>` : ""}
     </div>
   </div>
 
@@ -117,6 +132,7 @@ async function main(): Promise<void> {
     document.getElementById(id).src = URL.createObjectURL(new Blob([bytes], { type: "model/gltf-binary" }))
   }
   load("draft", "${draft.toString("base64")}")
+  ${aggressive ? `load("aggressive", "${aggressive.toString("base64")}")` : ""}
   load("optimized", "${optimized.toString("base64")}")
   document.getElementById("source").src = "data:image/png;base64,${source.toString("base64")}"
 </script>
