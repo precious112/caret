@@ -2,8 +2,10 @@ import { describe, it } from "mocha"
 import "should"
 
 import type { CodingBackend } from "../agent/backend"
+import { convertWithinBudget } from "../asset-library/tripo/budget"
+import type { TripoClient } from "../asset-library/tripo/client"
 import { NO_TRIPO_REASON, resolveTripoConfig } from "../asset-library/tripo/client"
-import { decideOptimization, isRecommendedOptimizer, OPTIMIZATION_BOUNDS } from "../asset-library/tripo/optimize"
+import { decideOptimization, isRecommendedOptimizer, OPTIMIZATION_BOUNDS, WEIGHT_BAND } from "../asset-library/tripo/optimize"
 
 describe("the 3D lane's configuration", () => {
 	it("prefers the stored key, falls back to the environment, and null is normal", () => {
@@ -62,5 +64,64 @@ describe("the optimization decision", () => {
 			draftBytes: 1_000_000,
 			intendedUse: "a decoration",
 		}).should.be.rejectedWith(/not usable/)
+	})
+})
+
+describe("holding the optimizer to the weight band", () => {
+	const client = (sizes: number[]): TripoClient => {
+		const calls: Array<{ faceLimit: number; textureSize: number }> = []
+		const fake = {
+			calls,
+			convertModel: async (_id: string, options: { faceLimit: number; textureSize: number }) => {
+				calls.push(options)
+				const bytes = Buffer.alloc(sizes[Math.min(calls.length - 1, sizes.length - 1)])
+				return { ok: true as const, value: { bytes, taskId: `t${calls.length}` } }
+			},
+		}
+		return fake as unknown as TripoClient
+	}
+
+	const decision = { faceLimit: 8_000, textureSize: 1024 as const, reason: "test" }
+
+	it("keeps an in-band result without a second convert", async () => {
+		const fake = client([4 * 1024 * 1024])
+		const result = await convertWithinBudget(fake, "draft", decision, () => {})
+		result.ok.should.be.true()
+		if (!result.ok) return
+		;(result.value.corrected === undefined).should.be.true()
+		;(fake as unknown as { calls: unknown[] }).calls.should.have.length(1)
+	})
+
+	it("escalates textures first when the result comes in melted-small", async () => {
+		// The observed damage: 740KB with 1024px textures gave labels a look like
+		// plastic melted under heat. The corrective pass exists for exactly this.
+		const fake = client([740 * 1024, 4 * 1024 * 1024])
+		const result = await convertWithinBudget(fake, "draft", decision, () => {})
+		result.ok.should.be.true()
+		if (!result.ok) return
+		result.value.applied.textureSize.should.equal(2048)
+		result.value.applied.faceLimit.should.equal(16_000)
+		String(result.value.corrected).should.containEql("below")
+		result.value.bytes.length.should.be.aboveOrEqual(WEIGHT_BAND.minBytes)
+	})
+
+	it("corrects once, never loops — a second miss is the user's call", async () => {
+		const fake = client([500 * 1024, 900 * 1024])
+		const result = await convertWithinBudget(fake, "draft", decision, () => {})
+		result.ok.should.be.true()
+		;(fake as unknown as { calls: unknown[] }).calls.should.have.length(2)
+	})
+
+	it("accepts a light result when every knob is already at its top", async () => {
+		// A genuinely small object is a fact, not a defect.
+		const fake = client([600 * 1024])
+		const maxed = { faceLimit: OPTIMIZATION_BOUNDS.faceLimit.max, textureSize: 4096 as const, reason: "max" }
+		const result = await convertWithinBudget(fake, "draft", maxed, () => {})
+		result.ok.should.be.true()
+		;(fake as unknown as { calls: unknown[] }).calls.should.have.length(1)
+	})
+
+	it("admits 4096 textures now that labels are the binding constraint", () => {
+		OPTIMIZATION_BOUNDS.textureSizes.should.containEql(4096)
 	})
 })

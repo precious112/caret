@@ -15,6 +15,7 @@ import * as path from "path"
 import type { FoundationTokens } from "../src/core/design"
 import {
 	composeVariants,
+	convertWithinBudget,
 	decideOptimization,
 	derivePalette,
 	disposeBackends,
@@ -99,16 +100,15 @@ async function main(): Promise<void> {
 	})
 	console.log(`decision: ${decision.faceLimit} faces, ${decision.textureSize}px — ${decision.reason}`)
 
-	// 4. The optimized model.
+	// 4. The optimized model, held to the 3–5MB band.
 	console.log("tripo is applying it…")
-	const optimized = await tripo.convertModel(
-		draft.value.taskId,
-		{ faceLimit: decision.faceLimit, textureSize: decision.textureSize },
-		(update) => process.stdout.write(`\r  ${update.stage} ${update.percent ?? ""}%   `),
+	const optimized = await convertWithinBudget(tripo, draft.value.taskId, decision, (update) =>
+		process.stdout.write(`\r  ${update.stage} ${update.percent ?? ""}%   `),
 	)
 	if (!optimized.ok) throw new Error(`\nconvert: ${optimized.reason}`)
 	await fs.writeFile(path.join(OUT, "optimized.glb"), optimized.value.bytes)
 	console.log(`\noptimized: ${Math.round(optimized.value.bytes.length / 1024)}KB`)
+	if (optimized.value.corrected) console.log(`corrected: ${optimized.value.corrected}`)
 
 	await fs.writeFile(
 		path.join(OUT, "meta.json"),
@@ -117,7 +117,11 @@ async function main(): Promise<void> {
 				subject: variant.request.prompt.split(",")[0],
 				draftBytes: draft.value.bytes.length,
 				optimizedBytes: optimized.value.bytes.length,
-				decision,
+				decision: optimized.value.applied,
+				corrected: optimized.value.corrected ?? null,
+				// So the next tweak re-converts from this draft (~5 credits) instead
+				// of paying for a whole new image_to_model (~25).
+				draftTaskId: draft.value.taskId,
 				palette: derivePalette(tokens),
 			},
 			null,

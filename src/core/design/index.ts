@@ -90,6 +90,7 @@ export {
 	type ImageRequest,
 	type ImageResult,
 } from "./asset-library/raster/gemini"
+export { type BudgetedConversion, convertWithinBudget } from "./asset-library/tripo/budget"
 export {
 	NO_TRIPO_REASON,
 	resolveTripoConfig,
@@ -103,6 +104,7 @@ export {
 	OPTIMIZATION_BOUNDS,
 	type OptimizationDecision,
 	RECOMMENDED_OPTIMIZER_MATCHERS,
+	WEIGHT_BAND,
 } from "./asset-library/tripo/optimize"
 export {
 	ASSET_TYPES,

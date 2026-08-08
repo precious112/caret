@@ -19,6 +19,7 @@ import * as path from "path"
 import {
 	addGeneratedAsset,
 	assetsDirectory,
+	convertWithinBudget,
 	decideOptimization,
 	findAsset,
 	getBackend,
@@ -27,6 +28,7 @@ import {
 	readAssetIndex,
 	resolveTripoConfig,
 	TripoClient,
+	WEIGHT_BAND,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { getPrefs } from "./prefs"
@@ -57,6 +59,7 @@ interface PendingModel {
 	optimization: OptimizationDecision | null
 	optimizerModel: string
 	taskIds: { draft: string; converted?: string }
+	correction?: string
 	at: number
 }
 
@@ -132,6 +135,7 @@ export async function generateModel3d(
 	const prefs = getPrefs()
 	const optimizerModel = prefs.laneModels.model3d?.trim() || prefs.backendModel || ""
 	let decision: OptimizationDecision | null = null
+	let correctionNote = ""
 	let converted: { bytes: Buffer; taskId: string } | null = null
 	let skipNote = ""
 
@@ -157,17 +161,16 @@ export async function generateModel3d(
 					stage: "Tripo is applying the optimization",
 					detail: `${decision.faceLimit.toLocaleString()} faces, ${decision.textureSize}px textures`,
 				})
-				const result = await client.convertModel(
-					draft.value.taskId,
-					{ faceLimit: decision.faceLimit, textureSize: decision.textureSize },
-					(update) =>
-						onProgress({
-							stage: update.stage,
-							detail: update.percent !== undefined ? `${update.percent}%` : undefined,
-						}),
+				// Held to the 3–5MB band: a result below it gets one corrective pass
+				// with textures escalated first, because under-the-band is where the
+				// dirty-texture, melted-label damage was observed.
+				const result = await convertWithinBudget(client, draft.value.taskId, decision, (update) =>
+					onProgress({ stage: update.stage, detail: update.percent !== undefined ? `${update.percent}%` : undefined }),
 				)
 				if (result.ok) {
 					converted = result.value
+					decision = result.value.applied
+					if (result.value.corrected) correctionNote = result.value.corrected
 				} else {
 					skipNote = `The optimization pass failed (${result.reason}), so the draft was kept.`
 				}
@@ -191,6 +194,7 @@ export async function generateModel3d(
 		optimization: chosen ? decision : null,
 		optimizerModel: optimizerModel || "(session model)",
 		taskIds: { draft: draft.value.taskId, ...(chosen ? { converted: chosen.taskId } : {}) },
+		...(correctionNote ? { correction: correctionNote } : {}),
 		at: Date.now(),
 	})
 
@@ -232,6 +236,8 @@ export async function acceptModel3d(projectPath: string, tag: string): Promise<{
 				finalBytes: held.bytes.length,
 				optimization: held.optimization,
 				optimizerModel: held.optimizerModel,
+				weightBand: { minBytes: WEIGHT_BAND.minBytes, maxBytes: WEIGHT_BAND.maxBytes },
+				...(held.correction ? { correction: held.correction } : {}),
 			}),
 		},
 	})

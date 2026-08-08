@@ -22,15 +22,26 @@ import { type CodingBackend, StructuredOutputError } from "../../agent/backend"
 
 export interface OptimizationDecision {
 	faceLimit: number
-	textureSize: 512 | 1024 | 2048
+	textureSize: 512 | 1024 | 2048 | 4096
 	reason: string
 }
 
 /** The bounds the model answers inside. Published so the UI can show them. */
 export const OPTIMIZATION_BOUNDS = {
 	faceLimit: { min: 2_000, max: 60_000 },
-	textureSizes: [512, 1024, 2048] as const,
+	textureSizes: [512, 1024, 2048, 4096] as const,
 }
+
+/**
+ * The weight band an optimized page object should land in.
+ *
+ * 3–5MB, set by the user after looking at the first results: the 740KB version
+ * held its silhouette and lost its *surface* — textures re-baked down to 1024px
+ * gave labels a melted look. The binding constraint on quality turned out to be
+ * texture resolution, not face count, so the band exists to stop the optimizer
+ * winning the size game by losing the object.
+ */
+export const WEIGHT_BAND = { minBytes: 3 * 1024 * 1024, maxBytes: 5 * 1024 * 1024 }
 
 const DECISION_SCHEMA: Record<string, unknown> = {
 	type: "object",
@@ -82,9 +93,10 @@ export async function decideOptimization(input: OptimizationInput): Promise<Opti
 			`It will be used as: ${input.intendedUse}.`,
 			"",
 			"Decide the face limit and texture size for the optimized version. The budget argument:",
-			"- A page object should load fast on an ordinary connection. Aim well under 3MB for a centrepiece, under 1MB for a decoration.",
-			"- Silhouette survives decimation; fine surface detail does not. A decorative object viewed small needs far fewer faces than intuition says.",
-			"- Texture size dominates weight at the top end: 2048 is for a large hero object being looked at closely, 1024 is the ordinary answer, 512 is for something small.",
+			"- Aim for a final file between 3MB and 5MB. Below that band, real damage has been observed: textures re-baked too small give surfaces a dirty look and make printed labels unreadable, like plastic melted under heat.",
+			"- Texture resolution is usually the binding constraint on perceived quality, not face count. When trading, keep texture resolution and cut faces.",
+			"- 2048 is the ordinary texture answer; 4096 if the object carries text or fine surface detail; 1024 and below only for something small, matte and label-free.",
+			"- Silhouette survives decimation; printed detail does not.",
 			"",
 			"Explain the trade you chose in one or two sentences — it is recorded in the asset's provenance.",
 		].join("\n"),
