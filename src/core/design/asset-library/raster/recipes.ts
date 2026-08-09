@@ -24,6 +24,7 @@
  * legible in the provenance record rather than being woven into prose.
  */
 import type { AssetRecipe } from "../types"
+import { chooseKeyColor } from "./chroma-key"
 import { foundationWords, paletteWords } from "./palette-words"
 
 /** Where the headline goes, in words a model composes to. */
@@ -85,8 +86,58 @@ function objectOf(variant: number): string {
 	][variant % 6]
 }
 
+/**
+ * A photographic object with the background removed.
+ *
+ * The §4.7 transparency rule made concrete: the model never *matts* anything.
+ * The prompt asks for the object on a flat key colour Caret chose — green
+ * unless this project's own brand is green — and the runner keys that colour
+ * out deterministically before the variant is ever shown. What the user picks
+ * is the finished cutout on their own surface, not a promise of one.
+ *
+ * No contact shadow, unlike the object study: a shadow survives the key as a
+ * grey-green smear under the object, and a cutout carries its own shadow onto
+ * whatever page it lands on anyway.
+ */
+const PRODUCT_CUTOUT: AssetRecipe = {
+	id: "product-cutout",
+	name: "Product cutout",
+	use: "An object cut out clean — for a hero, a card, or anywhere it sits straight on the page.",
+	kind: "photo",
+	lane: "raster",
+	purposes: ["cutout"],
+	tags: ["product", "clean", "modern", "minimal", "consumer", "premium"],
+	aspects: ["1:1", "4:5", "3:2"],
+	avoid: [
+		"any cast shadow or reflection under or behind the object",
+		"any second object, prop or hand",
+		"the object cropped by the frame edge",
+		"the key colour appearing on the object itself",
+	],
+	pairsWith: { palettes: ["mono-accent", "warm-earth", "quiet-institutional", "deep-technical"] },
+	rationale:
+		"Keying only works because the background is ours: a flat colour named by hex, chosen to be nowhere near the project's palette, painted by the model because it was asked to and removed by arithmetic because it is known. A matting model would work on any photo and be wrong unpredictably; this works on exactly one kind of photo and fails loudly when the model ignores the instruction.",
+	realise: ({ palette, variant }) => {
+		const key = chooseKeyColor(palette)
+		return {
+			lane: "raster",
+			prompt: [
+				`A product photograph of ${objectOf(variant)}, alone, centered, the whole object visible in frame.`,
+				`The background is a perfectly flat, uniform ${key.word} (${key.hex}) filling every edge of the frame.`,
+				"Soft even studio light from all sides. No shadow, no reflection, no vignette — the object floats on the flat colour.",
+				paletteWords(palette),
+			].join(" "),
+			avoid: [],
+			aspect: "1:1",
+			transparent: true,
+			keyColor: key.hex,
+		}
+	},
+}
+
 export const RASTER_RECIPES: AssetRecipe[] = [
 	OBJECT_STUDY,
+	PRODUCT_CUTOUT,
 	{
 		id: "workbench",
 		name: "Made by hand",

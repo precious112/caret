@@ -149,6 +149,29 @@ export class TripoClient {
 		return this.awaitModel(taskId, "convert_model", onProgress)
 	}
 
+	/**
+	 * The wallet balance, in Tripo's own credits.
+	 *
+	 * Tripo's task responses carry no per-task price, so the only honest way to
+	 * answer "what did that run cost" is to read the wallet before and after and
+	 * record the difference as a measurement. Callers treat any failure here as
+	 * "cost unknown" — a provenance nicety must never fail a run that already
+	 * spent the money.
+	 */
+	async getBalance(): Promise<TripoResult<number>> {
+		const response = await this.call("/user/balance", { method: "GET" })
+		if (!response.ok) return response
+		const balance = (response.value as { balance?: unknown }).balance
+		if (typeof balance !== "number") {
+			return {
+				ok: false,
+				reason: `The balance endpoint returned no number: ${JSON.stringify(response.value)}`,
+				retryable: false,
+			}
+		}
+		return { ok: true, value: balance }
+	}
+
 	/** Polls a task to completion and downloads the model it produced. */
 	private async awaitModel(
 		taskId: string,

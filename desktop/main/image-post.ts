@@ -30,6 +30,7 @@
  */
 import { BrowserWindow, nativeImage } from "electron"
 
+import { keyOutBackground } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 
 export interface PostProcessed {
@@ -43,14 +44,52 @@ export interface PostProcessed {
 }
 
 /**
+ * Removes a chroma-key background from a generated photograph.
+ *
+ * The arithmetic lives in `src/core/design` where it is pure and unit-tested;
+ * this wrapper is only the Electron dance: decode to a bitmap, key in place,
+ * premultiply (what `createFromBitmap` expects), and hand back a PNG with real
+ * alpha. A refusal is the keyer's own sentence — it names measured numbers, and
+ * the caller shows it on the variant that earned it.
+ */
+export function keyOutPhotograph(input: Buffer, keyColor: string): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
+	const image = nativeImage.createFromBuffer(input)
+	const { width, height } = image.getSize()
+	if (!width || !height) return { ok: false, reason: "The generated image could not be decoded for keying." }
+
+	const bitmap = image.toBitmap()
+	const keyed = keyOutBackground({ data: bitmap, width, height, order: "bgra" }, keyColor)
+	if (!keyed.ok) return keyed
+
+	for (let i = 0; i < bitmap.length; i += 4) {
+		const alpha = bitmap[i + 3]
+		if (alpha === 255) continue
+		bitmap[i] = (bitmap[i] * alpha) / 255
+		bitmap[i + 1] = (bitmap[i + 1] * alpha) / 255
+		bitmap[i + 2] = (bitmap[i + 2] * alpha) / 255
+	}
+
+	return { ok: true, bytes: nativeImage.createFromBitmap(bitmap, { width, height }).toPNG() }
+}
+
+/**
  * Crops to the requested ratio, resizes to fit, and re-encodes as WebP.
  *
  * Centre crop rather than letterbox: the recipes compose for a slot, and a bar
  * of background down two sides is not the picture that was asked for. The crop
  * is always the smaller correction — at most a few percent, because the model
  * was asked for this ratio and came close.
+ *
+ * `preserveAlpha` is for keyed cutouts: WebP through the canvas carries alpha
+ * already, and the no-window fallback becomes PNG rather than JPEG — a JPEG
+ * cutout is a cutout flattened onto black, which is worse than a bigger file.
  */
-export async function postProcessPhotograph(input: Buffer, targetWidth: number, targetHeight: number): Promise<PostProcessed> {
+export async function postProcessPhotograph(
+	input: Buffer,
+	targetWidth: number,
+	targetHeight: number,
+	options?: { preserveAlpha?: boolean },
+): Promise<PostProcessed> {
 	const original = nativeImage.createFromBuffer(input)
 	const size = original.getSize()
 
@@ -97,6 +136,18 @@ export async function postProcessPhotograph(input: Buffer, targetWidth: number, 
 	// WebP encoding needs a window, and a headless or mid-shutdown app may have
 	// none. JPEG through Skia is the fallback: still far smaller than the PNG,
 	// still stripped of metadata, and it needs nothing but the image itself.
+	// Unless the alpha is the point — JPEG has none, so a cutout falls back to
+	// PNG instead.
+	if (options?.preserveAlpha) {
+		return {
+			bytes: resized.toPNG(),
+			mime: "image/png",
+			extension: ".png",
+			width: resizedSize.width,
+			height: resizedSize.height,
+			originalBytes: input.length,
+		}
+	}
 	return {
 		bytes: resized.toJPEG(88),
 		mime: "image/jpeg",

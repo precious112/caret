@@ -1,10 +1,10 @@
 import { describe, it } from "mocha"
 import "should"
 
+import { mockFetchForTesting } from "@/shared/net"
 import type { CodingBackend } from "../agent/backend"
 import { convertWithinBudget } from "../asset-library/tripo/budget"
-import type { TripoClient } from "../asset-library/tripo/client"
-import { NO_TRIPO_REASON, resolveTripoConfig } from "../asset-library/tripo/client"
+import { NO_TRIPO_REASON, resolveTripoConfig, TripoClient } from "../asset-library/tripo/client"
 import { decideOptimization, isRecommendedOptimizer, OPTIMIZATION_BOUNDS, WEIGHT_BAND } from "../asset-library/tripo/optimize"
 
 describe("the 3D lane's configuration", () => {
@@ -16,6 +16,32 @@ describe("the 3D lane's configuration", () => {
 
 	it("explains the absence without making the whole feature sound locked", () => {
 		NO_TRIPO_REASON.should.containEql("works without one")
+	})
+})
+
+describe("the Tripo wallet", () => {
+	const reply = (body: unknown, status = 200) =>
+		new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+
+	it("reads the balance, for measuring what a run cost", async () => {
+		const result = await mockFetchForTesting(
+			async (input) => {
+				String(input).should.containEql("/user/balance")
+				return reply({ code: 0, data: { balance: 135.5, frozen: 0 } })
+			},
+			async () => new TripoClient({ apiKey: "tsk" }).getBalance(),
+		)
+		result.ok.should.be.true()
+		;(result as { value: number }).value.should.equal(135.5)
+	})
+
+	it("treats a shapeless answer as cost-unknown, never as a number", async () => {
+		const result = await mockFetchForTesting(
+			async () => reply({ code: 0, data: { credits: "lots" } }),
+			async () => new TripoClient({ apiKey: "tsk" }).getBalance(),
+		)
+		result.ok.should.be.false()
+		;(result as { reason: string }).reason.should.containEql("no number")
 	})
 })
 

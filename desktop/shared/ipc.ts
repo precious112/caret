@@ -388,6 +388,36 @@ export interface AssetEntryWire {
 	addedAt: string
 	/** URL of the extracted poster frame, for kinds that cannot show themselves. */
 	posterUrl: string | null
+	/** The full provenance record, for assets a lane produced. */
+	generated?: GeneratedProvenanceWire
+}
+
+/**
+ * Everything `index.json` recorded about how a generated asset came to be.
+ *
+ * The library shows this behind the "generated" chip — provenance the plan
+ * calls "complete and honest" is not honest while the UI reduces it to one
+ * word and reading the record means opening a JSON file.
+ */
+export interface GeneratedProvenanceWire {
+	lane: string
+	/** Model id, generator id, or icon-set name. */
+	producer: string
+	recipeId?: string
+	answers?: Record<string, string>
+	/** The fully resolved request — a prompt as sent, or a parameter set. */
+	resolved?: string
+	postProcessed?: {
+		from: { bytes: number; mime: string }
+		to: { bytes: number; mime: string; width: number; height: number }
+	}
+	/** In the provider's own meter (tokens or credits), never a currency. */
+	cost?: {
+		unit: string
+		amount: number
+		round?: { calls: number; amount: number }
+		note?: string
+	}
 }
 
 export interface SecretStatusWire {

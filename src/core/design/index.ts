@@ -80,6 +80,15 @@ export {
 	SLOP_TELLS,
 	tagsFromFoundation,
 } from "./asset-library"
+export {
+	CHROMA_GREEN,
+	CHROMA_MAGENTA,
+	chooseKeyColor,
+	type KeyableImage,
+	type KeyColor,
+	type KeyOutResult,
+	keyOutBackground,
+} from "./asset-library/raster/chroma-key"
 export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./asset-library/raster/config"
 export {
 	composePrompt,

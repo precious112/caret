@@ -98,6 +98,30 @@ describe("the Gemini image adapter", () => {
 		success.resolved.should.containEql("Do not include:")
 	})
 
+	it("carries the provider's usage report for provenance, and tolerates its absence", async () => {
+		const metered = await mockFetchForTesting(
+			async () =>
+				reply({
+					...IMAGE_REPLY,
+					usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 1290, totalTokenCount: 1410 },
+				}),
+			async () => new GeminiImages({ backend: "api-key", apiKey: "k" }).generate(request),
+		)
+		metered.ok.should.be.true()
+		const usage = (metered as { usage?: { promptTokens: number; outputTokens: number; totalTokens: number } }).usage
+		usage!.totalTokens.should.equal(1410)
+		usage!.outputTokens.should.equal(1290)
+
+		// A provider that sends no meter yields no usage — never a zero that would
+		// be recorded in provenance as "this was free".
+		const unmetered = await mockFetchForTesting(
+			async () => reply(IMAGE_REPLY),
+			async () => new GeminiImages({ backend: "api-key", apiKey: "k" }).generate(request),
+		)
+		unmetered.ok.should.be.true()
+		Boolean((unmetered as { usage?: unknown }).usage).should.be.false()
+	})
+
 	it("carries the provider's own words through, rather than paraphrasing them", async () => {
 		const result = await mockFetchForTesting(
 			async () =>

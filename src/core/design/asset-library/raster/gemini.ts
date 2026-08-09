@@ -72,8 +72,15 @@ export interface ImageRequest {
 }
 
 export type ImageResult =
-	| { ok: true; mime: string; bytes: Buffer; model: string; resolved: string }
+	| { ok: true; mime: string; bytes: Buffer; model: string; resolved: string; usage?: ImageUsage }
 	| { ok: false; reason: string; retryable: boolean }
+
+/** What the provider metered for one call, as it reported it. For provenance. */
+export interface ImageUsage {
+	promptTokens: number
+	outputTokens: number
+	totalTokens: number
+}
 
 export class GeminiImages {
 	private readonly config: GeminiConfig
@@ -183,6 +190,7 @@ export class GeminiImages {
 			bytes: Buffer.from(image.inlineData.data, "base64"),
 			model,
 			resolved: prompt,
+			usage: usageOf(parsed),
 		}
 	}
 
@@ -231,6 +239,18 @@ interface GenerateContentResponse {
 	candidates?: Array<{
 		content?: { parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> }
 	}>
+	usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+}
+
+/** The provider's usage report, or undefined when it sent none. */
+function usageOf(parsed: GenerateContentResponse): ImageUsage | undefined {
+	const meta = parsed.usageMetadata
+	if (!meta || typeof meta.totalTokenCount !== "number") return undefined
+	return {
+		promptTokens: meta.promptTokenCount ?? 0,
+		outputTokens: meta.candidatesTokenCount ?? 0,
+		totalTokens: meta.totalTokenCount,
+	}
 }
 
 /**

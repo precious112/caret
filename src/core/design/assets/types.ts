@@ -42,6 +42,26 @@ export type AssetOrigin =
 				from: { bytes: number; mime: string }
 				to: { bytes: number; mime: string; width: number; height: number }
 			}
+			/**
+			 * What producing this file cost, in the provider's own meter.
+			 *
+			 * Tokens or credits, never a currency — prices drift and Caret would be
+			 * recording a guess; the meter the provider reported is a fact. Absent on
+			 * the free lanes, where "producer is code" already says everything, and
+			 * absent when the provider offered no way to know.
+			 */
+			cost?: {
+				unit: "tokens" | "credits"
+				/** Metered for the call that produced this file. */
+				amount: number
+				/**
+				 * The whole generate-and-pick round that offered it, when known. The
+				 * discarded variants were part of the price of this one.
+				 */
+				round?: { calls: number; amount: number }
+				/** How the number was obtained, when it is a measurement, not a report. */
+				note?: string
+			}
 	  }
 
 export interface AssetEntry {

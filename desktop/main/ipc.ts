@@ -146,6 +146,21 @@ export function registerIpcHandlers(windows: WindowManager): void {
 			// Served from inside the assets directory, so the same path-confined
 			// middleware that serves assets serves posters with no second route.
 			posterUrl: asset.poster ? `/caret-assets/.posters/${encodeURIComponent(asset.poster)}` : null,
+			// The whole record, not a summary — the library's provenance panel
+			// shows exactly what index.json knows, so the two cannot disagree.
+			...(asset.origin.type === "generated"
+				? {
+						generated: {
+							lane: asset.origin.lane,
+							producer: asset.origin.producer,
+							...(asset.origin.recipeId ? { recipeId: asset.origin.recipeId } : {}),
+							...(asset.origin.answers ? { answers: asset.origin.answers } : {}),
+							...(asset.origin.resolved ? { resolved: asset.origin.resolved } : {}),
+							...(asset.origin.postProcessed ? { postProcessed: asset.origin.postProcessed } : {}),
+							...(asset.origin.cost ? { cost: asset.origin.cost } : {}),
+						},
+					}
+				: {}),
 		}))
 	})
 

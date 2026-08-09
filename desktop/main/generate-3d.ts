@@ -60,6 +60,8 @@ interface PendingModel {
 	optimizerModel: string
 	taskIds: { draft: string; converted?: string }
 	correction?: string
+	/** Credits the run cost, measured as the wallet delta. Absent when unknown. */
+	credits?: number
 	at: number
 }
 
@@ -117,6 +119,12 @@ export async function generateModel3d(
 		Logger.warn(`[3d] source verification skipped: ${verdict.why}`)
 		onProgress({ stage: "Source check skipped", detail: verdict.why })
 	}
+
+	// Read before the first paid call, so the delta at the end measures this run.
+	// A failure here is "cost unknown", never a failed run: the measurement is a
+	// provenance nicety, and the credits are about to be spent either way.
+	const balanceBefore = await client.getBalance()
+	if (!balanceBefore.ok) Logger.warn(`[3d] could not read the Tripo balance before the run: ${balanceBefore.reason}`)
 
 	onProgress({ stage: "Uploading the source image to Tripo" })
 	const uploaded = await client.uploadImage(bytes, source.mime)
@@ -187,6 +195,17 @@ export async function generateModel3d(
 		skipNote = `The optimized version came back larger (${Math.round(converted.bytes.length / 1024)}KB), so the draft was kept.`
 	}
 
+	// After the last paid call. Both reads succeeding and the wallet having
+	// moved is the only state in which the number means anything.
+	let credits: number | undefined
+	if (balanceBefore.ok) {
+		const balanceAfter = await client.getBalance()
+		if (balanceAfter.ok && balanceBefore.value - balanceAfter.value > 0) {
+			credits = balanceBefore.value - balanceAfter.value
+			Logger.info(`[3d] the run cost ${credits} credits (wallet ${balanceBefore.value} → ${balanceAfter.value})`)
+		}
+	}
+
 	pending.set(projectPath, {
 		bytes: chosen?.bytes ?? draft.value.bytes,
 		sourceTag,
@@ -195,6 +214,7 @@ export async function generateModel3d(
 		optimizerModel: optimizerModel || "(session model)",
 		taskIds: { draft: draft.value.taskId, ...(chosen ? { converted: chosen.taskId } : {}) },
 		...(correctionNote ? { correction: correctionNote } : {}),
+		...(credits !== undefined ? { credits } : {}),
 		at: Date.now(),
 	})
 
@@ -230,6 +250,15 @@ export async function acceptModel3d(projectPath: string, tag: string): Promise<{
 			lane: "model3d",
 			producer: "tripo",
 			answers: { source: held.sourceTag },
+			...(held.credits !== undefined
+				? {
+						cost: {
+							unit: "credits" as const,
+							amount: held.credits,
+							note: "measured as the Tripo wallet balance change across the run",
+						},
+					}
+				: {}),
 			resolved: JSON.stringify({
 				taskIds: held.taskIds,
 				draftBytes: held.draftBytes,

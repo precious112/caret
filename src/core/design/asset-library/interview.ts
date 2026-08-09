@@ -79,6 +79,13 @@ export const GENERATION_QUESTIONS: GenerationQuestion[] = [
 				tags: [],
 			},
 			{
+				id: "cutout",
+				label: "An object with no background",
+				hint: "A product-style shot cut out clean, ready to sit on any surface.",
+				purposes: ["cutout"],
+				tags: [],
+			},
+			{
 				id: "object3d",
 				label: "A 3D object",
 				hint: "Built from an image in your library, then optimized so it doesn't weigh the page down.",
@@ -175,6 +182,7 @@ export function defaultAspect(recipe: AssetRecipe, answers: GenerationAnswers): 
 		overlay: ["16:9", "3:2", "1:1"],
 		accent: ["1:1", "4:5", "3:2"],
 		divider: ["21:9", "16:9"],
+		cutout: ["1:1", "4:5", "3:2"],
 	}
 	const wanted = preferred[answers.purpose ?? ""] ?? []
 	return wanted.find((aspect) => recipe.aspects.includes(aspect)) ?? recipe.aspects[0]
@@ -185,6 +193,7 @@ export function proposeTag(recipe: AssetRecipe, answers: GenerationAnswers): str
 	const purpose = answers.purpose
 	// Led by the purpose rather than the recipe, because that is how the user
 	// will look for it later: "the hero background", not "the quiet colour wash".
+	// Cutout takes no prefix: its recipes already carry the word in their ids.
 	const prefix = purpose === "background" ? "hero" : purpose === "divider" ? "divider" : purpose === "overlay" ? "grain" : ""
 	return [prefix, recipe.id].filter(Boolean).join("-").slice(0, 40).replace(/-+$/, "")
 }

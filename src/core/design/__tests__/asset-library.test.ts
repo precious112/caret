@@ -103,6 +103,43 @@ describe("asset recipe library", () => {
 	})
 })
 
+describe("the product cutout recipe", () => {
+	it("asks for the key Caret chose, and carries it for the runner to remove", () => {
+		const recipe = findAssetRecipe("product-cutout")!
+		const [variant] = composeVariants({ recipe, tokens: tokens(), aspect: "1:1", count: 1 })
+		variant.request.lane.should.equal("raster")
+		if (variant.request.lane !== "raster") return
+
+		// A blue-branded project keys on green, and the prompt names the exact hex
+		// the runner will key out — the model paints it because it was asked to,
+		// and it is removed because it is known.
+		variant.request.keyColor!.should.equal("#00b140")
+		variant.request.prompt.should.containEql("#00b140")
+		variant.request.prompt.should.containEql("chroma green")
+		variant.request.transparent.should.be.true()
+		// The slop tells still compose in — a keyed recipe is not exempt.
+		variant.request.avoid.join(" ").should.containEql("cast shadow")
+	})
+
+	it("keys magenta when the project's own brand is green", () => {
+		const recipe = findAssetRecipe("product-cutout")!
+		const green = tokens({ brand: { seed: "#16a34a", scale: {} } })
+		const [variant] = composeVariants({ recipe, tokens: green, aspect: "1:1", count: 1 })
+		if (variant.request.lane !== "raster") return
+		variant.request.keyColor!.should.equal("#e800e8")
+		variant.request.prompt.should.containEql("chroma magenta")
+	})
+
+	it("is what the cutout purpose narrows to", () => {
+		const cutouts = narrowForAnswers({ purpose: "cutout", volume: "balanced" }, tokens(), new Set(["generator", "raster"]))
+		cutouts.map((recipe) => recipe.id).should.deepEqual(["product-cutout"])
+		// And no free-lane answer offers it by accident — it costs money.
+		narrowForAnswers({ purpose: "background", volume: "recede" }, tokens(), new Set(["generator", "raster"]))
+			.map((recipe) => recipe.id)
+			.should.not.containEql("product-cutout")
+	})
+})
+
 describe("the generation interview", () => {
 	it("asks about the job, never about the look", () => {
 		// The load-bearing property of the whole surface. A question offering a

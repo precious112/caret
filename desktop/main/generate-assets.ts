@@ -33,7 +33,7 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
-import { postProcessPhotograph } from "./image-post"
+import { keyOutPhotograph, postProcessPhotograph } from "./image-post"
 import { getSecret } from "./secrets"
 
 /**
@@ -110,7 +110,7 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 			lane: recipe.lane,
 			specimen: dataUrl(specimen?.svg ?? ""),
 			surface: palette.surface,
-			transparent: generator?.transparent ?? false,
+			transparent: generator?.transparent ?? (specimen?.request.lane === "raster" && specimen.request.transparent),
 			...(recipe.lane === "raster" && !raster ? { unavailable: NO_RASTER_REASON } : {}),
 		}
 	})
@@ -127,7 +127,20 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
  * to live. In memory rather than on disk: an option nobody picked is not a
  * decision, and writing it into `.caret/` would make it look like one.
  */
-const pendingRaster = new Map<string, { bytes: Buffer; mime: string; resolved: string; model: string; at: number }>()
+const pendingRaster = new Map<
+	string,
+	{
+		bytes: Buffer
+		mime: string
+		resolved: string
+		model: string
+		/** The provider's usage report for this call, when it sent one. */
+		usage?: { promptTokens: number; outputTokens: number; totalTokens: number }
+		/** The whole round this call was part of: every call that returned an image. */
+		round?: { calls: number; amount: number }
+		at: number
+	}
+>()
 
 /** Ten minutes. Long enough to think, short enough not to be a memory leak. */
 const PENDING_TTL_MS = 10 * 60 * 1000
@@ -203,17 +216,18 @@ async function generateRasterVariants(
 	const client = new GeminiImages(config)
 	const composed = composeVariants({ recipe, tokens, aspect, answers, count: RASTER_VARIANT_COUNT })
 
-	return inPool(composed, RASTER_CONCURRENCY, async (variant): Promise<GeneratedVariantWire> => {
-		if (variant.request.lane !== "raster") {
+	// Only what THIS round stored. The map can still hold a previous round's
+	// entry under the same key (same recipe, same aspect, a variant that failed
+	// this time), and counting it would misstate what this round cost.
+	const storedKeys: string[] = []
+
+	const results = await inPool(composed, RASTER_CONCURRENCY, async (variant): Promise<GeneratedVariantWire> => {
+		const request = variant.request
+		if (request.lane !== "raster") {
 			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: "not a raster recipe" }
 		}
 
-		const ask = () =>
-			client.generate({
-				prompt: variant.request.lane === "raster" ? variant.request.prompt : "",
-				avoid: variant.request.lane === "raster" ? variant.request.avoid : [],
-				aspect: variant.request.lane === "raster" ? variant.request.aspect : aspect,
-			})
+		const ask = () => client.generate({ prompt: request.prompt, avoid: request.avoid, aspect: request.aspect })
 
 		let result = await ask()
 		if (!result.ok && result.retryable) {
@@ -230,22 +244,55 @@ async function generateRasterVariants(
 			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: result.reason }
 		}
 
-		pendingRaster.set(pendingKey(projectPath, recipeId, aspect, variant.variant), {
-			bytes: result.bytes,
-			mime: result.mime,
+		// Keyed recipes are keyed *before* the variant is shown, so the picture
+		// the user points at is the finished cutout, not a promise of one. A key
+		// that fails is this variant's own error card — the other three are keyed
+		// on their own merits.
+		let bytes = result.bytes
+		let mime = result.mime
+		if (request.keyColor) {
+			const keyed = keyOutPhotograph(result.bytes, request.keyColor)
+			if (!keyed.ok) {
+				Logger.warn(`[generate] raster variant ${variant.variant} failed keying: ${keyed.reason}`)
+				return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: keyed.reason }
+			}
+			bytes = keyed.bytes
+			mime = "image/png"
+		}
+
+		const key = pendingKey(projectPath, recipeId, aspect, variant.variant)
+		storedKeys.push(key)
+		pendingRaster.set(key, {
+			bytes,
+			mime,
 			resolved: result.resolved,
 			model: result.model,
+			...(result.usage ? { usage: result.usage } : {}),
 			at: Date.now(),
 		})
 
 		return {
 			variant: variant.variant,
-			preview: `data:${result.mime};base64,${result.bytes.toString("base64")}`,
+			preview: `data:${mime};base64,${bytes.toString("base64")}`,
 			width: variant.width,
 			height: variant.height,
 			surface,
 		}
 	})
+
+	// The round's total, stamped onto every survivor. The variants nobody picks
+	// were part of the price of the one somebody does, and only this function
+	// ever knows how many calls the round actually made.
+	const held = storedKeys
+		.map((key) => pendingRaster.get(key))
+		.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+	const metered = held.filter((entry) => entry.usage)
+	if (metered.length > 0) {
+		const round = { calls: held.length, amount: metered.reduce((sum, entry) => sum + (entry.usage?.totalTokens ?? 0), 0) }
+		for (const entry of held) entry.round = round
+	}
+
+	return results
 }
 
 /**
@@ -353,8 +400,10 @@ async function acceptRasterVariant(
 	const [composed] = composeVariants({ recipe, tokens, aspect, answers, count: variant + 1 }).slice(variant)
 
 	// Only now, on the one the user actually chose. Post-processing every variant
-	// would spend the work on three pictures nobody keeps.
-	const processed = await postProcessPhotograph(held.bytes, composed.width, composed.height)
+	// would spend the work on three pictures nobody keeps. (Keying already
+	// happened before the pick — the alpha in the held bytes is the point.)
+	const keyed = composed.request.lane === "raster" && Boolean(composed.request.keyColor)
+	const processed = await postProcessPhotograph(held.bytes, composed.width, composed.height, { preserveAlpha: keyed })
 	Logger.info(
 		`[generate] ${recipe.id} → ${processed.width}x${processed.height} ${processed.mime}, ` +
 			`${Math.round(processed.originalBytes / 1024)}KB → ${Math.round(processed.bytes.length / 1024)}KB`,
@@ -376,6 +425,16 @@ async function acceptRasterVariant(
 			// The prompt as sent, negatives included. For a paid lane this is the
 			// only record of what the money bought.
 			resolved: held.resolved,
+			...(held.usage
+				? {
+						cost: {
+							unit: "tokens" as const,
+							amount: held.usage.totalTokens,
+							...(held.round ? { round: held.round } : {}),
+							note: "as metered by the provider's own usage report",
+						},
+					}
+				: {}),
 			postProcessed: {
 				from: { bytes: processed.originalBytes, mime: held.mime },
 				to: { bytes: processed.bytes.length, mime: processed.mime, width: processed.width, height: processed.height },

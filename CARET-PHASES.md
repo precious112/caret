@@ -702,10 +702,17 @@ precisely what makes generated imagery legible as generated.
       spent, naming what it saw. Per-task model override with a recommended set (Fable 5,
       GPT 5.6 Sol, Kimi K3, GLM 5.2, DeepSeek V4 Flash) matched against the backend's own
       model list. BYO Tripo key, same keychain rules as the Gemini key.
-- [ ] **Transparency comes from the model, not a matting step.** Gemini returns transparent PNG
+- [x] **Transparency comes from the model, not a matting step.** Gemini returns transparent PNG
       for icon-style prompts; code generators and authored SVG have no background to remove.
-      Where a genuine photographic cutout is needed, chroma-key against a flat background Caret
-      chose at generation time — deterministic, no model, no licence.
+      For a genuine photographic cutout: the `product-cutout` recipe asks for the object on a
+      flat key colour Caret chose from the foundation (green unless the brand itself is green),
+      and the runner keys it out deterministically **before the variant is shown** — the user
+      picks the finished cutout, not a promise of one. The keyer measures the actual background
+      from the border rather than trusting the requested hex, unmixes edge contamination, and
+      **refuses with measured numbers** (background not flat, subject went with it, nothing
+      removed) instead of keeping a bad cutout. Alpha survives post-process: WebP carries it,
+      and the no-window fallback becomes PNG rather than JPEG. Pure and unit-tested in
+      `chroma-key.ts`; the offering and a live keyed run are `verify:app` scenarios bh/bm.
 - [x] **BYO API key, OS keychain, never in `.caret/`.** This is the monetization boundary
       already written down (§11): the local editor is free forever; hosted inference is the
       paid side. Three of the four lanes need no key at all, so the phase is usable before any
@@ -714,10 +721,14 @@ precisely what makes generated imagery legible as generated.
 - [x] Post-process: centre-crop to the composed-for ratio, re-encode WebP, strip EXIF via
       decode/re-encode, write through the 6.6 pipeline so a generated asset is an asset like
       any other. AVIF deferred (Chromium decodes but cannot encode it) — in BACKLOG.md.
-- [~] Provenance is complete and honest: model, recipe id, the answers given, the resolved
-      request and the post-processing recorded in `index.json`; SynthID left intact (it lives
-      in the pixels, which the re-encode preserves). Open: cost per asset, and a richer
-      provenance view in the library UI than the "generated" chip.
+- [x] Provenance is complete and honest: model, recipe id, the answers given, the resolved
+      request, the post-processing **and the cost** recorded in `index.json`; SynthID left
+      intact (it lives in the pixels, which the re-encode preserves). Cost is the provider's
+      own meter, never a currency (prices drift; the meter is a fact): Gemini's usage report
+      per call plus the whole generate-and-pick round, Tripo as the wallet-balance delta
+      measured across the run, and the free lanes say "computed locally" rather than showing
+      an empty row. The library's "generated" chip opens the full record — lane, producer,
+      recipe, answers, cost, post-processing, and the resolved request verbatim.
 
 **Deliverable:** a developer who cannot take a photograph or draw an icon still ships a landing
 page whose imagery matches its own foundations — without ever writing a prompt, and without

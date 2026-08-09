@@ -28,7 +28,7 @@ export type RecipeKind = "photo" | "texture" | "pattern" | "gradient" | "mark"
  * answer. It also **filters** rather than ranks — a section divider offered as
  * a hero background is not a worse match, it is the wrong object.
  */
-export type AssetPurpose = "background" | "overlay" | "accent" | "divider" | "mark" | "object3d"
+export type AssetPurpose = "background" | "overlay" | "accent" | "divider" | "mark" | "object3d" | "cutout"
 
 /**
  * How a recipe is realised. Only `raster` costs money, and only `raster`
@@ -107,6 +107,13 @@ export type RecipeRequest =
 			avoid: string[]
 			aspect: string
 			transparent: boolean
+			/**
+			 * When set, the background is Caret's own chroma key — painted by the
+			 * model because the prompt asked for exactly this hex, and removed
+			 * deterministically before anyone sees a variant. §4.7's transparency
+			 * rule: the cutout comes from a background we chose, not a matting model.
+			 */
+			keyColor?: string
 	  }
 	| { lane: "iconset"; setId: string; weight?: string }
 	| { lane: "authored"; brief: string; avoid: string[] }
