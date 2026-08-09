@@ -26,6 +26,18 @@ import { NO_MODEL_REASON, resolveVerifyModel, solidPng } from "./verify-support"
 const KEEP = process.argv.includes("--keep")
 
 /**
+ * `--paid` (or CARET_VERIFY_PAID=1) runs the scenarios that spend real money —
+ * the Gemini photograph and cutout, the Tripo 3D build, the Claude mark loop.
+ *
+ * Off by default, deliberately: those lanes were certified live when they
+ * landed, and re-buying that certainty on every routine run after an unrelated
+ * phase is money spent to learn nothing. Off is not the same as passed — the
+ * report says exactly what was excluded, and a full certification of the paid
+ * surface is one flag away. Turn it on when a paid lane's own code changed.
+ */
+const PAID = process.argv.includes("--paid") || process.env.CARET_VERIFY_PAID === "1"
+
+/**
  * `--only ee,gg` runs just those scenarios, by the letter before the dot.
  *
  * Not a way to certify anything — a partial run is reported as such and can
@@ -51,6 +63,8 @@ interface ScenarioResult {
 	passed: boolean
 	/** Neither passed nor failed: there was no model this suite may spend. */
 	skipped?: boolean
+	/** Skipped because paid lanes are off by default, not for missing credentials. */
+	paidOff?: boolean
 	detail: string
 }
 
@@ -74,6 +88,25 @@ function log(message: string): void {
 function skip(name: string, reason: string): void {
 	results.push({ name, passed: true, skipped: true, detail: `SKIPPED — ${reason}` })
 	log(`SKIP ${name} — ${reason}`)
+}
+
+/**
+ * Records a paid scenario as deliberately not run.
+ *
+ * Distinct from `skip` because the two absences mean different things: a
+ * credential skip says "this machine cannot", this says "this run chose not to
+ * spend". The lane was certified live when it landed; `--paid` re-certifies it.
+ */
+function skipPaid(name: string): void {
+	if (ONLY && !ONLY.has(name.split(".")[0])) return
+	results.push({
+		name,
+		passed: true,
+		skipped: true,
+		paidOff: true,
+		detail: "PAID LANE, off by default — certified live when it landed; pass --paid to re-certify",
+	})
+	log(`SKIP ${name} — paid lane, off by default (--paid to run)`)
 }
 
 /**
@@ -1221,11 +1254,19 @@ async function main(): Promise<void> {
 		await name.getByTestId("generate-tag").fill("hero-wash")
 		await name.getByTestId("generate-save").click()
 
+		// Waits for the *completed* entry, not the first sight of the tag:
+		// addGeneratedAsset writes twice (the reindex lands the entry, a second
+		// locked write adds description and origin), and polling between the two
+		// reads a half-written record that the very next write completes.
 		const raw = await waitFor(
-			"the generated asset to reach the index",
+			"the generated asset to reach the index with its provenance",
 			async () => {
 				const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
-				return text.includes('"hero-wash"') ? text : null
+				if (!text.includes('"hero-wash"')) return null
+				const found = (JSON.parse(text) as { assets: Array<Record<string, any>> }).assets.find(
+					(asset) => asset.tag === "hero-wash",
+				)
+				return found?.description && found?.origin?.type === "generated" ? text : null
 			},
 			30_000,
 		)
@@ -1406,7 +1447,9 @@ async function main(): Promise<void> {
 	// The paid lane, driven for real. Skipped rather than faked without
 	// credentials: a mocked pass here would certify the plumbing and say nothing
 	// about the thing that actually costs money and can actually refuse.
-	if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
+	if (!PAID) {
+		skipPaid("bi. a photograph is generated, picked and indexed")
+	} else if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
 		skip("bi. a photograph is generated, picked and indexed", "no Gemini or Vertex credentials in this environment")
 	} else {
 		await scenario("bi. a photograph is generated, picked and indexed", async () => {
@@ -1455,11 +1498,16 @@ async function main(): Promise<void> {
 			await name.getByTestId("generate-tag").fill("hero-bench")
 			await name.getByTestId("generate-save").click()
 
+			// Completed entry, not first sight — see bg for why.
 			const raw = await waitFor(
-				"the photograph to reach the index",
+				"the photograph to reach the index with its provenance",
 				async () => {
 					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
-					return text.includes('"hero-bench"') ? text : null
+					if (!text.includes('"hero-bench"')) return null
+					const found = (JSON.parse(text) as { assets: Array<Record<string, any>> }).assets.find(
+						(asset) => asset.tag === "hero-bench",
+					)
+					return found?.description && found?.origin?.type === "generated" ? text : null
 				},
 				30_000,
 			)
@@ -1516,7 +1564,9 @@ async function main(): Promise<void> {
 	// The keyed cutout, driven for real. Same gating as bi and for the same
 	// reason: a mocked pass would certify the plumbing and say nothing about
 	// whether a model actually paints the key flat enough to remove.
-	if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
+	if (!PAID) {
+		skipPaid("bm. a cutout is generated on a key Caret chose, and lands with alpha")
+	} else if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
 		skip(
 			"bm. a cutout is generated on a key Caret chose, and lands with alpha",
 			"no Gemini or Vertex credentials in this environment",
@@ -1571,11 +1621,16 @@ async function main(): Promise<void> {
 			await name.getByTestId("generate-tag").fill("cutout-object")
 			await name.getByTestId("generate-save").click()
 
+			// Completed entry, not first sight — see bg for why.
 			const raw = await waitFor(
-				"the cutout to reach the index",
+				"the cutout to reach the index with its provenance",
 				async () => {
 					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
-					return text.includes('"cutout-object"') ? text : null
+					if (!text.includes('"cutout-object"')) return null
+					const found = (JSON.parse(text) as { assets: Array<Record<string, any>> }).assets.find(
+						(asset) => asset.tag === "cutout-object",
+					)
+					return found?.description && found?.origin?.type === "generated" ? text : null
 				},
 				30_000,
 			)
@@ -2319,17 +2374,24 @@ async function main(): Promise<void> {
 	// actually being present and skipped honestly otherwise — a run with skips
 	// never reports CERTIFIED.
 
-	const claudeReady = await new Promise<boolean>((resolve) => {
-		child_process.execFile("claude", ["auth", "status"], { timeout: 10_000 }, (err, stdout) => {
-			try {
-				resolve(!err && Boolean((JSON.parse(stdout) as { loggedIn?: boolean }).loggedIn))
-			} catch {
-				resolve(false)
-			}
-		})
-	})
+	// Probed only when paid lanes may run — `claude auth status` costs no
+	// inference, but a subprocess with a ten-second timeout is still a wait for
+	// an answer nothing below would use.
+	const claudeReady =
+		PAID &&
+		(await new Promise<boolean>((resolve) => {
+			child_process.execFile("claude", ["auth", "status"], { timeout: 10_000 }, (err, stdout) => {
+				try {
+					resolve(!err && Boolean((JSON.parse(stdout) as { loggedIn?: boolean }).loggedIn))
+				} catch {
+					resolve(false)
+				}
+			})
+		}))
 
-	if (!claudeReady) {
+	if (!PAID) {
+		skipPaid("bk. a mark is drawn, watched converging, and indexed")
+	} else if (!claudeReady) {
 		skip("bk. a mark is drawn, watched converging, and indexed", "the Claude CLI is not signed in on this machine")
 	} else {
 		await scenario("bk. a mark is drawn, watched converging, and indexed", async () => {
@@ -2375,11 +2437,16 @@ async function main(): Promise<void> {
 			await flow.getByTestId("mark-tag").fill("compass-mark")
 			await flow.getByTestId("mark-save").click()
 
+			// Completed entry, not first sight — see bg for why.
 			const raw = await waitFor(
-				"the mark to reach the index",
+				"the mark to reach the index with its provenance",
 				async () => {
 					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
-					return text.includes('"compass-mark"') ? text : null
+					if (!text.includes('"compass-mark"')) return null
+					const found = (JSON.parse(text) as { assets: Array<Record<string, any>> }).assets.find(
+						(asset) => asset.tag === "compass-mark",
+					)
+					return found?.description && found?.origin?.type === "generated" ? text : null
 				},
 				30_000,
 			)
@@ -2399,7 +2466,9 @@ async function main(): Promise<void> {
 	const vertexReady = Boolean(
 		process.env.CARET_VERTEX_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || process.env.GEMINI_API_KEY,
 	)
-	if (!tripoReady || !vertexReady || !claudeReady) {
+	if (!PAID) {
+		skipPaid("bl. an image becomes an optimized 3D model")
+	} else if (!tripoReady || !vertexReady || !claudeReady) {
 		const missing = [
 			!tripoReady && "TRIPO_API_KEY",
 			!vertexReady && "image credentials for the source",
@@ -2460,11 +2529,16 @@ async function main(): Promise<void> {
 			await flow.getByTestId("model3d-tag").fill("bench-object")
 			await flow.getByTestId("model3d-save").click()
 
+			// Completed entry, not first sight — see bg for why.
 			const raw = await waitFor(
-				"the model to reach the index",
+				"the model to reach the index with its provenance",
 				async () => {
 					const text = await fs.readFile(path.join(fixture, ".caret", "assets", "index.json"), "utf-8").catch(() => "")
-					return text.includes('"bench-object"') ? text : null
+					if (!text.includes('"bench-object"')) return null
+					const found = (JSON.parse(text) as { assets: Array<Record<string, any>> }).assets.find(
+						(asset) => asset.tag === "bench-object",
+					)
+					return found?.description && found?.origin?.type === "generated" ? text : null
 				},
 				30_000,
 			)
@@ -2551,17 +2625,26 @@ main()
 		}
 		const failed = results.filter((r) => !r.passed)
 		const skipped = results.filter((r) => r.skipped)
+		// Two different absences. A credential skip is a machine that *cannot*,
+		// and blocks certification; a paid-off skip is a run that *chose not to
+		// spend* on lanes certified live when they landed — the free surface can
+		// still certify, with the exclusion named so nobody reads it as coverage.
+		const unable = skipped.filter((r) => !r.paidOff)
+		const paidOff = skipped.filter((r) => r.paidOff)
 		console.log("=============================================")
 		console.log(
 			failed.length > 0
 				? `${failed.length} scenario(s) FAILED`
-				: skipped.length > 0
+				: unable.length > 0
 					? // Never "all pass" with something unrun — that reads as full
 						// coverage to anyone skimming a CI log.
 						`${results.length - skipped.length} passed, ${skipped.length} SKIPPED (not certified)`
 					: ONLY
 						? `${results.length} passed — PARTIAL RUN (--only), not a certification`
-						: `CERTIFIED: all ${results.length} scenarios pass`,
+						: paidOff.length > 0
+							? `CERTIFIED (free surface): ${results.length - paidOff.length} scenarios pass — ` +
+								`${paidOff.length} paid lane(s) off by default, run with --paid to certify them`
+							: `CERTIFIED: all ${results.length} scenarios pass`,
 		)
 		process.exit(failed.length === 0 ? 0 : 1)
 	})

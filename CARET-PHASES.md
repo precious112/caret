@@ -347,6 +347,11 @@ driving the app if a user could reach the same state by clicking — a harness t
 counterpart (an MCP call, a queued task) certifies the half it wrote, nothing more.
 `--only <letters>` runs a subset while iterating; it reports **PARTIAL RUN** and can never say
 CERTIFIED, because a suite that costs fifteen minutes to re-run is a suite that stays broken.
+The scenarios that spend real money (the Gemini photograph and cutout, the Tripo 3D build, the
+Claude mark loop) are **off by default** — certified live when they landed, and re-buying that
+certainty on every routine run teaches nothing. `--paid` (or `CARET_VERIFY_PAID=1`) runs them;
+without it a clean run reports **CERTIFIED (free surface)** with the exclusions named, never
+plain CERTIFIED.
 
 **Deliverable:** Caret runs standalone; an external agent pointed at the MCP server reads and
 writes the design layer safely, always with the project's foundations in context.
