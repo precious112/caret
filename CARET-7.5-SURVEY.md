@@ -68,10 +68,40 @@ Categories: MI = micro-interactions/transitions · LD = loaders · FX = effects 
 4. **Bot-protection risk:** cult/ui's registry sat behind a Vercel security checkpoint during the survey; every allowlisted registry gets a smoke test from Caret's own install path before it ships.
 5. Dependency profile across the copy-in ecosystem is overwhelmingly **`motion` (framer-motion)** plus lucide/tabler icons; three.js/gsap/ogl appear only in specific effect components.
 
-## Next (before the user's curation pass)
+## Install runs — verified by RUNNING, from this machine (2026-08-10)
 
-1. Run each candidate's install headlessly into a scratch project from this machine — the
-   ingestibility axis is verified by running, not by this table.
-2. Render one specimen per candidate and screenshot it — taste is judged on pixels.
-3. Assemble the final review table (this table + install-run verdicts + specimens) and put it
-   in front of the user. **Nothing enters the catalog without their pick.**
+Scratch host: Vite + React 19 + Tailwind v4 + `components.json` (the shape Caret's design
+layer already is). Every command below actually ran; every "rendered" claim has a screenshot
+in `release/75-specimens/`.
+
+| Library | Install run | Rendered specimen | Notes from running it |
+|---|---|---|---|
+| shadcn/ui | **OK** (`button`, `spinner`) | `shadcn-button-spinner.png` | The baseline; everything else rides its CLI |
+| Aceternity UI | **OK** (`bento-grid`) | `aceternity-bento.png` | Full editable .tsx landed, plain Tailwind incl. dark: variants |
+| react-bits | **OK** (`BlurText-TS-TW`) | `reactbits-blurtext.png` | Landed at `components/BlurText.tsx` (not under ui/); animation values in motion props, not classes |
+| Kokonut UI | **OK** (`particle-button`) | `kokonut-particle-button.png` | Tailwind v4-native, clean source |
+| Animate UI | **OK** (`backgrounds-bubble`) | `animateui-bubble-background.png` | Deep folder layout (`animate-ui/components/backgrounds/`) |
+| SmoothUI | **OK** (`faq-1` block) | `smoothui-faq.png` | A whole section block with a typed props API — exactly the 7.5 shape |
+| Eldora UI | **OK** (`map`) — after a 404 on a guessed name | `eldora-map.png` | Item names MUST come from their registry index; guessing 404s |
+| Skiper UI | **Installs OK, Next-coupled** | `skiper-links.png` | `skiper40` imports `next/link` — needed a shim to render in Vite; free tier also requires attribution |
+| Animata | **No CLI — raw-file copy-in works** | `animata-text-flip.png` | Copied `text-flip.tsx` from the repo; rendered unmodified |
+| ldrs | **OK** (npm) | `ldrs-ring.png` | Wrap-only; `size/color/speed` props take any CSS value → token-bindable |
+| Paper Shaders | **OK** (npm) | `paper-shaders-mesh.png` | Wrap-only; colour-array props token-bindable; the render is genuinely good |
+| tsParticles | **OK** (npm) | `tsparticles-links.png` | v4 React API changed (`ParticlesProvider`, not `initParticlesEngine`) — docs lag the package |
+| Magic UI | **UNREACHABLE** — connect timeout on `magicui.design:443`, curl gets no TCP connection at all | — | From THIS machine, not just the research sandbox. The canonical primitives set is uninstallable here today |
+| fancy components | **UNREACHABLE** — same timeout signature | — | Same Vercel-edge cluster as Magic UI |
+| motion-primitives | **UNREACHABLE** — same timeout signature | — | Same cluster |
+| cult/ui | **BLOCKED** — registry returned a client error (the Vercel bot checkpoint, served to the CLI) | — | The survey predicted exactly this; copy-in from the MIT repo is the fallback |
+| Tailark | **PAID-GATED** — `hero-section-*` items return "Sign in with a plan that includes blocks"; the documented OSS registry domain (`oss-tailark.com`) does not resolve | — | Free hero blocks could not be verified from here |
+
+**The load-bearing finding:** three of the strongest copy-in candidates (Magic UI, fancy,
+motion-primitives) are flat-out unreachable from this machine — the install path that "cannot
+be bot-blocked without breaking the product" can still be *network*-blocked, and was. Any
+catalog entry needs a reachability smoke test from the user's own network before it ships, and
+the catalog should record a fallback (public-repo copy-in) for every registry entry that has
+one. cult/ui's bot checkpoint is the same lesson from the other side.
+
+## The curation gate — waiting on the user
+
+The table above (mechanics) + `release/75-specimens/*.png` (taste) is the review artifact.
+**The user picks what ships. Nothing enters the catalog without that pass.**
