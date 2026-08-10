@@ -32,6 +32,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"tokens:read": true,
 	"tokens:write": true,
 	"tokens:generateScale": true,
+	"tokens:blastRadius": true,
 	"fonts:search": true,
 	"pages:list": true,
 	"assets:list": true,

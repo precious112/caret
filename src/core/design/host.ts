@@ -25,6 +25,14 @@ export interface DesignHost {
 
 	/** Push a message down to the canvas / preview surface. */
 	sendToCanvas(message: DesignOutboundMessage): void
+
+	/**
+	 * Announce that Caret itself is about to write this file, so the host's
+	 * file watcher doesn't record the change as an external hand-edit. Getting
+	 * this wrong corrupts the provenance log's one load-bearing distinction —
+	 * inline (user taste) versus everything else.
+	 */
+	noteSelfWrite(filePath: string): void
 }
 
 /**
@@ -37,6 +45,7 @@ export const nullDesignHost: DesignHost = {
 	},
 	async openInEditor() {},
 	sendToCanvas() {},
+	noteSelfWrite() {},
 }
 
 // Hosts are looked up per project — see `services.ts`. There is deliberately no

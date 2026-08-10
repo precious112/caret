@@ -18,7 +18,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
-import { Logger } from "../../src/shared/services/Logger"
+import { Logger } from "@/shared/services/Logger"
 
 /**
  * Who made the change. The distinction that matters is `inline` (the user, by
@@ -28,6 +28,17 @@ import { Logger } from "../../src/shared/services/Logger"
 export type EditActor = "inline" | "agent" | "external" | "caret"
 
 export type EditAction = "create" | "write" | "delete" | "heal"
+
+/**
+ * Structured detail for the records correction-mining reads. Free-text notes
+ * are for humans; a miner parsing prose out of `note` would be the drift bug
+ * waiting to happen.
+ */
+export type EditDetail =
+	| { kind: "color-detach"; token: string; hex: string }
+	| { kind: "color-bind"; token: string }
+	| { kind: "color"; hex: string }
+	| { kind: "instruction"; text: string }
 
 export interface EditRecord {
 	actor: EditActor
@@ -42,6 +53,8 @@ export interface EditRecord {
 	sizeAfter?: number
 	/** Free-form note, e.g. which healing rule fired. */
 	note?: string
+	/** Machine-readable detail for correction mining. */
+	detail?: EditDetail
 }
 
 interface StoredRecord extends EditRecord {

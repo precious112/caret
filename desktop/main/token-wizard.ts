@@ -25,10 +25,10 @@ import {
 	writeFoundationTokens,
 	writeWizardScratch,
 } from "../../src/core/design"
+import { recordEdit } from "../../src/core/design/provenance"
 import { Logger } from "../../src/shared/services/Logger"
 import type { WizardStateWire } from "../shared/ipc"
 import { getPrefs } from "./prefs"
-import { recordEdit } from "./provenance"
 import { regenerateRulesFiles } from "./rules/generate"
 
 interface WizardSession {

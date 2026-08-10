@@ -148,6 +148,17 @@ export {
 } from "./assets"
 export { CARET_ID_RULES, INLINE_EDITING_RULES } from "./authoring/design-rules"
 export {
+	type CorrectionSignal,
+	markSignal,
+	mineCorrections,
+	normalizeInstruction,
+	pendingSignals,
+	RULE_SIGNAL_THRESHOLD,
+	readCorrectionsState,
+	signalKey,
+	TOKEN_SIGNAL_THRESHOLD,
+} from "./corrections"
+export {
 	listFlows,
 	mutateFlowDefinition,
 	readFlowDefinition,
@@ -215,6 +226,21 @@ export {
 	writeWizardScratch,
 } from "./interview"
 export { listPages, readPageMeta, validatePageMeta, writePageMeta } from "./page-meta"
+export {
+	addPromotedRule,
+	PROMOTED_RULES_FILE,
+	type PromotedRule,
+	type PromotedRules,
+	readPromotedRules,
+	removePromotedRule,
+} from "./promoted-rules"
+export {
+	type EditActor,
+	type EditDetail,
+	type EditRecord,
+	readProvenance,
+	recordEdit,
+} from "./provenance"
 export { RenderingShell } from "./rendering-shell"
 export { writeThemeCss } from "./rendering-shell/entry-template"
 export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-shell/messages"
@@ -262,3 +288,13 @@ export type {
 	TypographyTokens,
 	VibeDescriptor,
 } from "./types"
+export {
+	allTokenNames,
+	countAllTokenUses,
+	countTokenUses,
+	foundationTokenForClass,
+	setFoundationTokenValue,
+	type TokenUseCount,
+	tokenClassForHex,
+	tokenValue,
+} from "./visual-editing/token-colors"

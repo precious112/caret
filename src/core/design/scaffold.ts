@@ -76,6 +76,7 @@ canvas-layout.json
 .mcp.json
 .provenance.jsonl
 .interview.json
+.corrections-state.json
 assets/.posters/
 `
 

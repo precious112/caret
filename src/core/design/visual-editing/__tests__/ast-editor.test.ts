@@ -229,7 +229,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#00ff00", "accent")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-[#00ff00]")
@@ -241,7 +241,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#0000ff", "title")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-[#0000ff]")
@@ -252,7 +252,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#ff0000", "accent")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-[#ff0000]")
@@ -264,7 +264,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#00ff00", "label")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-[#00ff00]")
@@ -280,7 +280,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#e11d48", "featured-title")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-[#e11d48]")
@@ -290,6 +290,33 @@ describe("editJSXColor with caretId", () => {
 		output.should.containEql("tracking-tight")
 	})
 
+	it("writes a token class instead of an arbitrary value when tokenClass is given", async () => {
+		// Bind-on-match: the picked colour exactly equals brand-500, so the edit
+		// binds to the token rather than freezing today's value as a magic number.
+		const source = `<h1 data-caret-id="title" className="text-zinc-800 font-bold">Hello</h1>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#0b7aff", "title", "brand-500")
+		result.ok.should.be.true()
+		should(result.replacedClass).equal("text-zinc-800")
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("text-brand-500")
+		output.should.not.containEql("text-[#0b7aff]")
+	})
+
+	it("reports the class it replaced so a detach from a token is detectable", async () => {
+		const source = `<h1 data-caret-id="title" className="bg-brand-500 p-4">Hello</h1>`
+		await fs.writeFile(tmpFile, source)
+
+		const result = await editJSXColor(tmpFile, 1, "#123456", "title")
+		result.ok.should.be.true()
+		should(result.replacedClass).equal("bg-brand-500")
+
+		const output = await fs.readFile(tmpFile, "utf-8")
+		output.should.containEql("bg-[#123456]")
+	})
+
 	it("does not mistake width utilities like border-2 or ring-2 for colours", async () => {
 		// The custom-colour rule is "name…-number with two or more segments":
 		// `brand-950` qualifies, a bare width number must not.
@@ -297,7 +324,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#0000ff", "card")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("border-2")
@@ -315,7 +342,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#dc2626", "plain")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("mt-4 leading-relaxed text-[#dc2626]")
@@ -326,7 +353,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#16a34a", "bare")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql(`className="text-[#16a34a]"`)
@@ -337,7 +364,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#000000", "dyn")
-		result.should.be.false()
+		result.ok.should.be.false()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.equal(source)
@@ -350,7 +377,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#ff0000", "title")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-4xl")
@@ -363,7 +390,7 @@ describe("editJSXColor with caretId", () => {
 		await fs.writeFile(tmpFile, source)
 
 		const result = await editJSXColor(tmpFile, 1, "#123456", "desc")
-		result.should.be.true()
+		result.ok.should.be.true()
 
 		const output = await fs.readFile(tmpFile, "utf-8")
 		output.should.containEql("text-lg")
@@ -451,7 +478,7 @@ describe("AST editor hardening", () => {
 	it("editJSXColor should return false for malformed JSX", async () => {
 		await fs.writeFile(tmpFile, "<<<<not valid JSX>>>>")
 		const result = await editJSXColor(tmpFile, 1, "#ff0000")
-		result.should.be.false()
+		result.ok.should.be.false()
 	})
 
 	it("fallbackTextReplace should refuse ambiguous replacements", async () => {

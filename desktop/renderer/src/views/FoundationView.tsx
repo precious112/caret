@@ -19,7 +19,7 @@ import { useEffect, useState } from "react"
 
 import type { ProjectState } from "../../../shared/ipc"
 import { TokenWizard } from "../components/design-wizard/TokenWizard"
-import { on } from "../ipc"
+import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 import { setActiveProject } from "../services/design-client"
 import { FoundationInterview } from "./FoundationInterview"
@@ -39,6 +39,7 @@ export function FoundationView({
 	onInterviewAnswered?(): void
 }) {
 	const [mode, setMode] = useState<Mode>("wizard")
+	const [blastRadius, setBlastRadius] = useState<{ occurrences: number; files: number } | null>(null)
 
 	// The wizard's data layer is module-scoped to one project per window.
 	useEffect(() => setActiveProject(project.path), [project.path])
@@ -47,6 +48,15 @@ export function FoundationView({
 	// Caret's own flows, there is a tool call blocked on it.
 	useEffect(() => on("interview:prompt", () => setMode("agent")), [])
 
+	// Re-running on an existing foundation: tokens are live bindings, so the
+	// reach of a change is a measurable number, not a vibe — measure it.
+	useEffect(() => {
+		if (!project.hasFoundation) return
+		invoke("tokens:blastRadius", project.path)
+			.then(setBlastRadius)
+			.catch(() => setBlastRadius(null))
+	}, [project.hasFoundation, project.path])
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden bg-shell-bg">
 			{!project.hasFoundation && (
@@ -54,6 +64,17 @@ export function FoundationView({
 					<p className="mx-auto max-w-3xl">
 						Set your foundations before generating any pages. Everything an agent writes will be styled from these,
 						and changing them afterwards means restyling what already exists.
+					</p>
+				</div>
+			)}
+			{project.hasFoundation && (
+				<div className="border-b border-shell-border bg-caret-accent/10 px-8 py-3" data-testid="foundation-rerun-notice">
+					<p className="mx-auto max-w-3xl">
+						This project already has foundations. Tokens are live bindings, so committing new ones restyles
+						{blastRadius && blastRadius.occurrences > 0
+							? ` ${blastRadius.occurrences} token-bound style${blastRadius.occurrences === 1 ? "" : "s"} across ${blastRadius.files} file${blastRadius.files === 1 ? "" : "s"}`
+							: " every token-bound style"}{" "}
+						instantly. Anything written as a raw value keeps its frozen look.
 					</p>
 				</div>
 			)}

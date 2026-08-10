@@ -16,6 +16,7 @@ import {
 	assetUrl,
 	type BackendId,
 	completeSync,
+	countAllTokenUses,
 	describeAsset,
 	type FoundationTokens,
 	findAsset,
@@ -119,6 +120,11 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		(_event, type: "color" | "typography" | "spacing" | "radius", seed: string, options?: Record<string, unknown>) =>
 			generateTokenScale(type, seed, options),
 	)
+
+	ipcMain.handle("tokens:blastRadius", async (_event, projectPath: string) => {
+		const tokens = await readFoundationTokens(projectPath)
+		return countAllTokenUses(path.join(projectPath, ".caret"), tokens)
+	})
 
 	ipcMain.handle("fonts:search", (_event, query: string) => searchGoogleFonts(query, { apiKey: getPrefs().googleFontsApiKey }))
 

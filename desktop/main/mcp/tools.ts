@@ -45,9 +45,9 @@ import {
 } from "../../../src/core/design"
 import { runExclusive, writeFileAtomic } from "../../../src/core/design/file-mutation-queue"
 import { mutateFlowDefinition } from "../../../src/core/design/flow-meta"
+import { recordEdit } from "../../../src/core/design/provenance"
 import { Logger } from "../../../src/shared/services/Logger"
 import { getDesignLayerChangedFiles } from "../../../src/utils/git"
-import { recordEdit } from "../provenance"
 import { buildFoundationContext, buildGuide } from "../rules/context"
 import type { ScreenshotResult } from "../types"
 

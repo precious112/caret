@@ -4,6 +4,7 @@ import { createRequire } from "module"
 import * as recast from "recast"
 
 import { writeFileAtomic } from "../file-mutation-queue"
+import { COLOR_UTILITY_PREFIXES } from "./token-colors"
 
 /**
  * `recast/parsers/babel-ts` is CommonJS and has no ESM entry point, and a bare
@@ -268,19 +269,9 @@ async function fallbackTextReplace(filePath: string, source: string, oldText: st
 	return true
 }
 
-const TAILWIND_COLOR_PREFIXES = [
-	"bg-",
-	"text-",
-	"border-",
-	"ring-",
-	"from-",
-	"to-",
-	"via-",
-	"outline-",
-	"accent-",
-	"fill-",
-	"stroke-",
-]
+// One list shared with the token binder — the recogniser and the binder must
+// agree on what a colour class is.
+const TAILWIND_COLOR_PREFIXES = COLOR_UTILITY_PREFIXES
 
 const TAILWIND_COLOR_NAMES = new Set([
 	"slate",
@@ -345,25 +336,49 @@ function isTailwindColorClass(cls: string): boolean {
 	})
 }
 
-function replaceTailwindColorClass(className: string, newHex: string): string | null {
+/**
+ * Replaces the first colour class with `prefix + newSuffix` and reports which
+ * class it replaced. The suffix is either an arbitrary value (`[#ff0000]` — a
+ * detach) or a theme token name (`brand-500` — a bind); the replacer doesn't
+ * care, but the caller uses `replacedClass` to notice a detach FROM a token.
+ */
+function replaceTailwindColorClass(className: string, newSuffix: string): { value: string; replacedClass: string } | null {
 	const classes = className.split(/\s+/)
-	let replaced = false
+	let replacedClass: string | null = null
 
 	const result = classes.map((cls) => {
-		if (!replaced && isTailwindColorClass(cls)) {
+		if (!replacedClass && isTailwindColorClass(cls)) {
 			const prefix = TAILWIND_COLOR_PREFIXES.find((p) => cls.startsWith(p))!
-			replaced = true
-			return `${prefix}[${newHex}]`
+			replacedClass = cls
+			return `${prefix}${newSuffix}`
 		}
 		return cls
 	})
 
-	return replaced ? result.join(" ") : null
+	return replacedClass ? { value: result.join(" "), replacedClass } : null
 }
 
 const COLOR_STYLE_PROPS = ["color", "backgroundColor", "borderColor", "outlineColor", "fill", "stroke"]
 
-export async function editJSXColor(filePath: string, lineNumber: number, newColor: string, caretId?: string): Promise<boolean> {
+export interface ColorEditResult {
+	ok: boolean
+	/** The class the edit replaced, when it replaced one (`text-brand-950`, `bg-[#101010]`, …). */
+	replacedClass?: string
+}
+
+/**
+ * @param tokenClass When set, writes this theme token suffix (`brand-500`)
+ * instead of the arbitrary value — the picked colour exactly matched a token,
+ * so the element binds to it rather than detaching to a magic number.
+ */
+export async function editJSXColor(
+	filePath: string,
+	lineNumber: number,
+	newColor: string,
+	caretId?: string,
+	tokenClass?: string,
+): Promise<ColorEditResult> {
+	const newSuffix = tokenClass || `[${newColor}]`
 	try {
 		const source = await fs.readFile(filePath, "utf-8")
 		const ast = parseSource(source)
@@ -373,7 +388,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 
 		if (!element) {
 			console.warn(`[design] AST: no JSX element found at ${filePath}:${lineNumber}`)
-			return false
+			return { ok: false }
 		}
 
 		const attrs = element.openingElement.attributes || []
@@ -384,23 +399,23 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 
 			if (name === "className" && attr.value) {
 				if (attr.value.type === "StringLiteral") {
-					const replaced = replaceTailwindColorClass(attr.value.value, newColor)
+					const replaced = replaceTailwindColorClass(attr.value.value, newSuffix)
 					if (replaced) {
-						attr.value.value = replaced
+						attr.value.value = replaced.value
 						await writeFileAtomic(filePath, recast.print(ast).code)
-						return true
+						return { ok: true, replacedClass: replaced.replacedClass }
 					}
 				}
 				if (attr.value.type === "JSXExpressionContainer") {
 					const expr = attr.value.expression
 					if (expr.type === "TemplateLiteral") {
 						for (const quasi of expr.quasis) {
-							const replaced = replaceTailwindColorClass(quasi.value.raw, newColor)
+							const replaced = replaceTailwindColorClass(quasi.value.raw, newSuffix)
 							if (replaced) {
-								quasi.value.raw = replaced
-								quasi.value.cooked = replaced
+								quasi.value.raw = replaced.value
+								quasi.value.cooked = replaced.value
 								await writeFileAtomic(filePath, recast.print(ast).code)
-								return true
+								return { ok: true, replacedClass: replaced.replacedClass }
 							}
 						}
 					}
@@ -412,7 +427,7 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 				if (expr.type === "ObjectExpression") {
 					if (replaceColorInObjectExpression(expr, newColor)) {
 						await writeFileAtomic(filePath, recast.print(ast).code)
-						return true
+						return { ok: true }
 					}
 				}
 			}
@@ -420,23 +435,23 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 
 		if (replaceColorInStyleObject(ast, lineNumber, newColor)) {
 			await writeFileAtomic(filePath, recast.print(ast).code)
-			return true
+			return { ok: true }
 		}
 
 		// Nothing to replace is not nothing to do. An element with no colour
 		// class inherits its colour, and "make this text red" on it is the most
 		// ordinary request the colour picker gets — refusing it with "use AI
 		// Edit" turns a one-token change into a model call. Append the class
-		// instead (or create className outright), the same arbitrary-value form
-		// the replacer writes.
+		// instead (or create className outright), the same suffix form the
+		// replacer writes.
 		for (const attr of attrs) {
 			if (attr.type !== "JSXAttribute") continue
 			const name = attr.name.type === "JSXIdentifier" ? attr.name.name : ""
 			if (name === "className" && attr.value?.type === "StringLiteral") {
-				attr.value.value = `${attr.value.value.trim()} text-[${newColor}]`.trim()
+				attr.value.value = `${attr.value.value.trim()} text-${newSuffix}`.trim()
 				await writeFileAtomic(filePath, recast.print(ast).code)
-				console.log(`[design] AST: no colour class on the element — appended text-[${newColor}]`)
-				return true
+				console.log(`[design] AST: no colour class on the element — appended text-${newSuffix}`)
+				return { ok: true }
 			}
 		}
 
@@ -448,20 +463,20 @@ export async function editJSXColor(filePath: string, lineNumber: number, newColo
 			// expression. Appending next to it would leave two classNames, and
 			// editing inside it is genuinely a job for the model.
 			console.warn(`[design] AST: className at ${filePath}:${lineNumber} is dynamic — deferring to AI edit`)
-			return false
+			return { ok: false }
 		}
 
 		const builders = recast.types.builders
 		element.openingElement.attributes = [
 			...attrs,
-			builders.jsxAttribute(builders.jsxIdentifier("className"), builders.stringLiteral(`text-[${newColor}]`)),
+			builders.jsxAttribute(builders.jsxIdentifier("className"), builders.stringLiteral(`text-${newSuffix}`)),
 		]
 		await writeFileAtomic(filePath, recast.print(ast).code)
-		console.log(`[design] AST: element had no className — added one with text-[${newColor}]`)
-		return true
+		console.log(`[design] AST: element had no className — added one with text-${newSuffix}`)
+		return { ok: true }
 	} catch (err) {
 		console.error(`[design] AST color edit failed:`, err)
-		return false
+		return { ok: false }
 	}
 }
 

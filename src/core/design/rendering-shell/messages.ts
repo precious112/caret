@@ -44,6 +44,29 @@ export interface EditResultPayload {
 	success: boolean
 	error?: string
 	suggestAiEdit?: boolean
+	/**
+	 * A colour edit replaced this foundation token class (`brand-500`) with an
+	 * arbitrary value — the element detached from the token. The canvas offers
+	 * the alternative: change the token itself, reaching `tokenUses` places.
+	 */
+	detachedFrom?: string
+	/** How many colour-utility uses of `detachedFrom` exist across the design layer. */
+	tokenUses?: number
+	/** The picked colour exactly matched this token, so the edit bound to it instead of detaching. */
+	boundTo?: string
+	/** Echoed element address so the promote action can re-bind the same element. */
+	editTarget?: { filePath: string; lineNumber: number; caretId?: string }
+}
+
+export interface PromoteTokenPayload {
+	/** The foundation token to repoint (`brand-500`, `neutral-200`, `success`, `brand`). */
+	token: string
+	/** The picked colour the token should now resolve to. */
+	hex: string
+	/** The element that detached — re-bound to the token class as part of the promote. */
+	filePath: string
+	lineNumber: number
+	caretId?: string
 }
 
 export interface OverlayEditPayload {
@@ -121,6 +144,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"flow-edge-delete": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
 	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
 	"design-sync-now": () => true,
+	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	log: () => true,
 }
 
@@ -144,6 +168,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
+	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }
 	| {

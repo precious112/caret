@@ -91,6 +91,8 @@ export class ProjectWindow {
 			host: createElectronDesignHost({
 				chrome: () => (this.closed || this.window.isDestroyed() ? null : this.window.webContents),
 				sendToCanvas: (message) => this.sendToCanvas(message),
+				// Lazily: the healer is constructed a few lines below this call.
+				noteSelfWrite: (file) => this.healer?.markSelfWrite(file),
 			}),
 		})
 

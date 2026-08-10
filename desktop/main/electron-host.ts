@@ -33,6 +33,8 @@ export interface ElectronHostTargets {
 	chrome(): WebContents | null
 	/** Sends a message down to the canvas view. */
 	sendToCanvas(message: DesignOutboundMessage): void
+	/** Marks a file as about to be written by Caret, so the healer's watcher doesn't log it as external. */
+	noteSelfWrite(filePath: string): void
 }
 
 export function createElectronDesignHost(targets: ElectronHostTargets): DesignHost {
@@ -83,6 +85,10 @@ export function createElectronDesignHost(targets: ElectronHostTargets): DesignHo
 
 		sendToCanvas(message: DesignOutboundMessage): void {
 			targets.sendToCanvas(message)
+		},
+
+		noteSelfWrite(filePath: string): void {
+			targets.noteSelfWrite(filePath)
 		},
 	}
 }

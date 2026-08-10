@@ -26,8 +26,8 @@ import {
 	tagsFromDescription,
 	writeFoundationTokens,
 } from "../../src/core/design"
+import { recordEdit } from "../../src/core/design/provenance"
 import type { InterviewStateWire, InterviewStepWire, RankedOptionWire, SpecimenWire } from "../shared/ipc"
-import { recordEdit } from "./provenance"
 import { regenerateRulesFiles } from "./rules/generate"
 
 interface Session {

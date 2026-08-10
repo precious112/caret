@@ -1863,6 +1863,422 @@ async function main(): Promise<void> {
 		return `clicked @${option.tag} from a decoded thumbnail in the real canvas view`
 	})
 
+	await scenario("bn. an inline colour edit detaches, offers the token, and a click promotes it", async () => {
+		// Phase 7's colour write policy, driven in the real app: an element bound
+		// to brand-500 gets an inline colour edit (detach by default), the canvas
+		// offers "change the token instead" with the measured reach, and clicking
+		// it repoints foundation.json, regenerates the theme, and re-binds the
+		// element. The native colour dialog is the one part not driven — the value
+		// is set on the picker's own input and dispatched as an input event, the
+		// same synthesis the file-drop scenario uses for its native boundary.
+		const caretDir = path.join(fixture, ".caret")
+		const foundationPath = path.join(caretDir, "tokens", "foundation.json")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+
+		// A foundation with a real scale — the scaffold default has an empty one.
+		const foundation = JSON.parse(await fs.readFile(foundationPath, "utf-8"))
+		foundation.color.brand.scale = { "500": "#0b7aff", "600": "#0066db" }
+		await fs.writeFile(foundationPath, JSON.stringify(foundation, null, 2))
+
+		// The desktop watcher must regenerate the theme on its own.
+		await waitFor(
+			"the watcher to regenerate caret-theme.css with the new scale",
+			async () => {
+				const css = await fs.readFile(path.join(caretDir, "caret-theme.css"), "utf-8").catch(() => "")
+				return css.includes("--color-brand-500: #0b7aff;") ? true : null
+			},
+			30000,
+		)
+
+		// Bind the subtitle to the token (external write; the healer tolerates it).
+		const source = await fs.readFile(pagePath, "utf-8")
+		assert(source.includes("text-zinc-400"), "fixture page no longer has the subtitle class this scenario edits")
+		await fs.writeFile(pagePath, source.replace("text-zinc-400", "text-brand-500"))
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			// No helper functions in here — this body is serialized into the main
+			// process, and esbuild's keepNames wraps function-valued consts in a
+			// `__name` helper that does not exist there.
+			let canvas: any = null
+			const viewDeadline = Date.now() + 120000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				// Focused page frame — reuse it if a prior scenario left one open,
+				// else click the home card.
+				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+				if (!pageFrame) {
+					let deadline0 = Date.now() + 30000
+					let ready = false
+					while (Date.now() < deadline0 && !ready) {
+						ready = await wc.executeJavaScript(`!!document.querySelector('.caret-canvas-frame')`).catch(() => false)
+						if (!ready) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!ready) return { error: "no page card ever appeared on the canvas" }
+					await wc.executeJavaScript(`(document.querySelector('.caret-canvas-frame')).click(), true`)
+					deadline0 = Date.now() + 30000
+					while (Date.now() < deadline0 && !pageFrame) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+						if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!pageFrame) return { error: "the focused page never became a frame of the canvas" }
+				}
+
+				// The subtitle must carry the token class as delivered by HMR, and
+				// react-grab must be up. The frame handle is re-resolved on every
+				// poll: focusing a page runs the caret-id precompute, which can
+				// bounce the iframe through HMR and leave a captured handle dead.
+				let deadline = Date.now() + 30000
+				let bound = false
+				let lastSeen = "never found the element"
+				while (Date.now() < deadline && !bound) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					const probe = await pageFrame
+						.executeJavaScript(
+							`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); return el ? el.className : null })()`,
+						)
+						.catch((e: any) => `frame probe failed: ${String(e).slice(0, 80)}`)
+					if (typeof probe === "string") lastSeen = probe
+					bound = typeof probe === "string" && probe.includes("text-brand-500")
+					if (!bound) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!bound)
+					return { error: `the token-bound subtitle never appeared in the focused page (last saw: ${lastSeen})` }
+				await pageFrame.executeJavaScript(`((window).__REACT_GRAB__?.activate?.(), true)`).catch(() => {})
+				await new Promise((r) => setTimeout(r, 800))
+
+				// Right-click the subtitle with a real mouse to open react-grab's menu.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const target = await pageFrame.executeJavaScript(
+					`(() => { const r = document.querySelector('[data-caret-id="hero-subtitle"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				const at = { x: Math.round(offset.x + target.x), y: Math.round(offset.y + target.y) }
+
+				let menuClicked = false
+				for (let attempt = 0; attempt < 5 && !menuClicked; attempt++) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 300))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					const menuDeadline = Date.now() + 4000
+					while (Date.now() < menuDeadline && !menuClicked) {
+						menuClicked = await pageFrame
+							.executeJavaScript(
+								`(() => {
+									const host = document.querySelector('[data-react-grab]')
+									const root = host && host.shadowRoot
+									if (!root) return false
+									const items = Array.from(root.querySelectorAll('button, [role="menuitem"], div'))
+									const item = items.find((n) => n.textContent && n.textContent.trim() === 'Edit color')
+									if (!item) return false
+									item.click()
+									return true
+								})()`,
+							)
+							.catch(() => false)
+						if (!menuClicked) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!menuClicked) return { error: "react-grab's menu never offered Edit color" }
+
+				// The picker input exists now (the native dialog may be open beside
+				// it — it is not needed). Feed it the picked colour.
+				deadline = Date.now() + 8000
+				let fed = false
+				while (Date.now() < deadline && !fed) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					fed = await pageFrame
+						.executeJavaScript(
+							`(() => {
+								const input = document.querySelector('input[type="color"]')
+								if (!input) return false
+								const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+								setter.call(input, '#123456')
+								input.dispatchEvent(new Event('input', { bubbles: true }))
+								input.dispatchEvent(new Event('change', { bubbles: true }))
+								return true
+							})()`,
+						)
+						.catch(() => false)
+					if (!fed) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!fed) return { error: "Edit color never produced a colour input to feed" }
+
+				// The detach toast, with its measured reach, then the real click.
+				deadline = Date.now() + 20000
+				let buttonText = ""
+				while (Date.now() < deadline && !buttonText) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					buttonText = await pageFrame
+						.executeJavaScript(
+							`(() => { const b = document.querySelector('#caret-detach-toast button'); return b ? b.textContent : '' })()`,
+						)
+						.catch(() => "")
+					if (!buttonText) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!buttonText) return { error: "the detach toast never appeared after replacing a token class" }
+				await pageFrame.executeJavaScript(`(document.querySelector('#caret-detach-toast button')).click(), true`)
+
+				return { buttonText }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the colour edit failed: ${(outcome as any).error}`)
+		const { buttonText } = outcome as { buttonText: string }
+		assert(buttonText.includes("Change the token instead"), `unexpected toast action: "${buttonText}"`)
+		assert(buttonText.includes("(1 place)"), `the toast did not carry the measured reach: "${buttonText}"`)
+
+		// The promote's three writes, all observable on disk.
+		await waitFor(
+			"foundation.json to carry the promoted value",
+			async () => {
+				const f = JSON.parse(await fs.readFile(foundationPath, "utf-8").catch(() => "{}"))
+				return f?.color?.brand?.scale?.["500"] === "#123456" ? true : null
+			},
+			20000,
+		)
+		await waitFor(
+			"the theme to regenerate from the promoted token",
+			async () => {
+				const css = await fs.readFile(path.join(caretDir, "caret-theme.css"), "utf-8").catch(() => "")
+				return css.includes("--color-brand-500: #123456;") ? true : null
+			},
+			20000,
+		)
+		await waitFor(
+			"the element to re-bind onto the token class",
+			async () => {
+				const page = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				return page.includes("text-brand-500") && !page.includes("text-[#123456]") ? true : null
+			},
+			20000,
+		)
+
+		return "detach offered the token with its reach (1 place); the click repointed brand-500, regenerated the theme, and re-bound the element"
+	})
+
+	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {
+		// Correction capture end to end: two elements bound to brand-600, each
+		// hand-recoloured to the same value through the real Edit color action.
+		// The second edit crosses the threshold; a notification appears in the
+		// chrome; clicking "Change the token" repoints the foundation and
+		// re-binds BOTH detached elements.
+		const caretDir = path.join(fixture, ".caret")
+		const foundationPath = path.join(caretDir, "tokens", "foundation.json")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+
+		const foundation = JSON.parse(await fs.readFile(foundationPath, "utf-8"))
+		foundation.color.brand.scale = { ...foundation.color.brand.scale, "600": "#0066db" }
+		await fs.writeFile(foundationPath, JSON.stringify(foundation, null, 2))
+		await waitFor(
+			"the theme to define brand-600",
+			async () => {
+				const css = await fs.readFile(path.join(caretDir, "caret-theme.css"), "utf-8").catch(() => "")
+				return css.includes("--color-brand-600: #0066db;") ? true : null
+			},
+			30000,
+		)
+
+		let source = await fs.readFile(pagePath, "utf-8")
+		source = source.replace(/className="text-5xl font-bold [^"]*"/, 'className="text-5xl font-bold text-brand-600"')
+		if (!source.includes("hero-link")) {
+			source = source.replace(
+				/(<p data-caret-id="hero-subtitle"[^\n]*\n)/,
+				`$1      <a data-caret-id="hero-link" className="mt-2 block text-brand-600">Learn more</a>\n`,
+			)
+		}
+		await fs.writeFile(pagePath, source)
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			// Same serialization constraints as bn: no function-valued consts.
+			let canvas: any = null
+			const viewDeadline = Date.now() + 120000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+				if (!pageFrame) {
+					let deadline0 = Date.now() + 30000
+					let ready = false
+					while (Date.now() < deadline0 && !ready) {
+						ready = await wc.executeJavaScript(`!!document.querySelector('.caret-canvas-frame')`).catch(() => false)
+						if (!ready) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!ready) return { error: "no page card ever appeared on the canvas" }
+					await wc.executeJavaScript(`(document.querySelector('.caret-canvas-frame')).click(), true`)
+					deadline0 = Date.now() + 30000
+					while (Date.now() < deadline0 && !pageFrame) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+						if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!pageFrame) return { error: "the focused page never became a frame of the canvas" }
+				}
+
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+
+				for (const caretId of ["hero-title", "hero-link"]) {
+					// Wait for the bound class (HMR-delivered), re-resolving the frame.
+					const deadline = Date.now() + 30000
+					let bound = false
+					while (Date.now() < deadline && !bound) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+						bound = await pageFrame
+							.executeJavaScript(
+								`(() => { const el = document.querySelector('[data-caret-id="${caretId}"]'); return !!el && el.className.includes('text-brand-600') })()`,
+							)
+							.catch(() => false)
+						if (!bound) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!bound) return { error: `${caretId} never appeared bound to brand-600` }
+					await pageFrame.executeJavaScript(`((window).__REACT_GRAB__?.activate?.(), true)`).catch(() => {})
+					await new Promise((r) => setTimeout(r, 600))
+
+					const target = await pageFrame.executeJavaScript(
+						`(() => { const r = document.querySelector('[data-caret-id="${caretId}"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+					)
+					const at = { x: Math.round(offset.x + target.x), y: Math.round(offset.y + target.y) }
+
+					let menuClicked = false
+					for (let attempt = 0; attempt < 5 && !menuClicked; attempt++) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+						wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+						await new Promise((r) => setTimeout(r, 300))
+						wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "right", clickCount: 1 })
+						wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "right", clickCount: 1 })
+						const menuDeadline = Date.now() + 4000
+						while (Date.now() < menuDeadline && !menuClicked) {
+							menuClicked = await pageFrame
+								.executeJavaScript(
+									`(() => {
+										const host = document.querySelector('[data-react-grab]')
+										const root = host && host.shadowRoot
+										if (!root) return false
+										const items = Array.from(root.querySelectorAll('button, [role="menuitem"], div'))
+										const item = items.find((n) => n.textContent && n.textContent.trim() === 'Edit color')
+										if (!item) return false
+										item.click()
+										return true
+									})()`,
+								)
+								.catch(() => false)
+							if (!menuClicked) await new Promise((r) => setTimeout(r, 250))
+						}
+					}
+					if (!menuClicked) return { error: `react-grab's menu never offered Edit color on ${caretId}` }
+
+					const deadline2 = Date.now() + 8000
+					let fed = false
+					while (Date.now() < deadline2 && !fed) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+						fed = await pageFrame
+							.executeJavaScript(
+								`(() => {
+									const input = document.querySelector('input[type="color"]')
+									if (!input) return false
+									const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+									setter.call(input, '#654321')
+									input.dispatchEvent(new Event('input', { bubbles: true }))
+									input.dispatchEvent(new Event('change', { bubbles: true }))
+									return true
+								})()`,
+							)
+							.catch(() => false)
+						if (!fed) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!fed) return { error: `Edit color never produced an input to feed on ${caretId}` }
+					await new Promise((r) => setTimeout(r, 800))
+				}
+
+				return { done: true }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+		assert(!("error" in outcome) || !outcome.error, `driving the two edits failed: ${(outcome as any).error}`)
+
+		// The offer lands in the chrome window; the click is a real click.
+		const offer = chrome.locator('[data-testid="notification-stack"]', {
+			hasText: "brand-600",
+		})
+		await offer.waitFor({ timeout: 20000 })
+		await chrome.getByRole("button", { name: "Change the token" }).click()
+
+		await waitFor(
+			"the correction to repoint brand-600",
+			async () => {
+				const f = JSON.parse(await fs.readFile(foundationPath, "utf-8").catch(() => "{}"))
+				return f?.color?.brand?.scale?.["600"] === "#654321" ? true : null
+			},
+			20000,
+		)
+		await waitFor(
+			"both detached elements to re-bind",
+			async () => {
+				const page = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				const rebound = (page.match(/text-brand-600/g) ?? []).length >= 2 && !page.includes("text-[#654321]")
+				return rebound ? true : null
+			},
+			20000,
+		)
+
+		return "two hand-corrections raised the offer; accepting repointed brand-600 and re-bound both elements"
+	})
+
+	await scenario("bp. a promoted rule reaches the always-on rules files", async () => {
+		// The durable half of correction capture: `.caret/rules.json` is versioned
+		// design content, and however it changes — Caret's promote, a hand edit, a
+		// git pull — the generated rules files must carry it. Written externally
+		// here, which is the hardest of the three paths (needs the watcher).
+		const rulesPath = path.join(fixture, ".caret", "rules.json")
+		const ruleText = "Card grids use 24px gaps, never 16px"
+		await fs.writeFile(
+			rulesPath,
+			JSON.stringify(
+				{ version: 1, rules: [{ id: "r1", text: ruleText, source: "manual", addedAt: new Date().toISOString() }] },
+				null,
+				2,
+			),
+		)
+
+		await waitFor(
+			"AGENTS.md to carry the standing correction",
+			async () => {
+				const agents = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
+				return agents.includes("Standing corrections") && agents.includes(ruleText) ? true : null
+			},
+			30000,
+		)
+
+		// Versioned, not ignored: the scaffold's gitignore must not swallow it.
+		const gitignore = await fs.readFile(path.join(fixture, ".caret", ".gitignore"), "utf-8")
+		assert(!gitignore.split("\n").some((l) => l.trim() === "rules.json"), ".caret/.gitignore must not ignore rules.json")
+
+		return `an externally written rules.json reached AGENTS.md ("${ruleText}")`
+	})
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message

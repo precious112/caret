@@ -22,9 +22,9 @@ import {
 	resolveCandidate,
 	writeFoundationTokens,
 } from "../../../src/core/design"
+import { recordEdit } from "../../../src/core/design/provenance"
 import { Logger } from "../../../src/shared/services/Logger"
 import { askUser, type InterviewPrompt, type PresentedCandidate } from "../interview"
-import { recordEdit } from "../provenance"
 import { regenerateRulesFiles } from "../rules/generate"
 import type { ToolContext, ToolDefinition, ToolResult } from "./tools"
 

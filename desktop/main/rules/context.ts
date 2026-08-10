@@ -21,6 +21,7 @@ import {
 	listPages,
 	readAssetIndex,
 	readFoundationTokens,
+	readPromotedRules,
 	summariseForRules,
 } from "../../../src/core/design"
 
@@ -84,6 +85,21 @@ export type GuideAudience = "mcp" | "embedded"
 
 export async function buildGuide(projectPath: string, audience: GuideAudience = "mcp"): Promise<string> {
 	const context = await buildFoundationContext(projectPath)
+	const promoted = await readPromotedRules(projectPath).catch(() => ({ version: 1 as const, rules: [] }))
+
+	const promotedSection =
+		promoted.rules.length === 0
+			? ""
+			: `
+
+## Standing corrections (promoted by the user — never violate these)
+
+The user made each of these corrections repeatedly by hand until Caret promoted it into a
+standing rule. Repeating the mistake a rule exists to prevent is the single worst thing an
+agent can do here.
+
+${promoted.rules.map((rule) => `- ${rule.text}`).join("\n")}
+`
 
 	return `# Authoring the Caret design layer
 
@@ -155,8 +171,18 @@ never edit it), so use them as ordinary utilities:
 - Brand scale: \`text-brand-500\`, \`bg-brand-50\`, \`border-brand-950\` … every step in the
   scale below, plus bare \`brand\` for the seed itself. Use these — never a stock palette
   colour that merely looks similar.
+- Neutral scale: \`text-neutral-600\`, \`bg-neutral-50\` … resolve to THIS project's tinted
+  neutrals, not Tailwind's stock grey. Use \`neutral-*\` for greys — never \`slate\`/\`gray\`/
+  \`zinc\`/\`stone\`, which bypass the foundation.
 - Semantic: \`text-success\`, \`text-warning\`, \`text-error\`, \`text-info\` (and \`bg-\`/\`border-\`).
-- Type: the body face is \`font-sans\`, the heading face is \`font-display\`.
+- Type: the body face is \`font-sans\`, the heading face is \`font-display\`. The size steps
+  (\`text-xs\` … \`text-5xl\`) follow the foundation's own ratio, not Tailwind's defaults.
+- Radius: \`rounded-sm\` … \`rounded-xl\` follow the foundation's radius character.
+
+These are **live bindings**: when a token changes, every page using the token class updates
+instantly. A raw value (\`text-[#1a2b3c]\`) is frozen at what the token happened to be today
+and silently stops matching when the foundation moves — never write one for a colour, size
+or radius the foundation already names.
 
 \`\`\`json
 ${JSON.stringify(context.tokens, null, 2)}
@@ -173,7 +199,7 @@ Caret MCP server.
 Ask about the product, never about design terms. "What are you building?" gets an
 answer; "what type scale do you want?" gets a guess.`
 }
-
+${promotedSection}
 ## What already exists
 
 ${

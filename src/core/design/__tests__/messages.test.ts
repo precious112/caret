@@ -60,4 +60,20 @@ describe("isValidDesignMessagePayload", () => {
 	it("lets unknown message types through (ignored downstream)", () => {
 		isValidDesignMessagePayload("future-type", { whatever: true }).should.be.true()
 	})
+
+	it("validates promote-token payloads", () => {
+		isValidDesignMessagePayload("promote-token", {
+			token: "brand-500",
+			hex: "#123456",
+			filePath: "pages/home/index.tsx",
+			lineNumber: 4,
+		}).should.be.true()
+		isValidDesignMessagePayload("promote-token", { token: "brand-500", hex: "#123456" }).should.be.false()
+		isValidDesignMessagePayload("promote-token", {
+			token: "",
+			hex: "#123456",
+			filePath: "a.tsx",
+			lineNumber: 1,
+		}).should.be.false()
+	})
 })

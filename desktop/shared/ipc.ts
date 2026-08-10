@@ -559,6 +559,12 @@ export interface IpcRequests {
 
 	"tokens:read": (projectPath: string) => FoundationTokensWire | null
 	"tokens:write": (projectPath: string, tokens: FoundationTokensWire) => WriteResult
+	/**
+	 * How far a foundation change reaches: colour-utility uses of any defined
+	 * token across the design layer. Shown before a re-run so "restyles what
+	 * already exists" is a number rather than a vibe.
+	 */
+	"tokens:blastRadius": (projectPath: string) => { occurrences: number; files: number }
 	"tokens:generateScale": (
 		type: "color" | "typography" | "spacing" | "radius",
 		seed: string,

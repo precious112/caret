@@ -2606,6 +2606,12 @@ function generateCaretGrabPlugin(): string {
 
 		let lastResolvedSource: SourceLocation | null = null
 
+		// The most recent colour the picker emitted. The detach toast's promote
+		// action reads this rather than the hex that rode in the edit-result:
+		// the picker fires per input event during a drag, only the FIRST of which
+		// replaces the token class — the colour the user settled on is the last.
+		let lastPickedHex = ""
+
 		const dynamicRangesMap: Map<string, Array<{ startLine: number; startCol: number; endLine: number; endCol: number; diagnostics: string[] }>> = new Map()
 
 		// macOS aliases /var to /private/var, and the fiber's path and the host's
@@ -2659,6 +2665,58 @@ function generateCaretGrabPlugin(): string {
 		    toast.style.opacity = "0"
 		    setTimeout(() => toast.remove(), 200)
 		  }, 3000)
+		}
+
+		/**
+		 * The one actionable toast: an inline colour edit just detached an element
+		 * from a foundation token. The alternative — edit the token, reaching every
+		 * use — stays one click away without a modal in the gesture's path.
+		 * Replaces itself on successive drag events rather than stacking.
+		 */
+		function showDetachToast(payload: any) {
+		  const existing = document.getElementById("caret-detach-toast")
+		  if (existing) existing.remove()
+		  const target = payload.editTarget
+		  if (!target || !target.filePath) return
+
+		  const toast = document.createElement("div")
+		  toast.id = "caret-detach-toast"
+		  // pointer-events must be explicit: active react-grab sets none on the
+		  // body and the property inherits — a button that paints but cannot be
+		  // clicked is the exact failure the asset picker already hit.
+		  toast.setAttribute("data-react-grab-ignore-events", "")
+		  toast.style.cssText = "position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;align-items:center;gap:12px;padding:10px 16px;border-radius:8px;font-size:13px;font-family:system-ui,sans-serif;color:#fff;background:#1e1e2e;border:1px solid #444;box-shadow:0 8px 24px rgba(0,0,0,0.35);pointer-events:auto;opacity:0;transition:opacity 0.2s;"
+
+		  const msg = document.createElement("span")
+		  msg.textContent = "Detached from " + payload.detachedFrom + "."
+		  toast.appendChild(msg)
+
+		  const uses = typeof payload.tokenUses === "number" ? payload.tokenUses : 0
+		  const btn = document.createElement("button")
+		  btn.textContent = "Change the token instead" + (uses > 0 ? " (" + uses + " place" + (uses === 1 ? "" : "s") + ")" : "")
+		  btn.style.cssText = "all:unset;cursor:pointer;color:#0b7aff;font-weight:500;white-space:nowrap;"
+		  btn.addEventListener("click", () => {
+		    bridge.send({
+		      type: "promote-token",
+		      payload: {
+		        token: payload.detachedFrom,
+		        hex: lastPickedHex || "",
+		        filePath: target.filePath,
+		        lineNumber: target.lineNumber || 0,
+		        caretId: target.caretId || "",
+		      },
+		    })
+		    toast.remove()
+		  })
+		  toast.appendChild(btn)
+
+		  document.body.appendChild(toast)
+		  requestAnimationFrame(() => { toast.style.opacity = "1" })
+		  setTimeout(() => {
+		    if (!toast.isConnected) return
+		    toast.style.opacity = "0"
+		    setTimeout(() => toast.remove(), 200)
+		  }, 8000)
 		}
 
 		function showAiEditFallback(errorMessage: string) {
@@ -2744,7 +2802,15 @@ function generateCaretGrabPlugin(): string {
 		    if (editPillEngaged()) return
 		    if (payload.success) {
 		      log("edit-result: SUCCESS")
-		      showToast("Edit applied", "success")
+		      if (payload.detachedFrom) {
+		        showDetachToast(payload)
+		      } else if (payload.boundTo) {
+		        const stale = document.getElementById("caret-detach-toast")
+		        if (stale) stale.remove()
+		        showToast("Matched " + payload.boundTo + " — bound to the token", "success")
+		      } else {
+		        showToast("Edit applied", "success")
+		      }
 		    } else if (payload.suggestAiEdit && lastResolvedSource) {
 		      logError("edit-result: FAILED (suggesting AI edit) -", payload.error)
 		      showAiEditFallback(payload.error || "This content can't be edited inline.")
@@ -2968,8 +3034,14 @@ function generateCaretGrabPlugin(): string {
 		          const lineNumber = source?.lineNumber || 0
 		          log("edit-color action:", filePath, "line:", lineNumber)
 
+		          // The runtime is the only honest source for the starting colour — a
+		          // token class (bg-brand-500) carries no parseable hex. But a fully
+		          // transparent background is "no background", not black: fall through
+		          // to the text colour rather than opening the picker on #000000.
 		          const computed = window.getComputedStyle(el)
-		          const currentColor = computed.backgroundColor || computed.color || "#000000"
+		          const bg = computed.backgroundColor
+		          const bgTransparent = !bg || bg === "transparent" || /rgba\\([^)]*,\\s*0\\)\\s*$/.test(bg)
+		          const currentColor = (bgTransparent ? computed.color : bg) || "#000000"
 
 		          const toHex = (c: string): string => {
 		            const m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/)
@@ -2986,6 +3058,7 @@ function generateCaretGrabPlugin(): string {
 		          document.body.appendChild(input)
 
 		          input.addEventListener("input", (e) => {
+		            lastPickedHex = (e.target as HTMLInputElement).value
 		            bridge.send({
 		              type: "inline-edit",
 		              payload: {
@@ -2993,7 +3066,7 @@ function generateCaretGrabPlugin(): string {
 		                filePath,
 		                lineNumber,
 		                oldValue: "",
-		                newValue: (e.target as HTMLInputElement).value,
+		                newValue: lastPickedHex,
 		                caretId: el.getAttribute("data-caret-id") || "",
 		              },
 		            })

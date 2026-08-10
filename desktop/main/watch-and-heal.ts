@@ -21,9 +21,9 @@ import chokidar, { type FSWatcher } from "chokidar"
 import * as path from "path"
 
 import { assetIndexPath, reindexAssets, writeThemeCss } from "../../src/core/design"
+import { recordEdit } from "../../src/core/design/provenance"
 import { precomputeAndApply } from "../../src/core/design/visual-editing/post-generation-hook"
 import { Logger } from "../../src/shared/services/Logger"
-import { recordEdit } from "./provenance"
 import { regenerateRulesFiles } from "./rules/generate"
 
 /**
@@ -48,6 +48,8 @@ const IGNORED = [
 	// Caret's own scratch, rewritten on every interview step. Not design content,
 	// and waking the healer once per answered question is work for nothing.
 	"**/.caret/.interview.json",
+	// Correction-offer bookkeeping — observation, like the provenance log.
+	"**/.caret/.corrections-state.json",
 	// Poster frames Caret extracts from videos. Derived from the asset beside
 	// them, so they are neither design content nor something to index as assets
 	// in their own right — a poster with its own @tag would be a second name for
@@ -169,6 +171,20 @@ export class WatchAndHeal {
 			return
 		}
 
+		if (isPromotedRules(filePath)) {
+			// Promoted rules are always-on context, same stakes as the tokens: a
+			// stale rules file silently drops a correction the user promoted. The
+			// change may come from Caret's own promote, a hand edit, or a git pull —
+			// all of them must reach the generated files.
+			if (!wasSelfWrite) {
+				await recordEdit(this.options.projectPath, { actor: "external", action, file: filePath })
+			}
+			await regenerateRulesFiles(this.options.projectPath).catch((err) =>
+				Logger.warn(`[heal] could not regenerate rules files: ${err}`),
+			)
+			return
+		}
+
 		if (isAssetFile(filePath)) {
 			await this.onAssetsChanged(filePath, action, wasSelfWrite)
 			return
@@ -284,6 +300,11 @@ function isHealable(filePath: string): boolean {
 
 function isFoundationTokens(filePath: string): boolean {
 	return filePath.split(path.sep).join("/").endsWith("/.caret/tokens/foundation.json")
+}
+
+/** The promoted-rules store (`.caret/rules.json`) — versioned design content. */
+function isPromotedRules(filePath: string): boolean {
+	return filePath.split(path.sep).join("/").endsWith("/.caret/rules.json")
 }
 
 /**

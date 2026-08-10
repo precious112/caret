@@ -20,7 +20,7 @@ import * as os from "os"
 import * as path from "path"
 
 import { mutateFlowDefinition } from "../src/core/design/flow-meta"
-import { generateEntryFiles } from "../src/core/design/rendering-shell/entry-template"
+import { generateEntryFiles, writeThemeCss } from "../src/core/design/rendering-shell/entry-template"
 import { generateViteConfig } from "../src/core/design/rendering-shell/vite-config-template"
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
 import { solidPng } from "./verify-support"
@@ -1134,6 +1134,71 @@ async function main() {
 		if (!state.value?.includes("@hero-shot")) throw new Error(`the pick did not reach the box: ${JSON.stringify(state)}`)
 
 		return `picked inside react-grab's shadow-root box: "${state.value}", no discard prompt`
+	})
+
+	await scenario("t. a token edit restyles a bound page live, with no reload", async () => {
+		// Phase 7's live bindings: pages reference `text-brand-500`, the theme
+		// defines it from foundation.json, and editing the token restyles every
+		// bound element via one CSS hot update. Runs last — it rewrites a fixture
+		// page and the foundation.
+		const foundationPath = path.join(caretDir, "tokens", "foundation.json")
+		const foundation = JSON.parse(await fs.readFile(foundationPath, "utf-8"))
+		foundation.color.brand.scale = { "500": "#0b7aff" }
+		foundation.color.neutral.scale = { "600": "#5b6472" }
+		foundation.typography.scale = { base: 16, "2xl": 31.25 }
+		await fs.writeFile(foundationPath, JSON.stringify(foundation, null, 2))
+		// What the desktop watcher does on every foundation change.
+		await writeThemeCss(caretDir)
+
+		const themeCss = await fs.readFile(path.join(caretDir, "caret-theme.css"), "utf-8")
+		for (const expected of [
+			"--color-brand-500: #0b7aff;",
+			"--color-neutral-600: #5b6472;",
+			"--text-2xl: 31.25px;",
+			"--radius-lg: 8px;",
+		]) {
+			if (!themeCss.includes(expected)) throw new Error(`caret-theme.css is missing ${expected}`)
+		}
+
+		// Bind an element to the token; HMR delivers the page edit.
+		const aboutPath = path.join(caretDir, "pages", "about", "index.tsx")
+		const aboutSource = await fs.readFile(aboutPath, "utf-8")
+		await fs.writeFile(
+			aboutPath,
+			aboutSource.replace('<p className="text-zinc-600">', '<p data-testid="bound-copy" className="text-brand-500">'),
+		)
+
+		const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+		await page.goto(`http://localhost:${port}/?page=about`)
+		await page.waitForSelector('[data-testid="bound-copy"]', { timeout: 15000 })
+		await waitFor(
+			async () =>
+				(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="bound-copy"]')!).color)) ===
+				"rgb(11, 122, 255)",
+			15000,
+			"text-brand-500 to resolve to the foundation's own colour",
+		)
+
+		// A full reload would clear this — the point is a LIVE binding.
+		await page.evaluate(() => {
+			;(window as any).__NO_RELOAD__ = true
+		})
+
+		foundation.color.brand.scale["500"] = "#dc2626"
+		await fs.writeFile(foundationPath, JSON.stringify(foundation, null, 2))
+		await writeThemeCss(caretDir)
+
+		await waitFor(
+			async () =>
+				(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="bound-copy"]')!).color)) ===
+				"rgb(220, 38, 38)",
+			15000,
+			"the bound element to follow the token edit",
+		)
+		const survived = await page.evaluate(() => (window as any).__NO_RELOAD__ === true)
+		await page.close()
+		if (!survived) throw new Error("the colour changed, but via a full reload — that is not a live binding")
+		return "text-brand-500 followed a token edit through one CSS hot update, no reload"
 	})
 
 	await browser.close()

@@ -11,13 +11,24 @@ import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
 import type { AgentTask } from "../agent/bridge"
+import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
+import { addPromotedRule } from "../promoted-rules"
+import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
+import { readFoundationTokens, writeFoundationTokens } from "../tokens"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { buildVisualEditPrompt } from "../visual-editing/context-builder"
 import { precomputePage } from "../visual-editing/page-precompute"
 import { precomputeAndApply } from "../visual-editing/post-generation-hook"
+import {
+	countTokenUses,
+	foundationTokenForClass,
+	setFoundationTokenValue,
+	tokenClassForHex,
+} from "../visual-editing/token-colors"
+import { writeThemeCss } from "./entry-template"
 import type {
 	AiEditRequestPayload,
 	DesignInboundMessage,
@@ -26,6 +37,7 @@ import type {
 	FlowEdgeUpdatePayload,
 	InlineEditPayload,
 	OverlayEditPayload,
+	PromoteTokenPayload,
 } from "./messages"
 import { isValidDesignMessagePayload } from "./messages"
 
@@ -44,7 +56,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 	return { handle: (message) => handleMessage(message, deps) }
 }
 
-function sendEditResult(workspacePath: string, payload: { success: boolean; error?: string; suggestAiEdit?: boolean }): void {
+function sendEditResult(workspacePath: string, payload: import("./messages").EditResultPayload): void {
 	hostFor(workspacePath).sendToCanvas({ source: "caret-host", type: "edit-result", payload })
 }
 
@@ -82,7 +94,17 @@ async function resolveCaretPath(filePath: string, workspacePath: string): Promis
 	if (!filePath) return filePath
 	const caretDir = path.join(workspacePath, ".caret")
 
-	if (path.isAbsolute(filePath) && filePath.startsWith(caretDir)) return filePath
+	if (path.isAbsolute(filePath)) {
+		if (filePath.startsWith(caretDir)) return filePath
+		// The fiber reports sources through RESOLVED symlinks while the project
+		// may have been opened through an alias (macOS: /var → /private/var, and
+		// /tmp likewise). A prefix test on the raw strings concludes the file is
+		// foreign and mangles the path — compare realpaths before giving up.
+		try {
+			const [realFile, realCaret] = await Promise.all([fs.realpath(filePath), fs.realpath(caretDir)])
+			if (realFile.startsWith(realCaret)) return filePath
+		} catch {}
+	}
 
 	const relative = filePath.startsWith("/") ? filePath.slice(1) : filePath
 
@@ -170,6 +192,11 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 			await deps.onSyncRequested()
 			break
 
+		case "promote-token":
+			message.payload.filePath = await resolveCaretPath(message.payload.filePath, workspacePath)
+			await handlePromoteToken(message.payload, workspacePath)
+			break
+
 		case "edit-cancel":
 			await editLaneFor(workspacePath)?.cancel()
 			break
@@ -191,6 +218,17 @@ async function handleAiEdit(payload: AiEditRequestPayload, workspacePath: string
 				context: { filePath: payload.filePath, caretId: payload.caretId },
 			})
 		) {
+			// The instruction is the user's own correction, in their own words —
+			// the raw material for "you've asked for this three times".
+			void recordEdit(workspacePath, {
+				actor: "inline",
+				action: "write",
+				file: payload.filePath,
+				param: payload.caretId,
+				note: "ai-edit instruction",
+				detail: { kind: "instruction", text: payload.instruction },
+			})
+			void maybeOfferCorrections(workspacePath)
 			sendEditResult(workspacePath, { success: true })
 		}
 	} catch (err) {
@@ -230,6 +268,14 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 				context: { region: payload.regionBounds },
 			})
 		) {
+			void recordEdit(workspacePath, {
+				actor: "inline",
+				action: "write",
+				file: resolvedFilePath || ".caret",
+				note: "overlay instruction",
+				detail: { kind: "instruction", text: payload.instruction },
+			})
+			void maybeOfferCorrections(workspacePath)
 			sendEditResult(workspacePath, { success: true })
 		}
 	} catch (err) {
@@ -241,8 +287,14 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 
 async function handleInlineEdit(payload: InlineEditPayload, workspacePath: string): Promise<void> {
 	try {
+		if (payload.editType === "color") {
+			await handleColorEdit(payload, workspacePath)
+			return
+		}
+
 		// Serialized per file: rapid successive edits (or an edit racing the
 		// precompute hook) must never interleave read-modify-writes.
+		hostFor(workspacePath).noteSelfWrite(payload.filePath)
 		const success = await runExclusive(payload.filePath, async () => {
 			if (payload.editType === "text") {
 				return editJSXText(
@@ -254,9 +306,6 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 					payload.caretId,
 				)
 			}
-			if (payload.editType === "color") {
-				return editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId)
-			}
 			if (payload.editType === "image") {
 				return handleImageEdit(payload, workspacePath)
 			}
@@ -264,6 +313,15 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 		})
 
 		if (success) {
+			void recordEdit(workspacePath, {
+				actor: "inline",
+				action: "write",
+				file: payload.filePath,
+				param: payload.caretId,
+				oldValue: payload.oldValue || undefined,
+				newValue: payload.newValue,
+				note: payload.editType,
+			})
 			sendEditResult(workspacePath, { success: true })
 		} else {
 			sendEditResult(workspacePath, {
@@ -275,6 +333,204 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Inline edit failed: ${errorMsg}`)
+		sendEditResult(workspacePath, { success: false, error: errorMsg })
+	}
+}
+
+/**
+ * The colour write policy, settled in Phase 7: an inline gesture points at ONE
+ * element, so the default is detach — a wrong detach hits one element and is
+ * visible immediately, a wrong token edit silently changes every use. Two
+ * refinements keep the token system from eroding:
+ *
+ *  - **Bind on exact match.** A picked colour that IS a token's value writes
+ *    the token class, not a magic number that happens to equal it today.
+ *  - **Detach is promotable.** Replacing a token class reports what was
+ *    detached and how many places the token reaches, so the canvas can offer
+ *    "change the token instead" as one click rather than a modal in the way.
+ */
+async function handleColorEdit(payload: InlineEditPayload, workspacePath: string): Promise<void> {
+	try {
+		const tokens = await readFoundationTokens(workspacePath)
+		const bindTo = tokenClassForHex(payload.newValue, tokens) ?? undefined
+
+		hostFor(workspacePath).noteSelfWrite(payload.filePath)
+		const result = await runExclusive(payload.filePath, () =>
+			editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId, bindTo),
+		)
+
+		if (!result.ok) {
+			sendEditResult(workspacePath, {
+				success: false,
+				error: "This content can't be edited inline — it may use dynamic expressions. Use AI Edit to describe the change you want.",
+				suggestAiEdit: true,
+			})
+			return
+		}
+
+		const editTarget = { filePath: payload.filePath, lineNumber: payload.lineNumber, caretId: payload.caretId }
+		if (bindTo) {
+			void recordEdit(workspacePath, {
+				actor: "inline",
+				action: "write",
+				file: payload.filePath,
+				param: payload.caretId,
+				newValue: payload.newValue,
+				detail: { kind: "color-bind", token: bindTo },
+			})
+			sendEditResult(workspacePath, { success: true, boundTo: bindTo, editTarget })
+			return
+		}
+
+		const detachedFrom = result.replacedClass ? foundationTokenForClass(result.replacedClass, tokens) : null
+		if (detachedFrom) {
+			void recordEdit(workspacePath, {
+				actor: "inline",
+				action: "write",
+				file: payload.filePath,
+				param: payload.caretId,
+				oldValue: result.replacedClass,
+				newValue: payload.newValue,
+				detail: { kind: "color-detach", token: detachedFrom, hex: payload.newValue },
+			})
+			// +1: the scan runs after the detach, so the element in hand no longer
+			// counts itself — but promoting re-binds it, so it is part of the reach.
+			const uses = await countTokenUses(path.join(workspacePath, ".caret"), detachedFrom)
+			sendEditResult(workspacePath, { success: true, detachedFrom, tokenUses: uses.occurrences + 1, editTarget })
+			void maybeOfferCorrections(workspacePath)
+			return
+		}
+
+		void recordEdit(workspacePath, {
+			actor: "inline",
+			action: "write",
+			file: payload.filePath,
+			param: payload.caretId,
+			newValue: payload.newValue,
+			detail: { kind: "color", hex: payload.newValue },
+		})
+		sendEditResult(workspacePath, { success: true, editTarget })
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err)
+		Logger.error(`[design] Colour edit failed: ${errorMsg}`)
+		sendEditResult(workspacePath, { success: false, error: errorMsg })
+	}
+}
+
+/**
+ * Correction capture: when the log shows the SAME correction made repeatedly,
+ * offer to promote it — a colour into the token, an instruction into the
+ * always-on rules. One offer at a time, each raised exactly once; an explicit
+ * "no" is remembered so the offer never nags.
+ */
+async function maybeOfferCorrections(workspacePath: string): Promise<void> {
+	try {
+		const records = await readProvenance(workspacePath)
+		const signals = await pendingSignals(workspacePath, records)
+		const signal = signals[0]
+		if (!signal) return
+
+		const key = signalKey(signal)
+		await markSignal(workspacePath, key, "offered")
+		const host = hostFor(workspacePath)
+
+		if (signal.kind === "token") {
+			const across = signal.places.length > 1 ? ` across ${signal.places.length} places` : ""
+			const choice = await host.notify(
+				"info",
+				`You've overridden ${signal.token} to ${signal.hex} ${signal.count} times${across}. Change the token itself so every use follows?`,
+				["Change the token", "Keep as one-offs"],
+			)
+			if (choice === "Change the token") {
+				await applyTokenCorrection(workspacePath, signal.token, signal.hex, signal.places)
+			} else if (choice === "Keep as one-offs") {
+				await markSignal(workspacePath, key, "dismissed")
+			}
+			return
+		}
+
+		const choice = await host.notify(
+			"info",
+			`You've asked for this ${signal.count} times: "${signal.instruction}". Make it a standing rule every agent sees?`,
+			["Add to the rules", "Not a rule"],
+		)
+		if (choice === "Add to the rules") {
+			await addPromotedRule(workspacePath, signal.instruction, "correction")
+			Logger.info(`[design] promoted a repeated instruction into .caret/rules.json`)
+		} else if (choice === "Not a rule") {
+			await markSignal(workspacePath, key, "dismissed")
+		}
+	} catch (err) {
+		// Offers are opportunistic — a failure here must never break the edit
+		// that triggered the look.
+		Logger.warn(`[design] correction offer failed: ${err}`)
+	}
+}
+
+/** Repoints the token, regenerates the theme, and re-binds the recorded places. */
+async function applyTokenCorrection(workspacePath: string, token: string, hex: string, places: string[]): Promise<void> {
+	const tokens = await readFoundationTokens(workspacePath)
+	if (!tokens || !setFoundationTokenValue(tokens, token, hex)) {
+		await hostFor(workspacePath).notify("warn", `Couldn't change ${token} — the foundation no longer defines it.`)
+		return
+	}
+	hostFor(workspacePath).noteSelfWrite(path.join(workspacePath, ".caret", "tokens", "foundation.json"))
+	await writeFoundationTokens(workspacePath, tokens)
+	await writeThemeCss(path.join(workspacePath, ".caret"))
+
+	// Each detached place now carries a literal equal to the token — re-bind it
+	// so a later token edit reaches it again. Best-effort per place.
+	for (const place of places) {
+		const [file, caretId] = place.split("#")
+		if (!file || !caretId) continue
+		const absolute = path.isAbsolute(file) ? file : path.join(workspacePath, file)
+		hostFor(workspacePath).noteSelfWrite(absolute)
+		await runExclusive(absolute, () => editJSXColor(absolute, 0, hex, caretId, token)).catch(() => {})
+	}
+	Logger.info(`[design] correction promoted: ${token} → ${hex} (${places.length} place(s) re-bound)`)
+}
+
+/**
+ * "Change the token instead": repoints the foundation token at the picked
+ * colour, regenerates the theme (one CSS hot update restyles every use), and
+ * re-binds the detached element back onto the token class so the page source
+ * doesn't keep a redundant arbitrary value that equals the token.
+ */
+async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: string): Promise<void> {
+	try {
+		const tokens = await readFoundationTokens(workspacePath)
+		if (!tokens || !setFoundationTokenValue(tokens, payload.token, payload.hex)) {
+			sendEditResult(workspacePath, {
+				success: false,
+				error: `Couldn't change ${payload.token} — the foundation no longer defines that token.`,
+			})
+			return
+		}
+
+		hostFor(workspacePath).noteSelfWrite(path.join(workspacePath, ".caret", "tokens", "foundation.json"))
+		await writeFoundationTokens(workspacePath, tokens)
+		// The desktop watcher also regenerates on foundation.json changes, but the
+		// promote must not depend on a watcher being alive (the shell harness has
+		// none), and a second identical atomic write is harmless.
+		await writeThemeCss(path.join(workspacePath, ".caret"))
+
+		hostFor(workspacePath).noteSelfWrite(payload.filePath)
+		const rebound = await runExclusive(payload.filePath, () =>
+			editJSXColor(payload.filePath, payload.lineNumber, payload.hex, payload.caretId, payload.token),
+		)
+		if (!rebound.ok) {
+			Logger.warn(`[design] promote-token: token updated but re-bind of ${payload.filePath}:${payload.lineNumber} failed`)
+		}
+
+		sendEditResult(workspacePath, {
+			success: true,
+			boundTo: payload.token,
+			editTarget: { filePath: payload.filePath, lineNumber: payload.lineNumber, caretId: payload.caretId },
+		})
+		Logger.info(`[design] promote-token: ${payload.token} → ${payload.hex}`)
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err)
+		Logger.error(`[design] promote-token failed: ${errorMsg}`)
 		sendEditResult(workspacePath, { success: false, error: errorMsg })
 	}
 }

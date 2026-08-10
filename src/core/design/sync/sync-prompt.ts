@@ -185,6 +185,11 @@ Always reconcile against the CURRENT file contents — never apply a remembered 
 
 The \`data-caret-id\` attributes in the design sources are Caret's visual-editor tooling metadata (they make inline editing of the .caret/ design UIs deterministic). They have NO meaning in the shipped app — do NOT copy them into the application code. Omit them entirely when translating; carry over only real UI, content, and behavior.
 
+TOKEN TRANSLATION. Design pages style with theme tokens that exist ONLY inside .caret/ — the brand scale (\`bg-brand-500\`), the foundation's \`neutral-*\`, the semantic colours (\`text-success\` …), \`font-display\`, and foundation-driven \`text-*\`/\`rounded-*\` steps. They are defined in \`.caret/caret-theme.css\` (generated from foundation.json), which the app does not load. When translating, resolve each token by this policy:
+  1. If the app has its own design system (its own Tailwind theme, CSS variables, or token file), map onto the app's EQUIVALENT token — read the app's theme first; \`brand-500\` means "the brand colour at mid strength", not a hex to copy blindly.
+  2. If the app has no equivalent, carry the definitions across: copy the needed entries from .caret/caret-theme.css into the app's global stylesheet (as \`@theme\` entries if the app is on Tailwind v4, else as CSS variables or resolved values), so the classes you write actually resolve.
+Never ship a class that resolves to nothing — a \`bg-brand-500\` in an app whose Tailwind has no \`brand\` scale generates NO CSS and fails silently. After translating, verify every custom class you carried over is defined somewhere the app loads.
+
 Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source.
 
 ${
