@@ -19,6 +19,7 @@ import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
 
+import { DESIGN_CHECKS_DOM_SCRIPT } from "../src/core/design/design-checks"
 import { mutateFlowDefinition } from "../src/core/design/flow-meta"
 import { generateEntryFiles, writeThemeCss } from "../src/core/design/rendering-shell/entry-template"
 import { generateViteConfig } from "../src/core/design/rendering-shell/vite-config-template"
@@ -1199,6 +1200,137 @@ async function main() {
 		await page.close()
 		if (!survived) throw new Error("the colour changed, but via a full reload — that is not a live binding")
 		return "text-brand-500 followed a token edit through one CSS hot update, no reload"
+	})
+
+	await scenario("u. the variant compare surface renders takes and a click picks one", async () => {
+		// The pick half of generate-and-pick, without a model: seed two takes and
+		// the set on disk, the canvas must overlay the compare surface, keep the
+		// takes out of the grid, and post variant-pick on a real click. The apply
+		// half needs the host router and is certified in verify:app.
+		const contactDir = path.join(caretDir, "pages", "contact")
+		for (const n of [1, 2]) {
+			const dir = path.join(caretDir, "pages", `contact--v${n}`)
+			await fs.mkdir(dir, { recursive: true })
+			await fs.copyFile(path.join(contactDir, "index.tsx"), path.join(dir, "index.tsx"))
+			await fs.writeFile(
+				path.join(dir, "meta.json"),
+				JSON.stringify({
+					id: `contact--v${n}`,
+					title: `Contact — take ${n}`,
+					type: "page",
+					states: [],
+					tags: [],
+					variantOf: "contact",
+				}),
+			)
+		}
+		await fs.writeFile(
+			path.join(caretDir, ".variants.json"),
+			JSON.stringify({
+				version: 1,
+				pageId: "contact",
+				instruction: "make it feel warmer",
+				startedAt: new Date().toISOString(),
+				source: "caret",
+				variants: [
+					{ id: "contact--v1", label: "Take 1", angle: "a", status: "ready" },
+					{ id: "contact--v2", label: "Take 2", angle: "b", status: "ready" },
+				],
+			}),
+		)
+
+		const { page } = await openCanvas(ctx)
+		try {
+			await page.waitForSelector('[data-testid="variant-compare"]', { timeout: 20000 })
+			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
+			await page.waitForSelector('[data-testid="variant-use-contact--v2"]', { timeout: 10000 })
+
+			// The takes never reach the grid — they are working copies, not pages.
+			const gridTakes = await page.evaluate(
+				() =>
+					Array.from(document.querySelectorAll(".caret-canvas-frame")).filter((f) =>
+						(f.textContent || "").includes("take"),
+					).length,
+			)
+			if (gridTakes > 0) throw new Error(`${gridTakes} variant take(s) leaked into the canvas grid`)
+
+			await page.evaluate(() => {
+				;(window as any).__PICKED__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "variant-pick") (window as any).__PICKED__.push(e.data.payload?.variantId)
+				})
+			})
+			await page.click('[data-testid="variant-use-contact--v2"]')
+			await waitFor(
+				async () => ((await page.evaluate(() => (window as any).__PICKED__)) as string[]).length > 0,
+				10000,
+				"the variant-pick message",
+			)
+			const picked = (await page.evaluate(() => (window as any).__PICKED__)) as string[]
+			if (picked[0] !== "contact--v2") throw new Error(`picked "${picked[0]}", expected contact--v2`)
+
+			return `compare overlay rendered 2 takes + original, grid stayed clean, click posted variant-pick contact--v2`
+		} finally {
+			await page.close()
+			await fs.rm(path.join(caretDir, ".variants.json"), { force: true })
+			await fs.rm(path.join(caretDir, "pages", "contact--v1"), { recursive: true, force: true })
+			await fs.rm(path.join(caretDir, "pages", "contact--v2"), { recursive: true, force: true })
+		}
+	})
+
+	await scenario("v. the design-check script finds planted slop tells in a real render", async () => {
+		// The checker's DOM half runs inside pages Caret does not control, so it
+		// is certified against a real browser render, not a DOM stub. One page,
+		// four planted tells; each must be found and nothing else may crash.
+		const flawedDir = path.join(caretDir, "pages", "flawed")
+		await fs.mkdir(flawedDir, { recursive: true })
+		await fs.writeFile(
+			path.join(flawedDir, "index.tsx"),
+			`export default function Flawed() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <h1 className="text-2xl font-bold text-zinc-900">Flawed</h1>
+      <div style={{ width: 320, height: 200, background: "#d4d4d4" }} />
+      <img src="/caret-assets/hero-shot.png" style={{ width: 600 }} />
+      <div>
+        <div className="p-4">Exactly the same testimonial text repeated here</div>
+        <div className="p-4">Exactly the same testimonial text repeated here</div>
+        <div className="p-4">A different card so the container has three children</div>
+      </div>
+    </div>
+  )
+}
+`,
+		)
+		await fs.writeFile(
+			path.join(flawedDir, "meta.json"),
+			JSON.stringify({ id: "flawed", title: "Flawed", type: "page", states: [], tags: [] }),
+		)
+
+		const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+		try {
+			await waitFor(
+				async () => {
+					await page.goto(`http://localhost:${port}/?page=flawed`).catch(() => {})
+					return await page.evaluate(() => !!document.querySelector("img")).catch(() => false)
+				},
+				20000,
+				"the flawed page to render",
+			)
+			await page.waitForFunction(() => [...document.images].every((img) => img.complete), { timeout: 10000 })
+
+			const findings = (await page.evaluate(DESIGN_CHECKS_DOM_SCRIPT)) as Array<{ check: string; severity: string }>
+			const found = new Set(findings.map((f) => f.check))
+			for (const expected of ["placeholder-box", "missing-alt", "image-upscaled", "identical-cards"]) {
+				if (!found.has(expected)) {
+					throw new Error(`planted "${expected}" was not found — findings: ${JSON.stringify(findings)}`)
+				}
+			}
+			return `found all four planted tells: ${[...found].join(", ")}`
+		} finally {
+			await page.close()
+			await fs.rm(flawedDir, { recursive: true, force: true })
+		}
 	})
 
 	await browser.close()

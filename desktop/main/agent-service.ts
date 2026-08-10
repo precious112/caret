@@ -19,6 +19,8 @@ import {
 	EditLaneBridge,
 	type EditStatus,
 	getBackend,
+	type RunOutcome,
+	type RunRequest,
 	setProjectBridge,
 	setProjectConversation,
 	setProjectEditLane,
@@ -33,6 +35,12 @@ export interface AgentServiceOptions {
 	onState(state: ConversationState): void
 	/** Narrates canvas-initiated edits to the canvas pill. */
 	onEditStatus(status: EditStatus): void
+	/**
+	 * Fired when any lane's turn settles — the acceptance checker's hook. The
+	 * conversation is passed so the checker can feed findings back into the very
+	 * session that produced them.
+	 */
+	onTurnComplete?(conversation: AgentConversation, outcome: RunOutcome, request: RunRequest): void
 }
 
 export class AgentService {
@@ -59,6 +67,7 @@ export class AgentService {
 			setAppWrites: (policy) => this.setAppWrites(policy),
 			systemPrompt: () => this.systemPrompt(),
 			onChange: (state) => options.onState(state),
+			onTurnComplete: (outcome, request) => options.onTurnComplete?.(this.conversation, outcome, request),
 		})
 
 		this.editLane = new EditLaneBridge(
@@ -75,6 +84,7 @@ export class AgentService {
 			setAppWrites: (policy) => this.setAppWrites(policy),
 			systemPrompt: () => this.systemPrompt(),
 			onChange: (state) => this.editLane.handleState(state),
+			onTurnComplete: (outcome, request) => options.onTurnComplete?.(this.editConversation, outcome, request),
 		})
 
 		// The bridge is what every outbound feature already calls. Swapping the

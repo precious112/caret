@@ -105,6 +105,43 @@ describe("precomputePage — inline style conversion", () => {
 		result.correctedSource!.should.containEql("style=")
 	})
 
+	it("removes CONVERTED properties from a kept style attribute — a partial conversion must be idempotent", () => {
+		// The healer write-loop this pins: converted properties left inside the
+		// style object were re-converted on every pass, appending the same
+		// classes forever (`w-[320px] h-[200px] w-[320px] …`) and turning any
+		// page with a half-convertible style into an endless heal→write cycle.
+		const source = `export default function Page() {
+  return <div style={{ width: 320, backdropFilter: "blur(4px)" }}>Box</div>
+}`
+		const first = precomputePage(source, "test.tsx")
+		first.modified.should.be.true()
+		first.correctedSource!.should.containEql("w-[320px]")
+		first.correctedSource!.should.containEql("backdropFilter")
+		first.correctedSource!.should.not.containEql("width: 320")
+
+		const second = precomputePage(first.correctedSource!, "test.tsx")
+		second.modified.should.be.false()
+	})
+
+	it("writes px for numeric lengths and converts the background shorthand only for plain colours", () => {
+		const source = `export default function Page() {
+  return (
+    <div>
+      <div style={{ width: 320, height: 200, background: "#d4d4d4" }}>A</div>
+      <div style={{ background: "linear-gradient(#000, #fff)" }}>B</div>
+    </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql("w-[320px]")
+		result.correctedSource!.should.containEql("h-[200px]")
+		result.correctedSource!.should.containEql("bg-[#d4d4d4]")
+		// The gradient is not a colour class's job — it stays inline.
+		result.correctedSource!.should.containEql("linear-gradient")
+		result.correctedSource!.should.not.containEql("bg-[linear")
+	})
+
 	it("should convert numeric values", () => {
 		const source = `export default function Page() {
   return <div style={{ zIndex: 10, opacity: 0.5 }}>Box</div>

@@ -50,6 +50,11 @@ const IGNORED = [
 	"**/.caret/.interview.json",
 	// Correction-offer bookkeeping — observation, like the provenance log.
 	"**/.caret/.corrections-state.json",
+	// The generate-and-pick set's own state. The variant PAGES are healable
+	// pages and deliberately not ignored; the scratch is Caret's bookkeeping.
+	"**/.caret/.variants.json",
+	// The checker's latest results — derived observation, rewritten per run.
+	"**/.caret/.checks-results.json",
 	// Poster frames Caret extracts from videos. Derived from the asset beside
 	// them, so they are neither design content nor something to index as assets
 	// in their own right — a poster with its own @tag would be a second name for

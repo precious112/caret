@@ -30,12 +30,17 @@ export interface SyncPromptInput {
  * The AI reads the specific page `index.tsx` files it needs on demand.
  */
 async function buildInventory(workspacePath: string): Promise<string> {
-	const [pages, flows, tokens, assets] = await Promise.all([
+	const [allPages, flows, tokens, assets] = await Promise.all([
 		listPages(workspacePath),
 		listFlows(workspacePath),
 		readFoundationTokens(workspacePath),
 		readAssetIndex(workspacePath).catch(() => ({ version: 1 as const, assets: [] })),
 	])
+
+	// Variant takes never sync: they are transient working copies of a pick in
+	// progress, and their dirs are gitignored so the worklist can't see them
+	// either — this keeps the inventory consistent with that.
+	const pages = allPages.filter((p) => !p.variantOf)
 
 	// All of this is AI-generated/edited and may be missing fields — stay defensive
 	// so the sync prompt never crashes on an incomplete meta.json / flow / tokens file.

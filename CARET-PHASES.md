@@ -545,8 +545,10 @@ of asked one by one). Freedom over content, none over presentation.
 - [x] Three tabs on the Foundation surface: **Interview** (the wizard, default) ·
       **Presets** (the 2026-08-03 deterministic flow, kept for full-control users) ·
       **By hand** (token editor). The MCP interview tools stay as the external-agent path.
-- [ ] Re-runnable with blast radius shown — needs Phase 7's live bindings; re-running today
-      overwrites, so the surface warns before the first commit rather than after.
+- [x] Re-runnable with blast radius shown — landed with Phase 7's live bindings: the
+      Foundation surface measures and states the reach ("restyles N token-bound styles across
+      M files instantly") before a re-run, and committing new tokens restyles every bound page
+      through the theme rather than overwriting dead values.
 
 **Gate (working-agreement exception 2) — PASSED 2026-08-07.** The user ran the wizard on a real
 project and was satisfied with the foundations it produced. Re-opened only if more complex
@@ -741,51 +743,66 @@ needing an API key for anything but photographs.
 
 ---
 
-## [ ] Phase 7: Make corrections stick
+## [x] Phase 7: Make corrections stick
 
 **The differentiator.** Everything here exists to stop the user fixing the same thing twice.
 Nothing in this phase is possible for a tool that regenerates from scratch each session.
 
-**Design session required before implementation** — these bullets are direction, not spec
-(CARET-V2-PLAN §1 marks this phase "designed together"). Do not build from the checklist alone.
+*(The design-session gate was waived 2026-08-10 — the user directed Phases 7–10 to be built
+and e2e-certified autonomously, with their involvement reserved for 7.5's curation gate.)*
 
-- [ ] **Tokens become live bindings.** Generate Tailwind `@theme` from `foundation.json`, so
-      pages reference `bg-brand-500` rather than a copied hex. Today `design_layer.ts:110`
-      instructs the agent to inline the value, which means editing a token changes nothing
-      already generated. Includes typography; font *loading* moves out of per-component
-      `@import` into the generated entry CSS. Open for the design session: what sync writes
-      when the app has its own design system — map `brand-*` onto the app's tokens where an
-      equivalent exists, else emit the generated `@theme` into the app's entry CSS; never ship
-      a class that resolves to nothing.
-- [ ] **Corrections get captured.** When the user overrides the same thing repeatedly by hand,
-      offer to promote it — into a token, or into the always-on rules. This is the direct fix
-      for "next session it makes them again", and it is the single highest-value item in the
-      plan. Mines the Phase 6 edit-provenance log; promotions land in the generated rules
-      files, so they reach every future agent session.
-- [ ] **Rules are versioned with the design.** They live in `.caret/`, under git, reviewable in
-      a PR, and travel with the project.
-- [ ] **Generate-and-pick.** For anything that cannot be said precisely in words, N variants
-      render and the user points at one. Pointing needs no design vocabulary, which is exactly
-      right for a non-designer. Replit ships this as "Ambient Intelligence"; treat it as table
-      stakes rather than a novelty. Plumbing: somewhere for variants to render (variant pages
-      or page states) and a compare-and-pick canvas surface. **Primary path: Caret orchestrates
-      it directly on the 6.4 backend** — N sessions or N turns, one per variant, no cooperation
-      required. A `propose_variants` MCP tool + rules-file instruction remains for external
-      agents, which Caret can only make it easy and expected for, not force.
-- [ ] **A deterministic acceptance checker Caret runs** — not an agent honor-system self-check
-      (an agent that must *choose* to self-check will not; same failure mode as pull-only
-      `get_guide`). Most slop tells are computable on the rendered page: contrast (axe-core),
-      identical card rows (DOM structure comparison), a border on everything (count), missing
-      focus/empty/error states (page-states metadata). **Caret runs it after every backend
-      session that wrote pages and feeds failures back into the session** — the owned loop
-      means the checker is enforced, not requested. It is also exposed as a `run_design_checks`
-      MCP tool the rules files tell external agents to call before finishing, and surfaced on
-      the canvas regardless of whether anything called it. The slop-tell list is versioned in `.caret/` and
-      extensible by captured corrections. **Gains asset checks once 6.6 lands:** a placeholder
-      element where an asset was asked for, a missing `alt`, and an image whose intrinsic size
-      is wildly mismatched to its rendered box — all computable, all common.
+- [x] **Tokens become live bindings.** The generated theme (`caret-theme.css`) now carries the
+      FULL foundation: brand + neutral scales (the foundation's neutral shadows Tailwind's
+      stock grey), semantic colours, both typefaces, the type scale with per-size leading, and
+      radius steps — so a token edit restyles every bound page through one CSS hot update, no
+      rewrites. Font loading was already in the generated entry CSS. The colour write policy
+      follows the gesture: inline edits **detach** by default (blast-radius asymmetry), **bind
+      automatically** when the picked hex exactly equals a token, and a detach from a token
+      offers *"Change the token instead (N places)"* — accepting repoints `foundation.json`,
+      regenerates the theme, and re-binds the element. Sync adopted the policy as written: map
+      onto the app's own tokens where an equivalent exists, else carry the theme definitions
+      across — never ship a class that resolves to nothing (stated in the sync prompt, with
+      the resolved values readable from `caret-theme.css`). This also closed 6.5's re-run
+      item: the Foundation surface now shows the measured blast radius before a re-run.
+- [x] **Corrections get captured.** Provenance moved into the core so inline edits record as
+      the user's own hand with structured detail (`color-detach token→hex`, instructions
+      verbatim) — the watcher no longer mislabels them "external". Mining is deterministic:
+      the same token detached to the same colour twice raises a one-time offer (notification
+      with real buttons); accepting repoints the token AND re-binds every recorded place. The
+      same instruction given three times offers promotion into the standing rules. Explicit
+      "no" is remembered per exact signal; offers never nag.
+- [x] **Rules are versioned with the design.** Promoted rules live in `.caret/rules.json`
+      under git; the healer regenerates AGENTS.md / CLAUDE.md / the Cursor rules from it
+      whoever writes it (Caret's promote, a hand edit, a git pull), and the guide injects the
+      standing corrections into every embedded session's system prompt. The check list
+      (`.caret/checks.json`) is versioned on the same grounds.
+- [x] **Generate-and-pick.** The ×3 button beside every instruction box (overlay editor and
+      the fallback card): Caret copies the page into three real variant pages, runs one
+      independent **unattended** edit-lane turn per take — each pushed toward a different
+      reading (restrained / bolder / structural) — and the compare surface renders original +
+      takes as live iframes over whatever mode is up. The user points; the winner's source
+      replaces the page; every take is cleaned up. Variant pages are gitignored
+      (`pages/*--v<n>`) and excluded from the grid, the rules context and the sync inventory.
+      `propose_variants` + a rules-file instruction carry the same pick surface for external
+      agents. **Unattended turns auto-deny promptable permissions with the reason on record** —
+      found live: a take deadlocked on `git status` behind the compare overlay, a question
+      nobody could see.
+- [x] **A deterministic acceptance checker Caret runs.** Contrast (axe-core, injected into an
+      isolated render), identical card rows, border-on-everything, missing `alt`, images
+      stretched past their pixels, grey placeholder boxes (the 6.6 asset checks), and
+      happy-path-only state declarations. Runs after **every backend session that wrote
+      pages** (`onTurnComplete` on both lanes) and feeds *errors* back into the same session
+      exactly once — warnings surface but never spend a model turn. Also runs on project
+      open, is exposed as `run_design_checks` (with the rules files telling external agents
+      to call it before finishing), and the canvas shows a findings chip + detail panel
+      whether or not anything asked. The list is versioned in `.caret/checks.json`; disabling
+      a check is a reviewable design decision.
 
 **Deliverable:** a correction made once is a correction the agent respects from then on.
+Certified: verify:design-shell 23/23 (live re-bind, compare surface, check script against a
+real render); verify:app scenarios bn/bo/bp/bq/br (detach→promote by click, repeated-correction
+offer, rules delivery, three live takes → pick → apply on the real backend, checks over MCP +
+the unasked canvas chip).
 
 ---
 

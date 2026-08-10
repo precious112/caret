@@ -29,6 +29,7 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { AgentService } from "./agent-service"
+import { DesignChecksService } from "./design-checks"
 import { createElectronDesignHost } from "./electron-host"
 import { CaretMcpServer } from "./mcp/server"
 import { migrateProject } from "./migrate"
@@ -59,6 +60,7 @@ export class ProjectWindow {
 
 	private canvas: WebContentsView | null = null
 	private agent: AgentService
+	private checks: DesignChecksService
 	private session: DesignSession
 	private mcp: CaretMcpServer
 	private healer: WatchAndHeal
@@ -96,6 +98,11 @@ export class ProjectWindow {
 			}),
 		})
 
+		this.checks = new DesignChecksService({
+			projectPath: this.projectPath,
+			baseUrl: () => this.session.getUrl(),
+		})
+
 		// Constructed before the session, because registering the bridge is what
 		// makes every outbound feature stop refusing.
 		this.agent = new AgentService({
@@ -104,6 +111,10 @@ export class ProjectWindow {
 			// The pill lives where the intent was expressed: in the canvas, not the
 			// chat. This is the entire live surface a canvas edit gets.
 			onEditStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "edit-status", payload: status }),
+			// The owned loop is what makes the checker ENFORCED rather than
+			// requested: every turn that wrote pages gets checked, and errors go
+			// straight back into the session that made them.
+			onTurnComplete: (conversation, outcome, request) => this.checks.afterTurn(conversation, outcome, request),
 		})
 
 		this.session = new DesignSession({
@@ -115,6 +126,7 @@ export class ProjectWindow {
 			projectPath: this.projectPath,
 			onAgentConnectionChanged: () => void this.pushState(),
 			screenshot: (pageId) => this.screenshotPage(pageId),
+			runChecks: (pageId) => this.checks.run(pageId ? [pageId] : undefined),
 			onInterviewPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
 		})
 
@@ -156,12 +168,18 @@ export class ProjectWindow {
 
 		await Promise.all([this.session.start(), this.mcp.start(), this.agent.start(), rules])
 
+		// First pass over every page, so the canvas shows check results without
+		// anything having asked — a defect that predates this session is still a
+		// defect. Backgrounded: N hidden renders must not delay the window.
+		void this.checks.run().catch((err) => Logger.warn(`[window] initial design checks failed: ${err}`))
+
 		await this.pushState()
 	}
 
 	async close(): Promise<void> {
 		if (this.closed) return
 		this.closed = true
+		this.checks.close()
 		await Promise.allSettled([this.session.stop(), this.mcp.stop(), this.healer.stop(), this.agent.close()])
 		unregisterProjectServices(this.projectPath)
 		if (!this.window.isDestroyed()) this.window.destroy()

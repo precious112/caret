@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { defaultChecksConfigJson } from "./design-checks"
 import type { FoundationTokens, SyncState } from "./types"
 
 const CARET_SUBDIRS = [
@@ -77,6 +78,9 @@ canvas-layout.json
 .provenance.jsonl
 .interview.json
 .corrections-state.json
+.variants.json
+.checks-results.json
+pages/*--v*/
 assets/.posters/
 `
 
@@ -104,6 +108,14 @@ export async function ensureCaretDirectoryExists(workspacePath: string): Promise
 	const packageJsonPath = path.join(caretDir, "package.json")
 	if (!(await fileExists(packageJsonPath))) {
 		await fs.writeFile(packageJsonPath, JSON.stringify(CARET_PACKAGE_JSON, null, 2))
+	}
+
+	// The check list is design content: which slop tells this project enforces
+	// is a decision, and seeding it makes the list visible and reviewable
+	// instead of implicit in Caret's code.
+	const checksPath = path.join(caretDir, "checks.json")
+	if (!(await fileExists(checksPath))) {
+		await fs.writeFile(checksPath, defaultChecksConfigJson())
 	}
 
 	await ensureCaretGitignore(workspacePath)

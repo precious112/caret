@@ -1174,7 +1174,8 @@ requests, cause FOUT, and can't be deduped.
 Secondary benefit: `bg-brand-500` carries semantic meaning that maps onto the app's own design
 system during sync. `bg-[#1a2b3c]` is a magic number the agent has to guess about.
 
-**Sync translation (provisional — confirm in the Phase 7 design session):** once pages say
+**Sync translation (adopted as written when Phase 7 landed, 2026-08-10 — the design-session
+gate was waived):** once pages say
 `bg-brand-500`, sync must decide what the app receives, because the app does not have Caret's
 `@theme`. Default policy: map onto the app's own design system where an equivalent token
 exists (the rules files give the agent the token table, so `brand-500` is meaningful), else

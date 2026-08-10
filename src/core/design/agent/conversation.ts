@@ -79,6 +79,13 @@ export interface ConversationDeps {
 	/** Foundations, authoring rules and the asset index, injected directly. */
 	systemPrompt(): Promise<string | undefined>
 	onChange(state: ConversationState): void
+	/**
+	 * Fired after a turn settles, successful or not. The desktop wires the
+	 * acceptance checker here — the owned loop is what makes checks ENFORCED
+	 * rather than requested, and this is the loop's seam. Never awaited by the
+	 * turn itself.
+	 */
+	onTurnComplete?(outcome: RunOutcome, request: RunRequest): void
 }
 
 export interface RunRequest {
@@ -101,6 +108,12 @@ export interface RunRequest {
 	resumeSessionId?: string
 	/** Line shown above the turn, in Caret's own voice. */
 	note?: string
+	/**
+	 * Nobody is watching this turn's prompts (a variant take running behind the
+	 * compare surface). A permission that would ASK is denied with a reason
+	 * instead — an invisible question is a deadlock, not a safeguard.
+	 */
+	unattended?: boolean
 }
 
 export interface RunOutcome {
@@ -135,6 +148,8 @@ export class AgentConversation {
 	private providerName: string | null = null
 	private blocked: string | null = null
 	private pushTimer: NodeJS.Timeout | null = null
+	/** Whether the CURRENT turn runs unattended — see {@link RunRequest.unattended}. */
+	private unattendedTurn = false
 
 	constructor(private readonly deps: ConversationDeps) {}
 
@@ -174,6 +189,7 @@ export class AgentConversation {
 		// Reset before anything async: a Stop pressed while the session is still
 		// being opened is aimed at this turn.
 		this.stopRequested = false
+		this.unattendedTurn = request.unattended === true
 
 		if (!this.activity || this.activity.kind !== request.kind || request.resumeSessionId) {
 			this.transcript = request.resumeSessionId ? this.transcript : emptyTranscript()
@@ -283,7 +299,13 @@ export class AgentConversation {
 			this.push(true)
 		}
 
-		return { ok, sessionId: session.id, text, filesChanged: [...this.transcript.files] }
+		const outcome: RunOutcome = { ok, sessionId: session.id, text, filesChanged: [...this.transcript.files] }
+		try {
+			this.deps.onTurnComplete?.(outcome, request)
+		} catch (err) {
+			Logger.warn(`[agent] onTurnComplete hook failed: ${err}`)
+		}
+		return outcome
 	}
 
 	/**
@@ -439,6 +461,23 @@ export class AgentConversation {
 		if (ruling.kind === "auto") {
 			resolvePermission(this.transcript, event.requestId, ruling.decision === "deny" ? "denied" : "allowed", ruling.reason)
 			await session.respondToPermission(event.requestId, ruling.decision)
+			this.push(true)
+			return
+		}
+
+		// An unattended turn cannot ask: the surface that would show the prompt
+		// is covered (or nobody is at it), and a question no one can see holds
+		// the take open forever — observed as a variant deadlocked on
+		// `git status`. Denied with the reason on record; the agent works with
+		// the tools that need no permission.
+		if (this.unattendedTurn) {
+			resolvePermission(
+				this.transcript,
+				event.requestId,
+				"denied",
+				"this take runs unattended — anything that would ask for permission is denied; use your read and edit tools instead",
+			)
+			await session.respondToPermission(event.requestId, "deny")
 			this.push(true)
 			return
 		}

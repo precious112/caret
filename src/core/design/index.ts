@@ -159,6 +159,27 @@ export {
 	TOKEN_SIGNAL_THRESHOLD,
 } from "./corrections"
 export {
+	BUILTIN_CHECKS,
+	CHECKS_CONFIG_FILE,
+	CHECKS_RESULTS_FILE,
+	type CheckFinding,
+	type CheckSeverity,
+	type ChecksConfig,
+	type ChecksResults,
+	checkEnabled,
+	DESIGN_CHECKS_DOM_SCRIPT,
+	defaultChecksConfigJson,
+	filterByConfig,
+	formatFeedback,
+	metaFindings,
+	type PageCheckResult,
+	pageIdsFromFiles,
+	readChecksConfig,
+	readChecksResults,
+	shouldFeedBack,
+	storeChecksResults,
+} from "./design-checks"
+export {
 	listFlows,
 	mutateFlowDefinition,
 	readFlowDefinition,
@@ -288,6 +309,20 @@ export type {
 	TypographyTokens,
 	VibeDescriptor,
 } from "./types"
+export {
+	applyVariantChoice,
+	createVariantSet,
+	discardVariantSet,
+	readVariantSet,
+	registerExternalVariants,
+	updateVariantStatus,
+	VARIANT_COUNT,
+	VARIANT_SCRATCH_FILE,
+	type VariantEntry,
+	type VariantSet,
+	type VariantStatus,
+	variantPageId,
+} from "./variants"
 export {
 	allTokenNames,
 	countAllTokenUses,

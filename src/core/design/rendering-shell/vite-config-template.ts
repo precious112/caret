@@ -206,6 +206,19 @@ function caretApiPlugin() {
   return {
     name: "caret-api",
     configureServer(server) {
+      // The variant set changing (takes finishing, the pick resolving) is
+      // pushed rather than polled — the compare surface has to show a take
+      // the moment it lands.
+      const variantsPath = resolve(__dirname, ".variants.json")
+      const checksPath = resolve(__dirname, ".checks-results.json")
+      const announceScratch = (p) => {
+        if (p === variantsPath) server.ws.send({ type: "custom", event: "caret:variants-changed" })
+        if (p === checksPath) server.ws.send({ type: "custom", event: "caret:checks-changed" })
+      }
+      server.watcher.on("add", announceScratch)
+      server.watcher.on("change", announceScratch)
+      server.watcher.on("unlink", announceScratch)
+
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/__caret/")) return next()
 
@@ -318,6 +331,37 @@ function caretApiPlugin() {
             // No assets yet is the normal state of a new project, not an error.
             res.setHeader("Content-Type", "application/json")
             res.end(JSON.stringify({ version: 1, assets: [] }))
+          }
+          return
+        }
+
+        // GET /__caret/checks — the latest design-check results per page.
+        if (req.method === "GET" && req.url === "/__caret/checks") {
+          try {
+            const raw = readFileSync(resolve(__dirname, ".checks-results.json"), "utf-8")
+            res.setHeader("Content-Type", "application/json")
+            res.setHeader("Cache-Control", "no-store")
+            res.end(raw)
+          } catch {
+            res.setHeader("Content-Type", "application/json")
+            res.setHeader("Cache-Control", "no-store")
+            res.end(JSON.stringify({ version: 1, pages: [] }))
+          }
+          return
+        }
+
+        // GET /__caret/variants — the open generate-and-pick set, if any.
+        // Read fresh per request: the host rewrites it as takes finish.
+        if (req.method === "GET" && req.url === "/__caret/variants") {
+          try {
+            const raw = readFileSync(resolve(__dirname, ".variants.json"), "utf-8")
+            res.setHeader("Content-Type", "application/json")
+            res.setHeader("Cache-Control", "no-store")
+            res.end(raw)
+          } catch {
+            res.setHeader("Content-Type", "application/json")
+            res.setHeader("Cache-Control", "no-store")
+            res.end("null")
           }
           return
         }

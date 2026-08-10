@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http"
 import type { AddressInfo } from "net"
-
+import type { PageCheckResult } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import type { ScreenshotResult } from "../types"
@@ -34,6 +34,8 @@ export interface CaretMcpServerOptions {
 	onAgentConnectionChanged?(connected: boolean): void
 	/** Renders one page and captures it, or says why it could not. */
 	screenshot?(pageId: string): Promise<ScreenshotResult>
+	/** Runs the deterministic design checks on one page (or all), returning findings. */
+	runChecks?(pageId?: string): Promise<PageCheckResult[]>
 	/** Sends an interview question or option set to the chrome renderer. */
 	onInterviewPrompt?(prompt: InterviewPrompt): void
 }
@@ -110,6 +112,8 @@ export class CaretMcpServer {
 			screenshot: (pageId) =>
 				this.options.screenshot?.(pageId) ??
 				Promise.resolve({ ok: false as const, reason: "this project has no window to render pages in" }),
+			runChecks: (pageId) =>
+				this.options.runChecks?.(pageId) ?? Promise.reject(new Error("this project has no window to render pages in")),
 		}
 
 		const tools = [...TOOLS, ...buildInterviewTools({ send: (prompt) => this.options.onInterviewPrompt?.(prompt) })]

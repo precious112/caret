@@ -104,4 +104,56 @@ describe("AgentConversation.run", () => {
 
 		assert.equal(outcome.ok, true, "a user-stopped empty turn was reported as a backend fault")
 	})
+
+	it("denies promptable permissions on an unattended turn instead of waiting forever", async () => {
+		// The variant-take deadlock: the model asks to run `git status`, the
+		// ruling is "ask the user", and the surface that would show the prompt is
+		// covered by the compare overlay. Unattended turns must answer NO
+		// themselves — a question no one can see holds the take open forever.
+		const decisions: Array<{ id: string; decision: string }> = []
+		const backend = stubBackend([
+			{ type: "permission", requestId: "per_1", tool: "bash", path: "git status --short", summary: "Run git status?" },
+			{ type: "text", text: "worked around it" },
+			{ type: "done", text: "" },
+		])
+		const original = backend.startSession.bind(backend)
+		backend.startSession = async (options) => {
+			const session = await original(options)
+			session.respondToPermission = async (id: string, decision: string) => {
+				decisions.push({ id, decision })
+			}
+			return session
+		}
+		const conversation = new AgentConversation(deps(backend))
+
+		const outcome = await conversation.run({ ...REQUEST, kind: "edit", title: "Edit", unattended: true })
+
+		// decide() runs unawaited off the stream; give it a beat to land.
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		assert.equal(outcome.ok, true)
+		assert.deepEqual(decisions, [{ id: "per_1", decision: "deny" }], "the unattended turn did not auto-deny the ask")
+	})
+
+	it("leaves the same promptable permission pending on an attended turn", async () => {
+		const decisions: string[] = []
+		const backend = stubBackend([
+			{ type: "permission", requestId: "per_2", tool: "bash", path: "git status", summary: "Run git status?" },
+			{ type: "text", text: "waiting politely" },
+			{ type: "done", text: "" },
+		])
+		const original = backend.startSession.bind(backend)
+		backend.startSession = async (options) => {
+			const session = await original(options)
+			session.respondToPermission = async (_id: string, decision: string) => {
+				decisions.push(decision)
+			}
+			return session
+		}
+		const conversation = new AgentConversation(deps(backend))
+
+		await conversation.run({ ...REQUEST, kind: "edit", title: "Edit" })
+		await new Promise((resolve) => setTimeout(resolve, 50))
+
+		assert.deepEqual(decisions, [], "an attended ask was answered without the user")
+	})
 })

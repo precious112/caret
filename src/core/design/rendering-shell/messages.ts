@@ -58,6 +58,18 @@ export interface EditResultPayload {
 	editTarget?: { filePath: string; lineNumber: number; caretId?: string }
 }
 
+export interface VariantRequestPayload {
+	/** The page to explore takes of. */
+	pageId: string
+	/** The user's instruction, verbatim. */
+	instruction: string
+}
+
+export interface VariantPickPayload {
+	/** The chosen variant's page id, or "" to keep the original and discard the set. */
+	variantId: string
+}
+
 export interface PromoteTokenPayload {
 	/** The foundation token to repoint (`brand-500`, `neutral-200`, `success`, `brand`). */
 	token: string
@@ -145,6 +157,8 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
 	"design-sync-now": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
+	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
+	"variant-pick": (p) => typeof p.variantId === "string",
 	log: () => true,
 }
 
@@ -169,6 +183,8 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
 	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
+	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
+	| { source: "caret-vite"; type: "variant-pick"; payload: VariantPickPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }
 	| {

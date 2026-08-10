@@ -71,6 +71,7 @@ export class EditLaneBridge implements AgentBridge {
 				displayPrompt: task.displayPrompt,
 				images: task.images,
 				note: task.note,
+				unattended: task.unattended,
 			})
 
 			if (this.cancelled) {

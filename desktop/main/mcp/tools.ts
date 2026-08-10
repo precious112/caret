@@ -31,12 +31,14 @@ import {
 	isViewable,
 	listFlows,
 	listPages,
+	type PageCheckResult,
 	type PageMeta,
 	posterPath,
 	readAssetIndex,
 	readFoundationTokens,
 	readPageMeta,
 	readSyncState,
+	registerExternalVariants,
 	runSync,
 	validateFoundationTokens,
 	validatePageMeta,
@@ -55,6 +57,8 @@ export interface ToolContext {
 	projectPath: string
 	/** Renders one page and captures it, or says why it could not. */
 	screenshot(pageId: string): Promise<ScreenshotResult>
+	/** Runs the deterministic design checks on one page (or all). */
+	runChecks(pageId?: string): Promise<PageCheckResult[]>
 }
 
 export interface ToolResult {
@@ -451,6 +455,57 @@ export const TOOLS: ToolDefinition[] = [
 			if (!found) return fail(`No flow "${args.flowId}" in this design layer.`)
 			await recordEdit(ctx.projectPath, { actor: "agent", action: "write", file: `flows/${args.flowId}.flow.json` })
 			return reply(ctx, { ok: true, flowId: args.flowId })
+		},
+	},
+
+	{
+		name: "run_design_checks",
+		title: "Run Caret's deterministic design checks",
+		description:
+			"Runs the mechanical slop-tell checks on a rendered page (or every page): contrast, identical card rows, " +
+			"a border on everything, missing alt text, upscaled images, placeholder boxes, happy-path-only states. " +
+			"Call this BEFORE declaring page work finished — Caret runs the same checks itself after its own sessions, " +
+			"and a finding you fixed unprompted is a finding the user never sees.",
+		inputSchema: { pageId: z.string().optional().describe("A page id, or omit to check every page") },
+		async handler(ctx, args: { pageId?: string }) {
+			try {
+				const results = await ctx.runChecks(args.pageId)
+				const findings = results.flatMap((r) => r.findings)
+				return reply(ctx, {
+					ok: true,
+					pages: results.length,
+					findings,
+					verdict:
+						findings.length === 0
+							? "clean — no mechanical defects found"
+							: `${findings.length} finding(s) — fix the errors before finishing`,
+				})
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
+		},
+	},
+
+	{
+		name: "propose_variants",
+		title: "Offer variant takes for the user to pick from",
+		description:
+			"Registers N variant pages you already wrote as takes on one page, so Caret shows the user a side-by-side pick. " +
+			"Write each take first as its own page (id like '<pageId>--v1', meta.variantOf set to the original page id, " +
+			"same content shape as the original), then call this. The user picks one in Caret; the chosen take replaces the " +
+			"original page and every take directory is cleaned up — the takes belong to the pick once proposed.",
+		inputSchema: {
+			pageId: z.string().describe("The original page the takes are variants of"),
+			variantIds: z.array(z.string()).min(2).describe("The variant page ids you wrote"),
+			instruction: z.string().describe("What the takes explore, in the user's words"),
+		},
+		async handler(ctx, args: { pageId: string; variantIds: string[]; instruction: string }) {
+			try {
+				const set = await registerExternalVariants(ctx.projectPath, args.pageId, args.variantIds, args.instruction)
+				return reply(ctx, { ok: true, pageId: set.pageId, takes: set.variants.length })
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
 		},
 	},
 

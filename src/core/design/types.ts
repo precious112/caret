@@ -85,6 +85,12 @@ export interface PageMeta {
 	type: string
 	states: string[]
 	tags: string[]
+	/**
+	 * Set on a generate-and-pick take: the page this one is a variant OF. Variant
+	 * pages are transient working copies — the canvas grid, the rules context and
+	 * the sync inventory all exclude them; only the compare surface shows them.
+	 */
+	variantOf?: string
 }
 
 export interface FlowStep {

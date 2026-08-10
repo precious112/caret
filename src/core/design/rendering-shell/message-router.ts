@@ -18,6 +18,14 @@ import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
+import {
+	applyVariantChoice,
+	createVariantSet,
+	discardVariantSet,
+	readVariantSet,
+	updateVariantStatus,
+	type VariantSet,
+} from "../variants"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { buildVisualEditPrompt } from "../visual-editing/context-builder"
 import { precomputePage } from "../visual-editing/page-precompute"
@@ -197,6 +205,14 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 			await handlePromoteToken(message.payload, workspacePath)
 			break
 
+		case "variant-request":
+			await handleVariantRequest(message.payload, workspacePath)
+			break
+
+		case "variant-pick":
+			await handleVariantPick(message.payload, workspacePath)
+			break
+
 		case "edit-cancel":
 			await editLaneFor(workspacePath)?.cancel()
 			break
@@ -281,6 +297,106 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Overlay edit failed: ${errorMsg}`)
+		sendEditResult(workspacePath, { success: false, error: errorMsg })
+	}
+}
+
+function buildVariantPrompt(set: VariantSet, variant: VariantSet["variants"][number]): string {
+	return `You are producing ${variant.label} of ${set.variants.length} INDEPENDENT takes on one instruction,
+for a side-by-side pick. The page to change is .caret/pages/${variant.id}/index.tsx — a working
+copy of "${set.pageId}" made for this take. Read its current source, then apply the instruction.
+
+${variant.angle}
+
+INSTRUCTION: ${set.instruction}
+
+Rules for this take:
+- Edit ONLY .caret/pages/${variant.id}/index.tsx. Never touch .caret/pages/${set.pageId}/ or any other page.
+- Shared components are read-only here: if the change wants a component edit, inline the changed
+  markup into this page's own source instead.
+- This take runs unattended: shell commands and anything else that needs permission will be
+  DENIED automatically. Use only your file read and edit tools.
+- The other takes read the same instruction differently — do not hedge toward a middle ground;
+  commit fully to this take's reading.`
+}
+
+/**
+ * Generate-and-pick, Caret-orchestrated: the page is copied N times and each
+ * copy gets one independent edit-lane turn under a different reading of the
+ * instruction. Sequential on purpose — the edit lane is one-at-a-time, its
+ * pill narrates each take, and every write goes through the same permission
+ * boundary as any other edit. The compare surface updates as takes land.
+ */
+async function handleVariantRequest(payload: import("./messages").VariantRequestPayload, workspacePath: string): Promise<void> {
+	const bridge = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
+	if (!bridge.connected()) {
+		sendEditResult(workspacePath, {
+			success: false,
+			error: "Generating takes needs a coding backend — open Settings → Backend to connect one.",
+		})
+		return
+	}
+
+	let set: VariantSet
+	try {
+		set = await createVariantSet(workspacePath, payload.pageId, payload.instruction)
+	} catch (err) {
+		sendEditResult(workspacePath, { success: false, error: err instanceof Error ? err.message : String(err) })
+		return
+	}
+
+	void recordEdit(workspacePath, {
+		actor: "inline",
+		action: "write",
+		file: `.caret/pages/${payload.pageId}/index.tsx`,
+		note: "variant request",
+		detail: { kind: "instruction", text: payload.instruction },
+	})
+	sendEditResult(workspacePath, { success: true })
+
+	// Fire and forget: the takes stream in behind the compare surface.
+	void (async () => {
+		for (const variant of set.variants) {
+			try {
+				await bridge.request({
+					kind: "visual-edit",
+					prompt: buildVariantPrompt(set, variant),
+					displayPrompt: `${variant.label}: ${set.instruction}`,
+					context: { filePath: `.caret/pages/${variant.id}/index.tsx` },
+					unattended: true,
+				})
+				await updateVariantStatus(workspacePath, variant.id, "ready")
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err)
+				Logger.warn(`[design] variant ${variant.id} failed: ${message}`)
+				await updateVariantStatus(workspacePath, variant.id, "failed", message)
+			}
+		}
+	})()
+}
+
+async function handleVariantPick(payload: import("./messages").VariantPickPayload, workspacePath: string): Promise<void> {
+	try {
+		if (payload.variantId) {
+			// The apply rewrites the original page's files — Caret's own write, not
+			// an external hand-edit.
+			const set = await readVariantSet(workspacePath)
+			if (set) {
+				const originalDir = path.join(workspacePath, ".caret", "pages", set.pageId)
+				for (const file of ["index.tsx", "meta.json"]) {
+					hostFor(workspacePath).noteSelfWrite(path.join(originalDir, file))
+				}
+			}
+			await applyVariantChoice(workspacePath, payload.variantId)
+			Logger.info(`[design] variant pick: ${payload.variantId} applied over ${set?.pageId}`)
+		} else {
+			await discardVariantSet(workspacePath)
+			Logger.info(`[design] variant pick: kept the original, takes discarded`)
+		}
+		sendEditResult(workspacePath, { success: true })
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err)
+		Logger.error(`[design] variant pick failed: ${errorMsg}`)
 		sendEditResult(workspacePath, { success: false, error: errorMsg })
 	}
 }

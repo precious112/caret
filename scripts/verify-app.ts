@@ -2279,6 +2279,103 @@ async function main(): Promise<void> {
 		return `an externally written rules.json reached AGENTS.md ("${ruleText}")`
 	})
 
+	await scenario("br. the design checks find planted defects, and the canvas shows them unasked", async () => {
+		// The acceptance checker in the shipped app: a page with planted slop
+		// tells lands (external write — the healer's path), an agent asks for the
+		// checks over MCP and gets the findings, and the canvas chip surfaces
+		// them without anyone having called anything.
+		assert(discovery, "no MCP discovery record")
+		const flawedDir = path.join(fixture, ".caret", "pages", "flawed")
+		await fs.mkdir(flawedDir, { recursive: true })
+		await fs.writeFile(
+			path.join(flawedDir, "index.tsx"),
+			`export default function Flawed() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <h1 className="text-2xl font-bold text-zinc-900">Flawed</h1>
+      <div style={{ width: 320, height: 200, background: "#d4d4d4" }} />
+      <img src="/caret-assets/Hero Shot@2x.png" style={{ width: 600 }} />
+      <div>
+        <div className="p-4">Exactly the same testimonial text repeated here</div>
+        <div className="p-4">Exactly the same testimonial text repeated here</div>
+        <div className="p-4">A different card so the container has three children</div>
+      </div>
+    </div>
+  )
+}
+`,
+		)
+		await fs.writeFile(
+			path.join(flawedDir, "meta.json"),
+			JSON.stringify({ id: "flawed", title: "Flawed", type: "page", states: [], tags: [] }),
+		)
+
+		// The agent's half: run_design_checks over the real MCP endpoint. Polled:
+		// a page written moments ago is not routable until Vite reloads the
+		// router module, and a check against the "page not found" card honestly
+		// finds nothing — the checker is eventually consistent with the render.
+		const checksFound = await waitFor(
+			"the planted tells to be found once the page renders",
+			async () => {
+				const response = await callMcp(discovery!.url, discovery!.token, {
+					jsonrpc: "2.0",
+					id: 71,
+					method: "tools/call",
+					params: { name: "run_design_checks", arguments: { pageId: "flawed" } },
+				})
+				const body = await response.text()
+				const payloadMatch = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body)
+				if (!payloadMatch) return null
+				const parsed = JSON.parse(JSON.parse(`"${payloadMatch[1]}"`))
+				if (!parsed.ok) return null
+				const found = new Set<string>((parsed.findings as Array<{ check: string }>).map((f) => f.check))
+				const planted = ["placeholder-box", "missing-alt", "image-upscaled", "identical-cards"]
+				return planted.every((check) => found.has(check)) ? found : null
+			},
+			// Covers a cold fixture: the design preview may still be npm-installing
+			// when this scenario runs in a subset, and the checker honestly reports
+			// render-unavailable until it is up.
+			300_000,
+		)
+
+		// The results landed where the canvas reads them.
+		const stored = JSON.parse(await fs.readFile(path.join(fixture, ".caret", ".checks-results.json"), "utf-8"))
+		assert(
+			stored.pages.some((p: { pageId: string; findings: unknown[] }) => p.pageId === "flawed" && p.findings.length > 0),
+			"the results file does not carry the flawed page's findings",
+		)
+
+		// The canvas chip, unasked: click it, the panel names the page.
+		const chip = await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return { error: "no canvas view" }
+			const wc = canvas.webContents
+			const deadline = Date.now() + 30000
+			let text = ""
+			while (Date.now() < deadline && !text) {
+				text = await wc
+					.executeJavaScript(`(document.querySelector('[data-testid="design-checks-chip"]') || {}).textContent || ""`)
+					.catch(() => "")
+				if (!text) await new Promise((r) => setTimeout(r, 400))
+			}
+			if (!text) return { error: "the checks chip never appeared on the canvas" }
+			await wc.executeJavaScript(`(document.querySelector('[data-testid="design-checks-chip"]')).click(), true`)
+			const panel = await wc
+				.executeJavaScript(`(document.querySelector('[data-testid="design-checks-panel"]') || {}).textContent || ""`)
+				.catch(() => "")
+			return { text, panel }
+		})
+		assert(!("error" in chip) || !chip.error, `canvas chip: ${(chip as any).error}`)
+		const { text, panel } = chip as { text: string; panel: string }
+		assert(/\d+ design check finding/.test(text), `unexpected chip text: "${text}"`)
+		assert(panel.includes("flawed"), `the panel does not name the flawed page: "${panel.slice(0, 200)}"`)
+
+		await fs.rm(flawedDir, { recursive: true, force: true })
+		return `MCP returned ${checksFound.size} check kinds incl. all four planted; canvas chip "${text.trim()}" opened a panel naming the page`
+	})
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message
@@ -2783,6 +2880,233 @@ async function main(): Promise<void> {
 		)
 
 		return `asked "${questionText.slice(0, 50)}…", finished → ${tokens.typography.displayFamily ?? tokens.typography.fontFamily}, ${tokens.color.brand.seed}`
+	})
+
+	await inference("bq. three takes generate from one instruction and a click applies the winner", async () => {
+		// Generate-and-pick end to end on the real backend: the ×3 button in the
+		// overlay editor starts three independent edit-lane turns, the compare
+		// surface fills in as takes land, and a real click on "Use this one"
+		// replaces the page and cleans the takes up.
+		const caretDir = path.join(fixture, ".caret")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+		const scratchPath = path.join(caretDir, ".variants.json")
+
+		// The canvas must be the visible surface — other scenarios leave the
+		// chrome wherever they ended.
+		const surface = await chrome.getByTestId("app-shell").getAttribute("data-surface")
+		if (surface && surface !== "canvas") {
+			const label = surface === "agent" ? "Backend" : surface[0].toUpperCase() + surface.slice(1)
+			await chrome
+				.getByTestId("top-bar")
+				.getByRole("button", { name: label })
+				.click()
+				.catch(() => {})
+		}
+
+		const driven = await app!.evaluate(async ({ BrowserWindow }) => {
+			// Same serialization constraints as be/bn: no function-valued consts.
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+				if (!pageFrame) {
+					let deadline0 = Date.now() + 30000
+					let ready = false
+					while (Date.now() < deadline0 && !ready) {
+						ready = await wc.executeJavaScript(`!!document.querySelector('.caret-canvas-frame')`).catch(() => false)
+						if (!ready) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!ready) return { error: "no page card ever appeared on the canvas" }
+					await wc.executeJavaScript(`(document.querySelector('.caret-canvas-frame')).click(), true`)
+					deadline0 = Date.now() + 30000
+					while (Date.now() < deadline0 && !pageFrame) {
+						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+						if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!pageFrame) return { error: "the focused page never became a frame of the canvas" }
+				}
+
+				let deadline = Date.now() + 30000
+				let painter = false
+				while (Date.now() < deadline && !painter) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					painter = await pageFrame
+						.executeJavaScript(`!!document.querySelector('.caret-focused-paint-btn')`)
+						.catch(() => false)
+					if (!painter) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!painter) return { error: "the paint control never appeared" }
+
+				let overlayUp = false
+				for (let attempt = 0; attempt < 5 && !overlayUp; attempt++) {
+					await pageFrame
+						.executeJavaScript(
+							`(() => { const b = document.querySelector('.caret-focused-paint-btn'); if (b) b.click(); return !!b })()`,
+						)
+						.catch(() => false)
+					const attemptDeadline = Date.now() + 4000
+					while (Date.now() < attemptDeadline && !overlayUp) {
+						overlayUp = await pageFrame
+							.executeJavaScript(`!!document.querySelector('.caret-overlay')`)
+							.catch(() => false)
+						if (!overlayUp) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!overlayUp) return { error: "paint mode never engaged" }
+
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const from = { x: Math.round(offset.x) + 120, y: Math.round(offset.y) + 120 }
+				const to = { x: from.x + 340, y: from.y + 200 }
+				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
+				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
+				for (let step = 1; step <= 6; step++) {
+					wc.sendInputEvent({
+						type: "mouseMove",
+						x: Math.round(from.x + ((to.x - from.x) * step) / 6),
+						y: Math.round(from.y + ((to.y - from.y) * step) / 6),
+						button: "left",
+						buttons: 1,
+					})
+					await new Promise((r) => setTimeout(r, 40))
+				}
+				wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 })
+
+				deadline = Date.now() + 20000
+				let box = false
+				while (Date.now() < deadline && !box) {
+					box = await pageFrame
+						.executeJavaScript(`!!document.querySelector('.caret-overlay-prompt input')`)
+						.catch(() => false)
+					if (!box) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!box) return { error: "painting a region did not open the instruction box" }
+
+				await pageFrame.executeJavaScript(`(() => {
+					const input = document.querySelector('.caret-overlay-prompt input')
+					input.focus()
+					const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+					setter.call(input, 'Make this section feel warmer and more welcoming')
+					input.dispatchEvent(new Event('input', { bubbles: true }))
+					return true
+				})()`)
+				await new Promise((r) => setTimeout(r, 200))
+				const clicked = await pageFrame.executeJavaScript(
+					`(() => { const b = document.querySelector('[data-caret-variants-btn]'); if (!b || b.disabled) return false; b.click(); return true })()`,
+				)
+				if (!clicked) return { error: "the ×3 button was missing or disabled" }
+				return { ok: true }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+		assert(!("error" in driven) || !driven.error, `driving the ×3 request failed: ${(driven as any).error}`)
+
+		// The set registers immediately; the compare surface follows.
+		await waitFor(
+			"the variant set to register",
+			async () => {
+				try {
+					const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
+					return raw?.variants?.length === 3 ? true : null
+				} catch {
+					return null
+				}
+			},
+			20_000,
+		)
+		const overlayShown = await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return false
+			const deadline = Date.now() + 20000
+			while (Date.now() < deadline) {
+				const up = await canvas.webContents
+					.executeJavaScript(`!!document.querySelector('[data-testid="variant-compare"]')`)
+					.catch(() => false)
+				if (up) return true
+				await new Promise((r) => setTimeout(r, 300))
+			}
+			return false
+		})
+		assert(overlayShown, "the compare surface never appeared over the canvas")
+
+		// Three model turns, sequential — give them the same patience as ff/gg.
+		const settled = await waitFor(
+			"all three takes to settle",
+			async () => {
+				try {
+					const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
+					const variants = raw?.variants ?? []
+					return variants.length === 3 && variants.every((v: { status: string }) => v.status !== "working")
+						? (variants as Array<{ id: string; status: string; error?: string }>)
+						: null
+				} catch {
+					return null
+				}
+			},
+			900_000,
+		)
+		const ready = settled.filter((v) => v.status === "ready")
+		if (ready.length === 0) {
+			throw new Inconclusive(
+				`no take succeeded: ${settled.map((v) => `${v.id}=${v.status}${v.error ? ` (${v.error.slice(0, 60)})` : ""}`).join(", ")}`,
+			)
+		}
+
+		const chosen = ready[0]
+		const chosenSource = await fs.readFile(path.join(caretDir, "pages", chosen.id, "index.tsx"), "utf-8")
+
+		const picked = await app!.evaluate(async ({ BrowserWindow }, useTestId: string) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return false
+			const deadline = Date.now() + 20000
+			while (Date.now() < deadline) {
+				const clicked = await canvas.webContents
+					.executeJavaScript(
+						`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
+					)
+					.catch(() => false)
+				if (clicked) return true
+				await new Promise((r) => setTimeout(r, 300))
+			}
+			return false
+		}, `variant-use-${chosen.id}`)
+		assert(picked, `the "Use this one" button for ${chosen.id} never became clickable`)
+
+		await waitFor(
+			"the winner to replace the page and the takes to clean up",
+			async () => {
+				const page = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				const scratchGone = await fs
+					.access(scratchPath)
+					.then(() => false)
+					.catch(() => true)
+				const dirsGone = await fs
+					.access(path.join(caretDir, "pages", chosen.id))
+					.then(() => false)
+					.catch(() => true)
+				return page === chosenSource && scratchGone && dirsGone ? true : null
+			},
+			30_000,
+		)
+
+		await shot(chrome, "24-variant-pick")
+		return `3 takes ran (${ready.length} ready), ${chosen.id} chosen by click, page replaced, takes cleaned up`
 	})
 
 	// ── the authored and 3D lanes, for real ────────────────────────────────────

@@ -70,6 +70,7 @@ const TAILWIND_COLOR_PREFIXES = [
 ]
 
 const CSS_TO_TAILWIND: Record<string, string> = {
+	background: "bg",
 	backgroundColor: "bg",
 	color: "text",
 	fontSize: "text",
@@ -252,13 +253,28 @@ function getElementRange(node: recast.types.namedTypes.JSXElement): {
 	}
 }
 
+/** CSS properties whose numeric values are unitless — everything else numeric is px in JSX. */
+const UNITLESS_PROPS = new Set(["opacity", "zIndex"])
+
+/** The `background` shorthand converts only when it is plainly a colour — a gradient or image stays inline. */
+function isPlainColorValue(value: string): boolean {
+	return /^(#|rgb|rgba|hsl|hsla|oklch|oklab)/.test(value.trim())
+}
+
+/**
+ * Converts what it can and **removes the converted properties from the style
+ * object** — the half-converted state used to keep them, so every healer pass
+ * re-converted the same properties and appended the same classes again: an
+ * unbounded `w-[320] h-[200] w-[320] h-[200] …` and a write loop the debounce
+ * only slowed. Removing as we convert makes the pass idempotent by
+ * construction: a second pass finds only the unconvertible leftovers and
+ * produces no classes at all.
+ */
 function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes: string[]; fullyConverted: boolean } | null {
 	const attrs = node.openingElement.attributes || []
-	let styleAttrIndex = -1
 	let styleExpr: recast.types.namedTypes.ObjectExpression | null = null
 
-	for (let i = 0; i < attrs.length; i++) {
-		const attr = attrs[i]
+	for (const attr of attrs) {
 		if (
 			attr.type === "JSXAttribute" &&
 			attr.name.type === "JSXIdentifier" &&
@@ -266,20 +282,19 @@ function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes
 			attr.value?.type === "JSXExpressionContainer" &&
 			attr.value.expression.type === "ObjectExpression"
 		) {
-			styleAttrIndex = i
 			styleExpr = attr.value.expression as recast.types.namedTypes.ObjectExpression
 			break
 		}
 	}
 
-	if (!styleExpr || styleAttrIndex === -1) return null
+	if (!styleExpr) return null
 
 	const classes: string[] = []
-	let fullyConverted = true
+	const remaining: typeof styleExpr.properties = []
 
 	for (const prop of styleExpr.properties) {
 		if (prop.type !== "ObjectProperty" && prop.type !== "Property") {
-			fullyConverted = false
+			remaining.push(prop)
 			continue
 		}
 
@@ -287,30 +302,36 @@ function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes
 		const twPrefix = CSS_TO_TAILWIND[key]
 
 		if (!twPrefix) {
-			fullyConverted = false
+			remaining.push(prop)
 			continue
 		}
 
 		let value: string | null = null
 		if (prop.value.type === "StringLiteral") {
 			value = prop.value.value
+			// `background: "linear-gradient(...)"` is not `bg-[...]`'s job.
+			if (key === "background" && !isPlainColorValue(value)) value = null
 		} else if (
 			prop.value.type === "NumericLiteral" ||
 			(prop.value.type === "Literal" && typeof (prop.value as any).value === "number")
 		) {
-			value = String((prop.value as any).value)
+			// A number in a JSX style object means pixels — `w-[320]` is an inert
+			// class; `w-[320px]` is the value the author wrote.
+			const numeric = String((prop.value as any).value)
+			value = UNITLESS_PROPS.has(key) ? numeric : `${numeric}px`
 		}
 
 		if (value !== null) {
-			classes.push(`${twPrefix}-[${value}]`)
+			classes.push(`${twPrefix}-[${value.replace(/\s+/g, "_")}]`)
 		} else {
-			fullyConverted = false
+			remaining.push(prop)
 		}
 	}
 
 	if (classes.length === 0) return null
 
-	return { classes, fullyConverted }
+	styleExpr.properties = remaining
+	return { classes, fullyConverted: remaining.length === 0 }
 }
 
 function mergeClassesIntoClassName(node: recast.types.namedTypes.JSXElement, newClasses: string[]): void {

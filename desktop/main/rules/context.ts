@@ -52,7 +52,11 @@ export async function buildFoundationContext(projectPath: string): Promise<Found
 	return {
 		project: path.basename(projectPath),
 		tokens: tokens ?? null,
-		pages: pages.map((p) => ({ id: p.id, title: p.title ?? p.id, tags: p.tags ?? [], states: p.states ?? [] })),
+		// Variant takes are transient working copies — an agent building "what
+		// already exists" from them would treat a half-finished pick as pages.
+		pages: pages
+			.filter((p) => !p.variantOf)
+			.map((p) => ({ id: p.id, title: p.title ?? p.id, tags: p.tags ?? [], states: p.states ?? [] })),
 		flows: flows
 			.filter((f) => !f.invalid)
 			.map((f) => ({
@@ -228,7 +232,27 @@ placed into a box much larger than itself will look soft, and one whose aspect r
 its box will lose most of the picture to cropping. Say so rather than doing it.`
 }
 
-## Do not run the dev server
+${
+	audience === "mcp"
+		? `## Before you declare page work finished
+
+Call \`run_design_checks\` on every page you wrote or changed, and fix what it reports.
+The checks are mechanical, not taste — contrast failures, repeated card text, missing alt,
+upscaled images, placeholder boxes — and Caret runs the same checks itself and shows the
+user every finding, so a defect you skip is a defect the user is shown with your name on it.
+
+## When the user wants to explore, not specify
+
+"Try a few directions", "show me some options", "make it feel more premium" — anything that
+cannot be said precisely in words wants a pick, not one attempt. Write two or three variant
+pages (ids like \`<pageId>--v1\`, \`meta.variantOf\` set to the original page id), each a
+genuinely different reading of the request, then call \`propose_variants\`. Caret shows them
+side by side; the user points at one; the chosen take replaces the page and the variant
+directories are cleaned up.
+
+`
+		: ""
+}## Do not run the dev server
 
 Caret already runs Vite for this design layer and reloads your changes as you write them.
 Do not run \`npm run dev\`, \`vite\`, or any server command inside \`.caret/\` — it will fight

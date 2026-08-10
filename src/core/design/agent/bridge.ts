@@ -34,6 +34,12 @@ export interface AgentTask {
 	context?: Record<string, unknown>
 	/** Shown above the turn in the chat, in Caret's own voice. */
 	note?: string
+	/**
+	 * Nobody is watching this turn's prompts — a variant take running behind the
+	 * compare surface. Anything that would ASK the user is denied with a reason
+	 * instead: a question no one can see is a deadlock, not a safeguard.
+	 */
+	unattended?: boolean
 }
 
 export interface AgentBridge {
@@ -94,6 +100,7 @@ export class BackendBridge implements AgentBridge {
 			displayPrompt: task.displayPrompt,
 			images: task.images,
 			note: task.note,
+			unattended: task.unattended,
 		})
 
 		if (!outcome.ok) {

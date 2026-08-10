@@ -20,6 +20,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "CaretStateContext.tsx"), generateCaretStateContext()),
 		fs.writeFile(path.join(canvasDir, "CaretNavigator.tsx"), generateCaretNavigator()),
 		fs.writeFile(path.join(canvasDir, "SimulationView.tsx"), generateSimulationView()),
+		fs.writeFile(path.join(canvasDir, "VariantCompareView.tsx"), generateVariantCompareView()),
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
@@ -38,6 +39,22 @@ function generateTypes(): string {
 		  tags: string[]
 		  /** Set when the page dir has no importable index.tsx (bad AI output). */
 		  broken?: boolean
+		  /** Set on a generate-and-pick take — hidden from the grid, shown only by the compare surface. */
+		  variantOf?: string
+		}
+
+		export interface VariantEntry {
+		  id: string
+		  label: string
+		  status: "working" | "ready" | "failed"
+		  error?: string
+		}
+
+		export interface VariantSet {
+		  version: 1
+		  pageId: string
+		  instruction: string
+		  variants: VariantEntry[]
 		}
 
 		export interface CanvasTransform {
@@ -90,7 +107,8 @@ function generateCanvasApp(): string {
 		import { FocusedPageView } from "./FocusedPageView"
 		import { ErrorBoundary } from "./ErrorBoundary"
 		import { SimulationView } from "./SimulationView"
-		import type { PageInfo, ViewportPreset, FlowDefinition } from "./types"
+		import { VariantCompareView } from "./VariantCompareView"
+		import type { PageInfo, ViewportPreset, FlowDefinition, VariantSet } from "./types"
 		import "./canvas.css"
 
 		export function CanvasApp() {
@@ -115,6 +133,7 @@ function generateCanvasApp(): string {
 		  }, [])
 		  const [viewport, setViewport] = useState<ViewportPreset>("desktop-1440")
 		  const [flows, setFlows] = useState<FlowDefinition[]>([])
+		  const [variantSet, setVariantSet] = useState<VariantSet | null>(null)
 
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 
@@ -124,6 +143,15 @@ function generateCanvasApp(): string {
 		      .then(r => { log("flows-meta response: " + r.status); return r.ok ? r.json() : [] })
 		      .then(f => { log("flows loaded: " + f.length + " " + JSON.stringify(f.map((x: any) => x.id))); setFlows(f) })
 		      .catch(e => { log("flows-meta fetch FAILED: " + String(e)) })
+
+		    // A pick left open (an app restart mid-generation) must come back up.
+		    const refetchVariants = () => {
+		      fetch("/__caret/variants")
+		        .then(r => r.ok ? r.json() : null)
+		        .then(set => setVariantSet(set && set.variants ? set : null))
+		        .catch(() => {})
+		    }
+		    refetchVariants()
 
 		    if (import.meta.hot) {
 		      import.meta.hot.on("caret:pages-changed", () => {
@@ -139,7 +167,19 @@ function generateCanvasApp(): string {
 		          .then(f => { log("[HMR] flows refetched: " + f.length); setFlows(f) })
 		          .catch(e => { log("[HMR] flows refetch failed: " + e) })
 		      })
+		      import.meta.hot.on("caret:variants-changed", refetchVariants)
 		    }
+		  }, [])
+
+		  // Variant takes are working copies for the compare surface, not pages in
+		  // their own right — the grid must never show them.
+		  const gridPages = pages.filter(p => !p.variantOf)
+
+		  const handleVariantPick = useCallback((variantId: string) => {
+		    window.parent.postMessage({ source: "caret-vite", type: "variant-pick", payload: { variantId } }, "*")
+		    // Optimistic: the host resolves the set and deletes the scratch, which
+		    // pushes caret:variants-changed; hiding now keeps the click responsive.
+		    setVariantSet(null)
 		  }, [])
 
 		  const handleFocus = useCallback((pageId: string) => {
@@ -175,6 +215,11 @@ function generateCanvasApp(): string {
 		    }
 		  }, [])
 
+		  // The compare surface overlays whichever mode is up: the takes are
+		  // usually requested from the focused view, and a pick that only appears
+		  // after finding the back button is a pick nobody discovers.
+		  const compareOverlay = variantSet ? <VariantCompareView set={variantSet} onPick={handleVariantPick} /> : null
+
 		  if (mode === "simulation" && focusedPageId) {
 		    return (
 		      <ErrorBoundary fallback={<CanvasErrorFallback />}>
@@ -185,6 +230,7 @@ function generateCanvasApp(): string {
 		          onSetViewport={setViewport}
 		          onExit={handleExitSimulation}
 		        />
+		        {compareOverlay}
 		      </ErrorBoundary>
 		    )
 		  }
@@ -203,6 +249,7 @@ function generateCanvasApp(): string {
 		          viewport={viewport}
 		          onSetViewport={setViewport}
 		        />
+		        {compareOverlay}
 		      </ErrorBoundary>
 		    )
 		  }
@@ -210,7 +257,7 @@ function generateCanvasApp(): string {
 		  return (
 		    <ErrorBoundary fallback={<CanvasErrorFallback />}>
 		      <CanvasView
-		        pages={pages}
+		        pages={gridPages}
 		        routes={liveRoutes}
 		        onFocus={handleFocus}
 		        onSimulate={handleSimulateFromCanvas}
@@ -218,6 +265,7 @@ function generateCanvasApp(): string {
 		        viewport={viewport}
 		        onSetViewport={setViewport}
 		      />
+		      {compareOverlay}
 		    </ErrorBoundary>
 		  )
 		}
@@ -241,6 +289,86 @@ function generateCanvasApp(): string {
 		    <div className="caret-canvas-error">
 		      <h2>Canvas error</h2>
 		      <p>Something went wrong. Try reloading the preview.</p>
+		    </div>
+		  )
+		}
+	`
+}
+
+function generateVariantCompareView(): string {
+	return dedent`
+		import React from "react"
+		import type { VariantSet } from "./types"
+
+		/**
+		 * The pick half of generate-and-pick. The original and every take render
+		 * as LIVE iframes — the same pages the grid would show — and the user
+		 * points at one. "" as the pick means keep the original.
+		 */
+		export function VariantCompareView({ set, onPick }: { set: VariantSet; onPick: (variantId: string) => void }) {
+		  const cards = [
+		    { id: set.pageId, label: "Original", status: "ready" as const, isOriginal: true },
+		    ...set.variants.map(v => ({ id: v.id, label: v.label, status: v.status, isOriginal: false, error: v.error })),
+		  ]
+		  const stillWorking = set.variants.some(v => v.status === "working")
+
+		  return (
+		    <div data-testid="variant-compare" style={{
+		      position: "fixed", inset: 0, zIndex: 9000, background: "rgba(10,10,16,0.92)",
+		      display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif", color: "#e5e7eb",
+		    }}>
+		      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 24px", borderBottom: "1px solid #2a2a3a" }}>
+		        <div style={{ minWidth: 0, flex: 1 }}>
+		          <div style={{ fontSize: 15, fontWeight: 600 }}>Pick a direction</div>
+		          <div style={{ fontSize: 12.5, color: "#8b93a7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+		            “{set.instruction}”{stillWorking ? " — takes are still coming in" : ""}
+		          </div>
+		        </div>
+		        <button
+		          data-testid="variant-keep-original"
+		          onClick={() => onPick("")}
+		          style={{ background: "none", border: "1px solid #3a3a4a", color: "#c7cad3", borderRadius: 8, padding: "7px 14px", fontSize: 13, cursor: "pointer" }}>
+		          Keep the original
+		        </button>
+		      </div>
+
+		      <div style={{ flex: 1, overflow: "auto", display: "grid", gap: 20, padding: 24,
+		        gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", alignContent: "start" }}>
+		        {cards.map(card => (
+		          <div key={card.id} data-testid={"variant-card-" + card.id}
+		            style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+		            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+		              <span style={{ fontSize: 13, fontWeight: 600 }}>{card.label}</span>
+		              {!card.isOriginal && card.status === "ready" && (
+		                <button
+		                  data-testid={"variant-use-" + card.id}
+		                  onClick={() => onPick(card.id)}
+		                  style={{ background: "#0b7aff", border: "none", color: "#fff", borderRadius: 7, padding: "5px 12px", fontSize: 12.5, fontWeight: 500, cursor: "pointer" }}>
+		                  Use this one
+		                </button>
+		              )}
+		              {card.status === "working" && <span style={{ fontSize: 12, color: "#8b93a7" }}>working…</span>}
+		              {card.status === "failed" && <span style={{ fontSize: 12, color: "#f87171" }} title={card.error}>failed</span>}
+		            </div>
+		            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden",
+		              border: card.isOriginal ? "1px solid #3a3a4a" : "1px solid #2a2a3a",
+		              background: "#fff", aspectRatio: "16 / 10" }}>
+		              {card.status !== "failed" ? (
+		                // key includes status so a take that just finished reloads its frame.
+		                <iframe key={card.id + card.status} src={"/?page=" + card.id} title={card.label}
+		                  style={{ width: 1440, height: 900, border: "none",
+		                    transform: "scale(" + (1 / 4.8) + ")", transformOrigin: "top left",
+		                    pointerEvents: "none" }} />
+		              ) : (
+		                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center",
+		                  justifyContent: "center", color: "#b91c1c", fontSize: 13, background: "#fff5f5", padding: 16, textAlign: "center" }}>
+		                  {card.error || "This take failed — the other cards are unaffected."}
+		                </div>
+		              )}
+		            </div>
+		          </div>
+		        ))}
+		      </div>
 		    </div>
 		  )
 		}
@@ -342,6 +470,23 @@ function generateCanvasView(): string {
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string; isError?: boolean } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
+
+		  // The acceptance checker's findings, shown whether or not anything asked
+		  // for them — an enforced check that only reports into a log nobody opens
+		  // is the honor-system checker with extra steps.
+		  const [checkResults, setCheckResults] = useState<Array<{ pageId: string; findings: Array<{ check: string; severity: string; message: string }> }>>([])
+		  const [showChecks, setShowChecks] = useState(false)
+		  useEffect(() => {
+		    const refetch = () => {
+		      fetch("/__caret/checks")
+		        .then(r => r.ok ? r.json() : { pages: [] })
+		        .then(d => setCheckResults((d.pages || []).filter((p: any) => (p.findings || []).length > 0)))
+		        .catch(() => {})
+		    }
+		    refetch()
+		    if (import.meta.hot) import.meta.hot.on("caret:checks-changed", refetch)
+		  }, [])
+		  const checkCount = checkResults.reduce((n, p) => n + p.findings.length, 0)
 
 		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
 		  const activeThumbHeight = FRAME_HEIGHT * (THUMB_WIDTH / activeFrameWidth)
@@ -730,6 +875,25 @@ function generateCanvasView(): string {
 		            invalidFlows.length > 0 ? invalidFlows.length + " invalid flow file" + (invalidFlows.length > 1 ? "s" : "") + " in .caret/flows/" : null,
 		            missingEdgeCount > 0 ? missingEdgeCount + " flow edge" + (missingEdgeCount > 1 ? "s" : "") + " reference missing pages" : null,
 		          ].filter(Boolean).join(" · ")}
+		        </div>
+		      )}
+		      {checkCount > 0 && (
+		        <div className="caret-canvas-checks" data-testid="design-checks-chip" onClick={() => setShowChecks(!showChecks)}>
+		          ✓ {checkCount} design check finding{checkCount === 1 ? "" : "s"} — click for details
+		        </div>
+		      )}
+		      {showChecks && checkCount > 0 && (
+		        <div className="caret-canvas-checks-panel" data-testid="design-checks-panel">
+		          {checkResults.map(p => (
+		            <React.Fragment key={p.pageId}>
+		              <h4>{p.pageId}</h4>
+		              <ul style={{ margin: 0, padding: 0 }}>
+		                {p.findings.map((f, i) => (
+		                  <li key={i} className={"check-" + f.severity}>{f.message} <span style={{ opacity: 0.6 }}>({f.check})</span></li>
+		                ))}
+		              </ul>
+		            </React.Fragment>
+		          ))}
 		        </div>
 		      )}
 		      <div
@@ -1314,6 +1478,19 @@ function generateOverlayPainter(): string {
 		    }
 		  }, [rect, instruction, onClose])
 
+		  // Generate-and-pick: the same instruction read three ways, rendered, and
+		  // chosen by pointing. For anything that can't be said precisely in words,
+		  // this beats one attempt iterated. The compare surface takes over as the
+		  // feedback — it appears over the canvas the moment the takes start.
+		  const handleVariants = useCallback(() => {
+		    const pageId = (window as any).__CARET_FOCUSED_PAGE__?.pageId
+		    if (!pageId || !instruction.trim()) return
+		    bridge.send({ type: "variant-request", payload: { pageId, instruction: instruction.trim() } })
+		    setRect(null)
+		    setInstruction("")
+		    onClose()
+		  }, [instruction, onClose])
+
 		  return (
 		    <div
 		      className="caret-overlay"
@@ -1337,6 +1514,13 @@ function generateOverlayPainter(): string {
 		              />
 		              <button onClick={handleSubmit} disabled={sending || !instruction.trim()}>
 		                {sending ? "..." : "→"}
+		              </button>
+		              <button
+		                data-caret-variants-btn
+		                title="Generate three takes and pick one"
+		                onClick={handleVariants}
+		                disabled={sending || !instruction.trim()}>
+		                ×3
 		              </button>
 		            </div>
 		          )}
@@ -1467,6 +1651,58 @@ function generateCanvasCSS(): string {
 		  pointer-events: none;
 		  white-space: nowrap;
 		}
+
+		.caret-canvas-checks {
+		  position: absolute;
+		  top: 48px;
+		  left: 50%;
+		  transform: translateX(-50%);
+		  z-index: 60;
+		  background: rgba(42, 30, 5, 0.92);
+		  color: #fde68a;
+		  border: 1px solid rgba(245, 158, 11, 0.45);
+		  border-radius: 8px;
+		  padding: 6px 14px;
+		  font-size: 12px;
+		  cursor: pointer;
+		  white-space: nowrap;
+		}
+
+		.caret-canvas-checks-panel {
+		  position: absolute;
+		  top: 84px;
+		  left: 50%;
+		  transform: translateX(-50%);
+		  z-index: 61;
+		  background: rgba(20, 20, 30, 0.96);
+		  color: #e5e7eb;
+		  border: 1px solid #3a3a4a;
+		  border-radius: 10px;
+		  padding: 12px 16px;
+		  font-size: 12.5px;
+		  max-width: 560px;
+		  max-height: 50vh;
+		  overflow: auto;
+		  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+		}
+
+		.caret-canvas-checks-panel h4 {
+		  margin: 10px 0 4px;
+		  font-size: 12px;
+		  color: #8b93a7;
+		  font-weight: 600;
+		}
+
+		.caret-canvas-checks-panel h4:first-child { margin-top: 0; }
+
+		.caret-canvas-checks-panel li {
+		  margin: 2px 0 2px 16px;
+		  line-height: 1.45;
+		}
+
+		.caret-canvas-checks-panel li.check-error { color: #fca5a5; }
+		.caret-canvas-checks-panel li.check-warn { color: #fde68a; }
+		.caret-canvas-checks-panel li.check-info { color: #8b93a7; }
 
 		.caret-canvas-empty {
 		  position: fixed;
@@ -2756,6 +2992,23 @@ function generateCaretGrabPlugin(): string {
 		  btn.textContent = "Send"
 		  btn.style.cssText = "padding:8px 16px;border-radius:6px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer;font-weight:500;"
 		  row.appendChild(btn)
+
+		  // Generate-and-pick from the fallback card too — the imprecise-wording
+		  // case this card exists for is exactly where three takes beat one.
+		  const variantsBtn = document.createElement("button")
+		  variantsBtn.textContent = "×3"
+		  variantsBtn.title = "Generate three takes and pick one"
+		  variantsBtn.setAttribute("data-caret-variants-btn", "")
+		  variantsBtn.style.cssText = "padding:8px 12px;border-radius:6px;border:1px solid #555;background:#2a2a3e;color:#c7cad3;font-size:13px;cursor:pointer;"
+		  variantsBtn.addEventListener("click", () => {
+		    const text = input.value.trim()
+		    const pageId = (window as any).__CARET_FOCUSED_PAGE__?.pageId
+		    if (!text || !pageId) return
+		    bridge.send({ type: "variant-request", payload: { pageId, instruction: text } })
+		    detachPicker()
+		    card.remove()
+		  })
+		  row.appendChild(variantsBtn)
 
 		  card.appendChild(row)
 		  document.body.appendChild(card)
