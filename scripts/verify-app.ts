@@ -2352,6 +2352,13 @@ async function main(): Promise<void> {
 			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
 			if (!canvas) return { error: "no canvas view" }
 			const wc = canvas.webContents
+			// The chip lives on the grid view; an earlier scenario may have left a
+			// page focused. Going back is exactly what a user would do to see it.
+			await wc
+				.executeJavaScript(
+					`(() => { const b = document.querySelector('.caret-focused-toolbar-btn'); if (b) b.click(); return true })()`,
+				)
+				.catch(() => {})
 			const deadline = Date.now() + 30000
 			let text = ""
 			while (Date.now() < deadline && !text) {
