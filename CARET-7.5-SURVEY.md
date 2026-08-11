@@ -103,6 +103,34 @@ catalog entry needs a reachability smoke test from the user's own network before
 the catalog should record a fallback (public-repo copy-in) for every registry entry that has
 one. cult/ui's bot checkpoint is the same lesson from the other side.
 
+
+## Originkit replacements — clean-licence equivalents (added 2026-08-11)
+
+Originkit was set aside (no declared component licence; account key + 10/day delivery quota).
+A targeted hunt for its content profile — cursors, WebGL/3D, fancy image galleries,
+ASCII/glitch, text animations, hero sections — under a REAL open licence, verified against
+repo LICENSE files and by running installs from this machine:
+
+| Name | Covers (of the Originkit profile) | Licence | Install (run from here) | Repo + activity | Flags |
+|---|---|---|---|---|---|
+| **ui-layouts** | Galleries/carousels (the hardest slice to find), image masking/ripple, mousetrail cursor, globe + R3F 3D, text effects, blocks | **MIT** (LICENSE fetched) | **OK — ran it**: `npx shadcn@latest add "https://www.ui-layouts.com/r/globe.json"` landed editable .tsx; specimen `uilayouts-globe.png` | `ui-layouts/uilayouts`, 3.6k★, pushed 2026-07-12 | Sister repo `cursify` (cursor collection) has NO licence — use only the MIT main repo |
+| **Lightswind** | The closest single content clone: 3D galleries/rings/model-viewer, sparkle/smokey cursors, `ascii-wave`, glitch, aurora shaders, ~260 free components | **MIT** (LICENSE fetched; 390 component files ARE in the repo) | **OK — ran it**: `npx lightswind@latest add ascii-wave` unauthenticated, no quota; specimen `lightswind-ascii-wave.png` | `codewithMUHILAN/Lightswind-UI-Library`, 874★, pushed 2026-07-24 | Young, one maintainer; premium WebGL set is a paid tier outside the repo; components depend on its `lightswind` npm package + `next-themes` |
+| **Fancy Components** | Cursor physics (attractor/gravity, pixel-trail), image-trail galleries, 24 text animations, gooey/pixelate filters | **MIT** (LICENSE fetched) | Registry unreachable from THIS network (timeout — same Vercel cluster) but verified serving .tsx from another network; **copy-from-repo works** | `danielpetho/fancy`, 3.1k★, pushed 2026-03-14 | ~5 months quiet; no WebGL |
+| **Magic UI** | Globe (cobe), particles/warp/meteors, smooth-cursor, ~20 text variants, hero blocks | **MIT** (LICENSE fetched) | Registry unreachable from THIS network; **repo carries all 338 component files** — vendor/copy-in works with zero account | `magicuidesign/magicui`, 21.9k★, pushed 2026-08-11 | The institutionally safest of the set |
+| **Paper Shaders** | The ASCII/dither/glitch-shader slice: dithering, halftone, god-rays, liquid-metal, smoke-ring | **Apache-2.0** | **OK — ran it** (npm); specimen `paper-shaders-mesh.png` | `paper-design/shaders`, 3.3k★, pushed today | Wrap-only npm; backgrounds/effects only |
+
+**Recommended replacement**: ui-layouts + Fancy Components + Magic UI + Paper Shaders
+together cover every Originkit category, all account-free, quota-free, MIT/Apache — with
+Magic UI and Fancy vendored from their MIT repos (their registries are unreachable from this
+network, which the vendored tier makes irrelevant). **Lightswind** is the single closest
+clone and its CLI ran clean from here — a fine additional quarry, riskier as a standard
+(bus-factor one, paid tier holds the best WebGL work).
+
+Rejected on the same dealbreakers as Originkit: react-bits + Animate UI (Commons Clause),
+Aceternity (proprietary licence, no repo), cursify/ShaderGradient/Berlix (no licence file),
+Skiper (no repo). Nothing MIT ships the literal tornado/black-hole set pieces; nearest
+substitutes are Magic UI warp/particles and Paper Shaders smoke-ring/god-rays.
+
 ## The curation gate — waiting on the user
 
 The table above (mechanics) + `release/75-specimens/*.png` (taste) is the review artifact.
