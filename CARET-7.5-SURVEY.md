@@ -131,7 +131,19 @@ Aceternity (proprietary licence, no repo), cursify/ShaderGradient/Berlix (no lic
 Skiper (no repo). Nothing MIT ships the literal tornado/black-hole set pieces; nearest
 substitutes are Magic UI warp/particles and Paper Shaders smoke-ring/god-rays.
 
-## The curation gate — waiting on the user
+## The curation gate — RESOLVED 2026-08-12
 
-The table above (mechanics) + `release/75-specimens/*.png` (taste) is the review artifact.
-**The user picks what ships. Nothing enters the catalog without that pass.**
+The user's ruling: ship everything certified **fully free and available** — a real MIT or
+Apache licence verified in the repo, no account, no key, no quota. Commons Clause entries
+(react-bits, Animate UI) are excluded by that bar; so are Originkit, Aceternity and Skiper
+(no/custom licence) and Tailark (paid-gated registry).
+
+**The shipped catalog, two tiers:**
+
+Install tier (their own channel, verified working from this machine):
+shadcn/ui · ui-layouts · Kokonut UI · SmoothUI · Eldora UI · Lightswind ·
+ldrs (npm, wrap-only) · Paper Shaders (npm, wrap-only) · tsParticles (npm, wrap-only)
+
+Vendored tier (MIT source mirrored from their public repos, because their registries are
+unreachable or bot-gated from this network — the mirror ships with Caret, licences intact):
+Magic UI · Fancy Components · motion-primitives · cult/ui · Animata
