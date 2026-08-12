@@ -2070,6 +2070,104 @@ async function main(): Promise<void> {
 		return "detach offered the token with its reach (1 place); the click repointed brand-500, regenerated the theme, and re-bound the element"
 	})
 
+	await scenario("bt. the property panel resolves real Params from the host and writes a splice", async () => {
+		// Phase 8.4 in the real app: selecting the (token-bound) subtitle opens
+		// the panel, the HOST resolves its Params from source (the shell suite
+		// only fakes this half), the colour row names the token it is bound to,
+		// and committing a padding value splices `p-[24px]` into the page file.
+		const caretDir = path.join(fixture, ".caret")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+				if (!pageFrame) return { error: "no focused page frame (bn should have left one open)" }
+
+				// A real left-click on the subtitle — selection is the panel's trigger.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const target = await pageFrame.executeJavaScript(
+					`(() => { const r = document.querySelector('[data-caret-id="hero-subtitle"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				const at = { x: Math.round(offset.x + target.x), y: Math.round(offset.y + target.y) }
+
+				// Click until the panel has rendered rows from the host's reply.
+				let colorRow = ""
+				const deadline = Date.now() + 30000
+				while (Date.now() < deadline && !colorRow) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 200))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					const rowDeadline = Date.now() + 5000
+					while (Date.now() < rowDeadline && !colorRow) {
+						colorRow = await pageFrame
+							.executeJavaScript(
+								`(() => {
+									const row = document.querySelector('#caret-param-panel [data-param-row="color"]')
+									return row ? row.textContent : ''
+								})()`,
+							)
+							.catch(() => "")
+						if (!colorRow) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!colorRow) return { error: "the panel never rendered a colour row from the host's Params" }
+
+				// Commit a padding value through the row's input.
+				const committed = await pageFrame.executeJavaScript(
+					`(() => {
+						const input = document.querySelector('#caret-param-panel [data-param-input="padding"]')
+						if (!input || input.disabled) return false
+						input.value = '24px'
+						input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+						return true
+					})()`,
+				)
+				if (!committed) return { error: "the padding row was missing or disabled" }
+
+				return { colorRow }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the panel failed: ${(outcome as any).error}`)
+		const { colorRow } = outcome as { colorRow: string }
+		assert(colorRow.includes("token brand-500"), `the colour row does not name its token: "${colorRow}"`)
+
+		await waitFor(
+			"the padding splice to land in the page file",
+			async () => {
+				const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				return source.includes("p-[24px]") ? true : null
+			},
+			20000,
+		)
+		const source = await fs.readFile(pagePath, "utf-8")
+		assert(
+			/data-caret-id="hero-subtitle"[^>]*className="[^"]*p-\[24px\]/s.test(source) ||
+				/className="[^"]*p-\[24px\][^"]*"[^>]*data-caret-id="hero-subtitle"/s.test(source),
+			"p-[24px] landed, but not on the subtitle element",
+		)
+
+		return `panel named the binding ("token brand-500") and a committed padding spliced p-[24px] onto the subtitle`
+	})
+
 	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {
 		// Correction capture end to end: two elements bound to brand-600, each
 		// hand-recoloured to the same value through the real Edit color action.

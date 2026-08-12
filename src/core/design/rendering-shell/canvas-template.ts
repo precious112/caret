@@ -24,6 +24,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
+		fs.writeFile(path.join(libDir, "param-panel.ts"), generateParamPanel()),
 		fs.writeFile(path.join(libDir, "asset-picker.ts"), generateAssetPicker()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
 	])
@@ -2711,11 +2712,169 @@ function generateEditPill(): string {
 	`
 }
 
+function generateParamPanel(): string {
+	return dedent`
+		import { bridge } from "./bridge"
+
+		/**
+		 * The property panel — the Param model's face. Opens on element selection
+		 * in the focused view: every supported property resolved FROM SOURCE by
+		 * the host (token vs literal vs inherited visible, the active responsive
+		 * variant named), verified against the runtime, edited as a splice.
+		 *
+		 * Panel edits default to precision, not detach: a value that names a
+		 * token writes the token class; anything else writes an exact value onto
+		 * the variant that is active at this viewport.
+		 */
+
+		interface PanelParam {
+		  property: string
+		  type: string
+		  value: string | null
+		  origin: string
+		  writable: boolean
+		  reason?: string
+		  token?: string
+		  variant: string | null
+		  utility: string | null
+		}
+
+		let panel: HTMLDivElement | null = null
+		let currentTarget: { filePath: string; caretId: string; lineNumber: number; element: Element } | null = null
+		let lastParams: Map<string, PanelParam> = new Map()
+
+		function viewportWidth(): number {
+		  return window.innerWidth
+		}
+
+		function ensurePanel(): HTMLDivElement {
+		  if (panel && panel.isConnected) return panel
+		  panel = document.createElement("div")
+		  panel.id = "caret-param-panel"
+		  panel.setAttribute("data-react-grab-ignore-events", "")
+		  panel.style.cssText = "position:fixed;top:64px;right:16px;width:264px;max-height:70vh;overflow:auto;z-index:99998;background:rgba(20,20,30,0.97);border:1px solid #3a3a4a;border-radius:12px;padding:12px 14px;font:12.5px/1.5 system-ui,sans-serif;color:#e5e7eb;box-shadow:0 8px 32px rgba(0,0,0,0.4);pointer-events:auto;"
+		  document.body.appendChild(panel)
+		  return panel
+		}
+
+		export function hideParamPanel() {
+		  panel?.remove()
+		  currentTarget = null
+		}
+
+		/** Opens (or refreshes) the panel for a selected element. */
+		export function showParamPanel(element: Element, filePath: string, lineNumber: number) {
+		  const caretId = element.getAttribute("data-caret-id") || ""
+		  if (!caretId) {
+		    hideParamPanel()
+		    return
+		  }
+		  currentTarget = { filePath, caretId, lineNumber, element }
+		  const host = ensurePanel()
+		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
+		  bridge.send({ type: "param-resolve", payload: { filePath, caretId, viewportWidth: viewportWidth() } })
+		}
+
+		function requestRefresh() {
+		  if (!currentTarget) return
+		  bridge.send({
+		    type: "param-resolve",
+		    payload: { filePath: currentTarget.filePath, caretId: currentTarget.caretId, viewportWidth: viewportWidth() },
+		  })
+		}
+
+		const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;")
+
+		function render(params: PanelParam[]) {
+		  if (!currentTarget) return
+		  lastParams = new Map(params.map((p) => [p.property, p]))
+		  const host = ensurePanel()
+		  const computed = window.getComputedStyle(currentTarget.element)
+
+		  const rows = params.map((p) => {
+		    // Runtime verification: when source resolution names a value and the
+		    // runtime disagrees, something else is in play (an inline style, a
+		    // wrapper) — say so instead of writing the wrong thing confidently.
+		    const runtime = computed.getPropertyValue(p.property)
+		    const disagrees = p.value !== null && p.type === "length" && runtime && p.value !== runtime && p.value !== "auto"
+
+		    const originLabel =
+		      p.origin === "token" ? \`token \${p.token}\` :
+		      p.origin === "literal" ? (p.variant ? \`editing \${p.variant}: (\${p.variant === "sm" ? "640" : p.variant === "md" ? "768" : p.variant === "lg" ? "1024" : p.variant === "xl" ? "1280" : "1536"}px and up)\` : "literal") :
+		      p.origin === "inherited" ? "inherited · sets here" :
+		      p.origin
+
+		    const disabled = !p.writable
+		    const shown = p.value ?? runtime ?? ""
+		    const swatch = p.type === "color" && shown
+		      ? \`<span style="display:inline-block;width:10px;height:10px;border-radius:3px;border:1px solid #555;background:\${esc(shown)};margin-right:5px;vertical-align:-1px"></span>\`
+		      : ""
+
+		    return \`<div style="margin-bottom:8px" data-param-row="\${esc(p.property)}">
+		      <div style="display:flex;justify-content:space-between;color:#8b93a7;font-size:11px">
+		        <span>\${esc(p.property)}</span>
+		        <span title="\${esc(p.reason || "")}">\${disagrees ? "≠ runtime · " : ""}\${esc(originLabel)}</span>
+		      </div>
+		      <div style="display:flex;align-items:center;gap:4px">
+		        \${swatch}
+		        <input data-param-input="\${esc(p.property)}" value="\${esc(p.token ?? shown)}" \${disabled || disagrees ? "disabled" : ""}
+		          style="flex:1;background:#161622;border:1px solid #3a3a4a;border-radius:6px;color:\${disabled || disagrees ? "#666" : "#e5e7eb"};padding:3px 8px;font-size:12px;outline:none" />
+		      </div>
+		    </div>\`
+		  }).join("")
+
+		  host.innerHTML = \`
+		    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+		      <strong style="font-size:12px">\${esc(currentTarget.caretId)}</strong>
+		      <button data-param-close style="all:unset;cursor:pointer;color:#8b93a7;font-size:15px;line-height:1">×</button>
+		    </div>
+		    \${rows}\`
+
+		  host.querySelector("[data-param-close]")?.addEventListener("click", hideParamPanel)
+		  for (const input of host.querySelectorAll<HTMLInputElement>("[data-param-input]")) {
+		    input.addEventListener("keydown", (e) => {
+		      if (e.key !== "Enter" || !currentTarget) return
+		      const property = input.getAttribute("data-param-input") || ""
+		      const raw = input.value.trim()
+		      if (!raw) return
+		      // A value that names a token writes the token; anything else is exact.
+		      const looksLikeToken = /^(brand(-\\d+)?|neutral-\\d+|success|warning|error|info)$/.test(raw)
+		      bridge.send({
+		        type: "param-edit",
+		        payload: {
+		          filePath: currentTarget.filePath,
+		          caretId: currentTarget.caretId,
+		          property,
+		          ...(looksLikeToken ? { token: raw } : { raw }),
+		          viewportWidth: viewportWidth(),
+		        },
+		      })
+		    })
+		  }
+		}
+
+		bridge.on("param-resolve-result", (payload: any) => {
+		  if (!currentTarget || payload?.caretId !== currentTarget.caretId) return
+		  render((payload.params || []) as PanelParam[])
+		})
+
+		// After any successful edit, re-resolve — spans have moved.
+		bridge.on("edit-result", (payload: any) => {
+		  if (payload?.success && currentTarget) setTimeout(requestRefresh, 250)
+		})
+	`
+}
+
 function generateCaretGrabPlugin(): string {
 	return dedent`
 		import { bridge } from "./bridge"
 		import { ackEdit, editPillEngaged } from "./edit-pill"
 		import { attachAssetPicker } from "./asset-picker"
+		import { hideParamPanel, showParamPanel } from "./param-panel"
+
+		window.addEventListener("keydown", (e) => {
+		  if (e.key === "Escape") hideParamPanel()
+		})
 
 		/**
 		 * The rendered box of the element an edit is aimed at.
@@ -3120,6 +3279,7 @@ function generateCaretGrabPlugin(): string {
 		              computed,
 		            },
 		          })
+		          showParamPanel(element, source.filePath, source.lineNumber)
 		        } catch (err) {
 		          logError("onElementSelect error:", err)
 		        }

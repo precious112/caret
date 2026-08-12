@@ -21,6 +21,8 @@ import * as path from "path"
 
 import { DESIGN_CHECKS_DOM_SCRIPT } from "../src/core/design/design-checks"
 import { mutateFlowDefinition } from "../src/core/design/flow-meta"
+import { resolveParamsFor } from "../src/core/design/param/edit"
+import { PANEL_PROPERTIES } from "../src/core/design/param/params"
 import { generateEntryFiles, writeThemeCss } from "../src/core/design/rendering-shell/entry-template"
 import { generateViteConfig } from "../src/core/design/rendering-shell/vite-config-template"
 import { ensureCaretDirectoryExists } from "../src/core/design/scaffold"
@@ -96,7 +98,7 @@ const FRAGMENT_PAGE = `export default function Fragmented() {
   return (
     <>
       <div className="min-h-screen bg-white p-8">
-        <h1 data-testid="frag-title" className="text-3xl font-bold text-zinc-900">Fragment Title</h1>
+        <h1 data-testid="frag-title" data-caret-id="frag-h1" className="text-3xl font-bold text-zinc-900">Fragment Title</h1>
         <p className="text-zinc-600">Inside a fragment.</p>
       </div>
     </>
@@ -1330,6 +1332,99 @@ async function main() {
 		} finally {
 			await page.close()
 			await fs.rm(flawedDir, { recursive: true, force: true })
+		}
+	})
+
+	await scenario("w. property panel opens on selection, renders real Params, and emits param-edit", async () => {
+		// The panel's read side is certified against the REAL resolver: the same
+		// resolveParamsFor the host runs, applied to the same fixture source, is
+		// injected as the host's reply. What the shell cannot provide is the
+		// Electron router — everything else (open on select, row rendering from
+		// the true Param shape, Enter → param-edit payload) runs for real.
+		const fragSource = await fs.readFile(path.join(caretDir, "pages", "fragmented", "index.tsx"), "utf-8")
+		const params = resolveParamsFor(fragSource, "pages/fragmented/index.tsx", "frag-h1", PANEL_PROPERTIES, 1440, null)
+		if (!params) throw new Error("the resolver found no frag-h1 element in the fixture source")
+		const fontSize = params.find((p) => p.property === "font-size")
+		if (!fontSize || fontSize.utility !== "text-3xl") {
+			throw new Error(`resolver did not surface text-3xl as font-size: ${JSON.stringify(fontSize)}`)
+		}
+
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=fragmented&mode=focused`)
+			await page.waitForSelector('[data-testid="frag-title"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2500)
+			await page.evaluate(() => {
+				;(window as any).__PARAM_MSGS__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "param-resolve" || e.data?.type === "param-edit") {
+						;(window as any).__PARAM_MSGS__.push(e.data)
+					}
+				})
+			})
+
+			const h1 = await page.evaluate(() => {
+				const el = document.querySelector('[data-testid="frag-title"]')!
+				const r = el.getBoundingClientRect()
+				return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+			})
+			await page.mouse.click(h1.x, h1.y)
+
+			// Selection must both open the panel and ask the host for Params.
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector("#caret-param-panel")),
+				10000,
+				"the property panel to open on selection",
+			)
+			const resolveMsg = await waitFor2(
+				async () =>
+					await page.evaluate(
+						() => (window as any).__PARAM_MSGS__.find((m: any) => m.type === "param-resolve") ?? null,
+					),
+				10000,
+				"the panel's param-resolve request",
+			)
+			if (resolveMsg.payload.caretId !== "frag-h1") {
+				throw new Error(`param-resolve asked about ${resolveMsg.payload.caretId}, expected frag-h1`)
+			}
+
+			// Play the host: reply with the REAL resolver's output.
+			await page.evaluate(
+				(injected) => {
+					window.postMessage({ source: "caret-host", type: "param-resolve-result", payload: injected }, "*")
+				},
+				JSON.parse(JSON.stringify({ caretId: "frag-h1", params })),
+			)
+
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector('[data-param-input="font-size"]')),
+				10000,
+				"the font-size row to render from the resolver's Params",
+			)
+			const rowValue = await page.evaluate(
+				() => (document.querySelector('[data-param-input="font-size"]') as HTMLInputElement).value,
+			)
+
+			// Enter in a row must speak the generalized edit.
+			await page.focus('[data-param-input="font-size"]')
+			await page.evaluate(() => {
+				const input = document.querySelector('[data-param-input="font-size"]') as HTMLInputElement
+				input.value = "24px"
+			})
+			await page.keyboard.press("Enter")
+			const editMsg = await waitFor2(
+				async () =>
+					await page.evaluate(() => (window as any).__PARAM_MSGS__.find((m: any) => m.type === "param-edit") ?? null),
+				10000,
+				"the param-edit message",
+			)
+			const e = editMsg.payload
+			if (e.caretId !== "frag-h1" || e.property !== "font-size" || e.raw !== "24px" || e.viewportWidth !== 1440) {
+				throw new Error(`param-edit payload is wrong: ${JSON.stringify(e)}`)
+			}
+			return `panel opened, rendered font-size "${rowValue}" from the real resolver, emitted a correct param-edit`
+		} finally {
+			await page.close()
 		}
 	})
 

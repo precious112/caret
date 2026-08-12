@@ -14,7 +14,8 @@ import type { AgentTask } from "../agent/bridge"
 import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
-import { spliceColorEdit, spliceParamEdit, spliceTextEdit } from "../param/edit"
+import { resolveParamsFor, spliceColorEdit, spliceParamEdit, spliceTextEdit } from "../param/edit"
+import { PANEL_PROPERTIES } from "../param/params"
 import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
@@ -47,6 +48,7 @@ import type {
 	InlineEditPayload,
 	OverlayEditPayload,
 	ParamEditPayload,
+	ParamResolvePayload,
 	PromoteTokenPayload,
 } from "./messages"
 import { isValidDesignMessagePayload } from "./messages"
@@ -214,6 +216,11 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 		case "param-edit":
 			message.payload.filePath = await resolveCaretPath(message.payload.filePath, workspacePath)
 			await handleParamEdit(message.payload, workspacePath)
+			break
+
+		case "param-resolve":
+			message.payload.filePath = await resolveCaretPath(message.payload.filePath, workspacePath)
+			await handleParamResolve(message.payload, workspacePath)
 			break
 
 		case "variant-pick":
@@ -413,6 +420,33 @@ async function handleVariantPick(payload: import("./messages").VariantPickPayloa
  * token or a raw value, spliced onto the variant active at the canvas's
  * viewport. What the property panel speaks.
  */
+/** The panel's read: every supported property of one element, resolved from source. */
+async function handleParamResolve(payload: ParamResolvePayload, workspacePath: string): Promise<void> {
+	try {
+		const [source, tokens] = await Promise.all([fs.readFile(payload.filePath, "utf-8"), readFoundationTokens(workspacePath)])
+		const params = resolveParamsFor(
+			source,
+			payload.filePath,
+			payload.caretId,
+			PANEL_PROPERTIES,
+			payload.viewportWidth,
+			tokens,
+		)
+		hostFor(workspacePath).sendToCanvas({
+			source: "caret-host",
+			type: "param-resolve-result",
+			payload: { caretId: payload.caretId, params: (params ?? []) as unknown as Array<Record<string, unknown>> },
+		})
+	} catch (err) {
+		Logger.warn(`[design] param resolve failed: ${err}`)
+		hostFor(workspacePath).sendToCanvas({
+			source: "caret-host",
+			type: "param-resolve-result",
+			payload: { caretId: payload.caretId, params: [] },
+		})
+	}
+}
+
 async function handleParamEdit(payload: ParamEditPayload, workspacePath: string): Promise<void> {
 	try {
 		const tokens = await readFoundationTokens(workspacePath)

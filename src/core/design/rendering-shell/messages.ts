@@ -10,6 +10,13 @@ export interface ElementSelectedPayload {
 	computed?: Record<string, string>
 }
 
+/** The panel asking for an element's resolved Params. */
+export interface ParamResolvePayload {
+	filePath: string
+	caretId: string
+	viewportWidth: number
+}
+
 /** The generalized edit: one Param path set to a token or a raw value. */
 export interface ParamEditPayload {
 	filePath: string
@@ -176,6 +183,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"design-sync-now": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
+	"param-resolve": (p) => isStr(p.filePath) && isStr(p.caretId) && isNum(p.viewportWidth),
 	"param-edit": (p) =>
 		isStr(p.filePath) && isStr(p.caretId) && isStr(p.property) && isNum(p.viewportWidth) && (isStr(p.token) || isStr(p.raw)),
 	"variant-pick": (p) => typeof p.variantId === "string",
@@ -205,6 +213,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
 	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
 	| { source: "caret-vite"; type: "param-edit"; payload: ParamEditPayload }
+	| { source: "caret-vite"; type: "param-resolve"; payload: ParamResolvePayload }
 	| { source: "caret-vite"; type: "variant-pick"; payload: VariantPickPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }
@@ -224,8 +233,15 @@ export interface EditStatusPayload {
 }
 
 /** Host → canvas. */
+export interface ParamResolveResultPayload {
+	caretId: string
+	/** Serialized Params (the core type, structurally). */
+	params: Array<Record<string, unknown>>
+}
+
 export type DesignOutboundMessage =
 	| { source: "caret-host"; type: "edit-result"; payload: EditResultPayload }
+	| { source: "caret-host"; type: "param-resolve-result"; payload: ParamResolveResultPayload }
 	| { source: "caret-host"; type: "edit-status"; payload: EditStatusPayload }
 	| { source: "caret-host"; type: "precompute-result"; payload: PrecomputeResultPayload }
 
