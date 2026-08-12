@@ -96,6 +96,23 @@ describe("splice-backed editors", () => {
 		outcome.handled.should.be.false()
 	})
 
+	it("text: refuses dynamic text with a typed reason instead of falling through", async () => {
+		await fs.writeFile(file, `<p data-caret-id="d">{user.name}</p>`)
+		const outcome = await spliceTextEdit(file, "d", "New")
+		outcome.handled.should.be.true()
+		outcome.ok.should.be.false()
+		outcome.reason?.should.containEql("comes from data")
+		;(await fs.readFile(file, "utf-8")).should.equal(`<p data-caret-id="d">{user.name}</p>`)
+	})
+
+	it("text: mixed static + dynamic children still edit the static span by oldText", async () => {
+		await fs.writeFile(file, `<p data-caret-id="m">Hello {user.name} friend</p>`)
+		const outcome = await spliceTextEdit(file, "m", "Howdy", "Hello")
+		outcome.handled.should.be.true()
+		outcome.ok.should.be.true()
+		;(await fs.readFile(file, "utf-8")).should.containEql("Howdy {user.name} friend")
+	})
+
 	it("param: sets a property through the generalized path and refuses with reasons", async () => {
 		await fs.writeFile(file, `<div data-caret-id="p" className="p-4">x</div>`)
 		const ok = await spliceParamEdit(file, "p", "padding", { raw: "24px" }, 1440, TOKENS)

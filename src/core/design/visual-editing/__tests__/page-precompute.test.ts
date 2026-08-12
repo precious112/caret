@@ -508,3 +508,62 @@ describe("precomputePage — caret-id normalization (unique + static)", () => {
 		ids.should.containEql("h1-1")
 	})
 })
+
+describe("precomputePage — splice-backed writes", () => {
+	it("preserves every byte outside the edited spans (no reprint, no re-indent)", () => {
+		// Deliberately odd formatting recast.print would have normalized.
+		const source = `export default function Page() {
+  return (
+      <div>
+            <h1   className="text-3xl"
+        >Oddly formatted</h1>
+      </div>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		const corrected = result.correctedSource!
+		corrected.should.containEql('<h1 data-caret-id="h1-1"   className="text-3xl"')
+		// The odd continuation-line formatting survives untouched.
+		corrected.should.containEql("\n        >Oddly formatted</h1>")
+		corrected.should.containEql("\n            <h1")
+	})
+
+	it("autofixes the single-ternary dynamic className into full class strings", () => {
+		const source = 'export default function Page() {\n  return <p className={`p-4 bg-${dark ? "black" : "white"}`}>Box</p>\n}'
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('className={dark ? "p-4 bg-black" : "p-4 bg-white"}')
+		// Fixed, so not reported — and a second pass plans nothing for it.
+		result.dynamicRanges.some((r) => r.diagnostics.includes("dynamic-tailwind-class")).should.be.false()
+		const second = precomputePage(result.correctedSource!, "test.tsx")
+		second.dynamicRanges.some((r) => r.diagnostics.includes("dynamic-tailwind-class")).should.be.false()
+	})
+
+	it("leaves the unfixable dynamic className as a diagnostic without editing it", () => {
+		const source = "export default function Page() {\n  return <p className={`bg-${color}-500`}>Box</p>\n}"
+		const result = precomputePage(source, "test.tsx")
+		result.dynamicRanges.some((r) => r.diagnostics.includes("dynamic-tailwind-class")).should.be.true()
+		;(result.correctedSource ?? source).should.containEql("`bg-${color}-500`")
+	})
+
+	it("drops extra data-caret-id attributes, keeping the first", () => {
+		const source = 'export default function Page() {\n  return <h1 data-caret-id="keep" data-caret-id="drop">Hi</h1>\n}'
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('data-caret-id="keep"')
+		result.correctedSource!.should.not.containEql('data-caret-id="drop"')
+	})
+
+	it("combines a fresh caret-id with an inline-style conversion on the same element", () => {
+		const source = 'export default function Page() {\n  return <h1 style={{ width: 320 }} className="font-bold">Hi</h1>\n}'
+		const result = precomputePage(source, "test.tsx")
+		result.modified.should.be.true()
+		const corrected = result.correctedSource!
+		corrected.should.containEql('data-caret-id="h1-1"')
+		corrected.should.containEql('className="font-bold w-[320px]"')
+		corrected.should.not.containEql("style=")
+		// And the whole thing settles: a second pass changes nothing.
+		precomputePage(corrected, "test.tsx").modified.should.be.false()
+	})
+})

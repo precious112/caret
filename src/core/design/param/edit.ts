@@ -25,6 +25,8 @@ export interface SpliceEditOutcome {
 	ok: boolean
 	/** The class the colour edit replaced, for detach detection. */
 	replacedClass?: string
+	/** Typed refusal: WHY the edit can't land, named for the user. */
+	reason?: string
 }
 
 const NOT_HANDLED: SpliceEditOutcome = { handled: false, ok: false }
@@ -47,7 +49,21 @@ export async function spliceTextEdit(
 		const index = getIndex(filePath, source)
 		if (index.parseError) return null
 		const element = index.elements.get(caretId)
-		if (!element || element.textSpans.length === 0) return null
+		if (!element) return null
+
+		// Absorbed rule, typed refusal: text that comes from data has no source
+		// span an inline edit could reach. Refusing with the cause beats the
+		// recast fallback failing with a shrug.
+		if (element.textSpans.length === 0) {
+			if (element.hasDynamicText) {
+				outcome = {
+					handled: true,
+					ok: false,
+					reason: "This text comes from data (a JSX expression), so an inline edit can't reach it. Edit the underlying value, or describe the change to the agent.",
+				}
+			}
+			return null
+		}
 
 		// The span to edit: the one carrying oldText when given (guards against
 		// a stale target after HMR), else the only span. Multiple spans with no

@@ -1,5 +1,6 @@
 import * as recast from "recast"
 
+import { applyEdits, type SpliceEdit } from "../param/splice"
 import { parseSource } from "./ast-editor"
 
 type ASTNode = recast.types.namedTypes.Node
@@ -132,26 +133,14 @@ function getCaretTagName(node: recast.types.namedTypes.JSXElement): string | nul
 	return null
 }
 
-function getCaretIdAttr(node: recast.types.namedTypes.JSXElement): recast.types.namedTypes.JSXAttribute | null {
+function getCaretIdAttrs(node: recast.types.namedTypes.JSXElement): recast.types.namedTypes.JSXAttribute[] {
+	const found: recast.types.namedTypes.JSXAttribute[] = []
 	for (const attr of node.openingElement.attributes || []) {
 		if (attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "data-caret-id") {
-			return attr
+			found.push(attr)
 		}
 	}
-	return null
-}
-
-/** Strip every `data-caret-id` attribute from the element. Returns true if any was removed. */
-function removeCaretIdAttribute(node: recast.types.namedTypes.JSXElement): boolean {
-	const attrs = node.openingElement.attributes || []
-	const kept = attrs.filter(
-		(attr) => !(attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "data-caret-id"),
-	)
-	if (kept.length !== attrs.length) {
-		node.openingElement.attributes = kept
-		return true
-	}
-	return false
+	return found
 }
 
 function getSemanticHint(node: recast.types.namedTypes.JSXElement): string | null {
@@ -178,13 +167,6 @@ function getSemanticHint(node: recast.types.namedTypes.JSXElement): string | nul
 function toKebabId(prefix: string, hint: string | null): string {
 	if (hint) return `${prefix}-${hint}`
 	return prefix
-}
-
-function addCaretIdAttribute(node: recast.types.namedTypes.JSXElement, id: string): void {
-	const b = recast.types.builders
-	const attr = b.jsxAttribute(b.jsxIdentifier("data-caret-id"), b.stringLiteral(id))
-	node.openingElement.attributes = node.openingElement.attributes || []
-	node.openingElement.attributes.unshift(attr)
 }
 
 function hasDynamicTextChild(node: recast.types.namedTypes.JSXElement): boolean {
@@ -215,23 +197,29 @@ function hasDynamicImageSrc(node: recast.types.namedTypes.JSXElement): boolean {
 	return false
 }
 
-function hasDynamicTailwindClass(node: recast.types.namedTypes.JSXElement): boolean {
+function getClassNameAttr(node: recast.types.namedTypes.JSXElement): recast.types.namedTypes.JSXAttribute | null {
 	for (const attr of node.openingElement.attributes || []) {
-		if (attr.type !== "JSXAttribute") continue
-		if (attr.name.type !== "JSXIdentifier" || attr.name.name !== "className") continue
-		if (attr.value?.type !== "JSXExpressionContainer") continue
+		if (attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === "className") {
+			return attr
+		}
+	}
+	return null
+}
 
-		const expr = attr.value.expression
-		if (expr.type === "TemplateLiteral" && expr.expressions.length > 0) {
-			for (const quasi of expr.quasis) {
-				const raw = quasi.value.raw
-				if (
-					TAILWIND_COLOR_PREFIXES.some(
-						(p) => raw.endsWith(p) || (raw.includes(p) && raw.indexOf(p) < raw.length - p.length),
-					)
-				) {
-					return true
-				}
+function hasDynamicTailwindClass(node: recast.types.namedTypes.JSXElement): boolean {
+	const attr = getClassNameAttr(node)
+	if (!attr || attr.value?.type !== "JSXExpressionContainer") return false
+
+	const expr = attr.value.expression
+	if (expr.type === "TemplateLiteral" && expr.expressions.length > 0) {
+		for (const quasi of expr.quasis) {
+			const raw = quasi.value.raw
+			if (
+				TAILWIND_COLOR_PREFIXES.some(
+					(p) => raw.endsWith(p) || (raw.includes(p) && raw.indexOf(p) < raw.length - p.length),
+				)
+			) {
+				return true
 			}
 		}
 	}
@@ -253,7 +241,40 @@ function getElementRange(node: recast.types.namedTypes.JSXElement): {
 	}
 }
 
-/** CSS properties whose numeric values are unitless — everything else numeric is px in JSX. */
+// ---------------------------------------------------------------------------
+// Splice planning
+//
+// Detection walks the recast AST; every WRITE is a span edit against the
+// original source, applied in one back-to-front pass by `applyEdits`. No
+// `recast.print()`: a reprint diffs the whole tree and re-indents whatever it
+// touches, which is the bug class the splice substrate exists to retire.
+// ---------------------------------------------------------------------------
+
+/** Character offsets straight from @babel/parser, present on every node. */
+function spanOf(node: unknown): { start: number; end: number } {
+	const n = node as { start?: number; end?: number }
+	if (typeof n.start !== "number" || typeof n.end !== "number") {
+		throw new Error("AST node carries no character offsets — parser configuration changed?")
+	}
+	return { start: n.start, end: n.end }
+}
+
+/** Removal span for an attribute, consuming the whitespace BEFORE it. */
+function attrRemovalEdit(source: string, attr: unknown, floor: number): SpliceEdit {
+	const { start, end } = spanOf(attr)
+	let from = start
+	while (from > floor && /\s/.test(source[from - 1])) from--
+	return { start: from, end, text: "" }
+}
+
+/** Insertion point just inside the opening tag's `>` or `/>`. */
+function beforeTagCloseInsertAt(source: string, opening: unknown): number {
+	const { end } = spanOf(opening)
+	let at = source.startsWith("/>", end - 2) ? end - 2 : end - 1
+	while (at > 0 && /\s/.test(source[at - 1])) at--
+	return at
+}
+
 const UNITLESS_PROPS = new Set(["opacity", "zIndex"])
 
 /** The `background` shorthand converts only when it is plainly a colour — a gradient or image stays inline. */
@@ -261,20 +282,27 @@ function isPlainColorValue(value: string): boolean {
 	return /^(#|rgb|rgba|hsl|hsla|oklch|oklab)/.test(value.trim())
 }
 
+interface InlineStylePlan {
+	classes: string[]
+	styleAttr: recast.types.namedTypes.JSXAttribute
+	styleExpr: recast.types.namedTypes.ObjectExpression
+	/** Property nodes that stay inline, kept as their original source slices. */
+	remaining: Array<{ start: number; end: number }>
+}
+
 /**
- * Converts what it can and **removes the converted properties from the style
- * object** — the half-converted state used to keep them, so every healer pass
- * re-converted the same properties and appended the same classes again: an
- * unbounded `w-[320] h-[200] w-[320] h-[200] …` and a write loop the debounce
- * only slowed. Removing as we convert makes the pass idempotent by
- * construction: a second pass finds only the unconvertible leftovers and
- * produces no classes at all.
+ * Plans the inline-style conversion without touching the AST: which classes to
+ * add, and which properties survive in the style object. Converted properties
+ * LEAVE the object — the half-converted state used to keep them, so every
+ * healer pass re-converted the same properties and appended the same classes
+ * again: an unbounded `w-[320] h-[200] w-[320] …` write loop. With removal,
+ * a second pass finds only unconvertible leftovers and plans nothing.
  */
-function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes: string[]; fullyConverted: boolean } | null {
-	const attrs = node.openingElement.attributes || []
+function planInlineStyleConversion(node: recast.types.namedTypes.JSXElement): InlineStylePlan | null {
+	let styleAttr: recast.types.namedTypes.JSXAttribute | null = null
 	let styleExpr: recast.types.namedTypes.ObjectExpression | null = null
 
-	for (const attr of attrs) {
+	for (const attr of node.openingElement.attributes || []) {
 		if (
 			attr.type === "JSXAttribute" &&
 			attr.name.type === "JSXIdentifier" &&
@@ -282,19 +310,20 @@ function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes
 			attr.value?.type === "JSXExpressionContainer" &&
 			attr.value.expression.type === "ObjectExpression"
 		) {
+			styleAttr = attr
 			styleExpr = attr.value.expression as recast.types.namedTypes.ObjectExpression
 			break
 		}
 	}
 
-	if (!styleExpr) return null
+	if (!styleAttr || !styleExpr) return null
 
 	const classes: string[] = []
-	const remaining: typeof styleExpr.properties = []
+	const remaining: Array<{ start: number; end: number }> = []
 
 	for (const prop of styleExpr.properties) {
 		if (prop.type !== "ObjectProperty" && prop.type !== "Property") {
-			remaining.push(prop)
+			remaining.push(spanOf(prop))
 			continue
 		}
 
@@ -302,7 +331,7 @@ function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes
 		const twPrefix = CSS_TO_TAILWIND[key]
 
 		if (!twPrefix) {
-			remaining.push(prop)
+			remaining.push(spanOf(prop))
 			continue
 		}
 
@@ -324,43 +353,46 @@ function convertInlineStyle(node: recast.types.namedTypes.JSXElement): { classes
 		if (value !== null) {
 			classes.push(`${twPrefix}-[${value.replace(/\s+/g, "_")}]`)
 		} else {
-			remaining.push(prop)
+			remaining.push(spanOf(prop))
 		}
 	}
 
 	if (classes.length === 0) return null
-
-	styleExpr.properties = remaining
-	return { classes, fullyConverted: remaining.length === 0 }
+	return { classes, styleAttr, styleExpr, remaining }
 }
 
-function mergeClassesIntoClassName(node: recast.types.namedTypes.JSXElement, newClasses: string[]): void {
-	const b = recast.types.builders
-	const attrs = node.openingElement.attributes || []
-	const classStr = newClasses.join(" ")
+/**
+ * The `dynamic-tailwind-class` AUTOFIX, for the one shape that is fixable
+ * deterministically: a template className whose only interpolation is a
+ * ternary of two string literals. Tailwind's JIT cannot see partial class
+ * names in either arm, so the fix hoists the ternary to full class strings:
+ *
+ *     className={`p-4 bg-${dark ? "black" : "white"}`}
+ *  →  className={dark ? "p-4 bg-black" : "p-4 bg-white"}
+ *
+ * Anything wider (multiple interpolations, non-literal arms, computed lookups)
+ * stays a diagnostic — expanding it would guess at runtime values.
+ */
+function planDynamicClassAutofix(source: string, node: recast.types.namedTypes.JSXElement): SpliceEdit | null {
+	const attr = getClassNameAttr(node)
+	if (!attr || attr.value?.type !== "JSXExpressionContainer") return null
+	const expr = attr.value.expression
+	if (expr.type !== "TemplateLiteral" || expr.expressions.length !== 1 || expr.quasis.length !== 2) return null
 
-	for (const attr of attrs) {
-		if (
-			attr.type === "JSXAttribute" &&
-			attr.name.type === "JSXIdentifier" &&
-			attr.name.name === "className" &&
-			attr.value?.type === "StringLiteral"
-		) {
-			attr.value.value = attr.value.value + " " + classStr
-			return
-		}
+	const inner = expr.expressions[0]
+	if (inner.type !== "ConditionalExpression") return null
+	if (inner.consequent.type !== "StringLiteral" || inner.alternate.type !== "StringLiteral") return null
+
+	const pre = expr.quasis[0].value.cooked ?? expr.quasis[0].value.raw
+	const post = expr.quasis[1].value.cooked ?? expr.quasis[1].value.raw
+	const arm = (lit: string) => JSON.stringify(`${pre}${lit}${post}`.trim())
+	const test = spanOf(inner.test)
+	const whole = spanOf(expr)
+	return {
+		start: whole.start,
+		end: whole.end,
+		text: `${source.slice(test.start, test.end)} ? ${arm(inner.consequent.value)} : ${arm(inner.alternate.value)}`,
 	}
-
-	attrs.push(b.jsxAttribute(b.jsxIdentifier("className"), b.stringLiteral(classStr)))
-}
-
-function removeStyleAttribute(node: recast.types.namedTypes.JSXElement): void {
-	const attrs = node.openingElement.attributes || []
-	node.openingElement.attributes = attrs.filter((attr) => {
-		if (attr.type !== "JSXAttribute") return true
-		if (attr.name.type !== "JSXIdentifier") return true
-		return attr.name.name !== "style"
-	})
 }
 
 function isInsideIterator(path: any): boolean {
@@ -401,7 +433,7 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 	}
 
 	const dynamicRanges: DynamicRange[] = []
-	let modified = false
+	const edits: SpliceEdit[] = []
 	const idCounters = new Map<string, number>()
 	const violations: CaretIdViolations = { dynamic: 0, duplicate: 0, inIterator: 0 }
 
@@ -411,7 +443,7 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 	const existingIds = new Set<string>()
 	recast.types.visit(ast, {
 		visitJSXElement(path) {
-			const attr = getCaretIdAttr(path.node)
+			const attr = getCaretIdAttrs(path.node)[0]
 			if (attr?.value?.type === "StringLiteral") existingIds.add(attr.value.value)
 			return this.traverse(path)
 		},
@@ -437,71 +469,112 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 			const node = path.node
 			const nativeTag = getTagName(node)
 			const caretTag = getCaretTagName(node)
+			const nameEnd = spanOf(node.openingElement.name).end
+
+			// Zero-width inserts directly after the tag name, combined into ONE
+			// edit — applyEdits rightly refuses two inserts at the same offset.
+			const nameEndInserts: string[] = []
 
 			const inIterator = isInsideIterator(path)
 			const range = getElementRange(node)
+
+			// The fixable shape of dynamic-tailwind-class is FIXED, not reported.
+			let dynamicClassFixed = false
+			if (hasDynamicTailwindClass(node)) {
+				const fix = planDynamicClassAutofix(source, node)
+				if (fix) {
+					edits.push(fix)
+					dynamicClassFixed = true
+				}
+			}
 
 			if (inIterator && range && caretTag) {
 				const diagnostics: DiagnosticCode[] = []
 				if (isVisibleTag(caretTag) && hasDynamicTextChild(node)) diagnostics.push("dynamic-text")
 				if (caretTag === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
-				if (hasDynamicTailwindClass(node)) diagnostics.push("dynamic-tailwind-class")
-				if (diagnostics.length === 0) diagnostics.push("dynamic-text")
-				dynamicRanges.push({ ...range, diagnostics })
+				if (hasDynamicTailwindClass(node) && !dynamicClassFixed) diagnostics.push("dynamic-tailwind-class")
+				if (diagnostics.length === 0 && !dynamicClassFixed) diagnostics.push("dynamic-text")
+				if (diagnostics.length > 0) dynamicRanges.push({ ...range, diagnostics })
 			}
 
 			// Convert inline styles — native DOM elements only (never motion.* etc.,
 			// whose `style` can carry animated motion values).
 			if (nativeTag && isNativeElement(nativeTag)) {
-				const conversion = convertInlineStyle(node)
-				if (conversion) {
-					mergeClassesIntoClassName(node, conversion.classes)
-					if (conversion.fullyConverted) {
-						removeStyleAttribute(node)
+				const plan = planInlineStyleConversion(node)
+				if (plan) {
+					if (plan.remaining.length === 0) {
+						edits.push(attrRemovalEdit(source, plan.styleAttr, nameEnd))
+					} else {
+						const kept = plan.remaining.map((span) => source.slice(span.start, span.end)).join(", ")
+						const exprSpan = spanOf(plan.styleExpr)
+						edits.push({ start: exprSpan.start, end: exprSpan.end, text: `{ ${kept} }` })
 					}
-					modified = true
+
+					const classStr = plan.classes.join(" ")
+					const classAttr = getClassNameAttr(node)
+					if (classAttr && classAttr.value?.type === "StringLiteral") {
+						const valueSpan = spanOf(classAttr.value)
+						edits.push({
+							start: valueSpan.end - 1,
+							end: valueSpan.end - 1,
+							text: classAttr.value.value.length > 0 ? ` ${classStr}` : classStr,
+						})
+					} else {
+						// No className, or a dynamic one: a new static attribute goes
+						// last in the opening tag, so React's last-prop-wins keeps the
+						// converted classes — the same outcome the AST push had.
+						const at = beforeTagCloseInsertAt(source, node.openingElement)
+						edits.push({ start: at, end: at, text: ` className="${classStr}"` })
+					}
 				}
 			}
 
 			// Normalize caret-ids on visible elements (native + motion.<visible-tag>):
 			// every one must be a UNIQUE STATIC string literal, or the AST-based inline
 			// editor can't locate it. This both auto-corrects and counts AI rule breaks.
+			// Append-only: an existing valid id is never rewritten, and a clean rerun
+			// plans zero edits — no write, no HMR, no heal loop.
 			if (caretTag && isVisibleTag(caretTag)) {
+				const idAttrs = getCaretIdAttrs(node)
 				if (inIterator) {
 					// Elements inside .map() render N times — a single literal id would
 					// duplicate across rows. Inline editing isn't supported here; strip it.
-					if (removeCaretIdAttribute(node)) {
-						modified = true
+					if (idAttrs.length > 0) {
+						for (const attr of idAttrs) edits.push(attrRemovalEdit(source, attr, nameEnd))
 						violations.inIterator++
 					}
+				} else if (idAttrs.length === 0) {
+					nameEndInserts.push(` data-caret-id="${freshId(caretTag, node)}"`)
 				} else {
-					const attr = getCaretIdAttr(node)
-					if (!attr) {
-						addCaretIdAttribute(node, freshId(caretTag, node))
-						modified = true
-					} else if (attr.value?.type !== "StringLiteral") {
+					const attr = idAttrs[0]
+					if (attr.value?.type !== "StringLiteral") {
 						// Dynamic id (`{expr}` / template / ternary) — the AST matcher only
 						// matches string literals. Replace with a unique static one.
-						removeCaretIdAttribute(node)
-						addCaretIdAttribute(node, freshId(caretTag, node))
-						modified = true
+						const span = spanOf(attr)
+						edits.push({ start: span.start, end: span.end, text: `data-caret-id="${freshId(caretTag, node)}"` })
 						violations.dynamic++
 					} else if (usedIds.has(attr.value.value)) {
 						// Duplicate static id — rename the later occurrence.
-						attr.value.value = freshId(caretTag, node)
-						modified = true
+						const valueSpan = spanOf(attr.value)
+						edits.push({ start: valueSpan.start + 1, end: valueSpan.end - 1, text: freshId(caretTag, node) })
 						violations.duplicate++
 					} else {
 						usedIds.add(attr.value.value)
 					}
+					// Extra data-caret-id attributes are always a mistake — drop them.
+					for (const extra of idAttrs.slice(1)) edits.push(attrRemovalEdit(source, extra, nameEnd))
 				}
+			}
+
+			if (nameEndInserts.length > 0) {
+				edits.push({ start: nameEnd, end: nameEnd, text: nameEndInserts.join("") })
 			}
 
 			if (!inIterator && range && caretTag) {
 				const diagnostics: DiagnosticCode[] = []
 				if (hasDynamicTextChild(node)) diagnostics.push("dynamic-text")
 				if (caretTag === "img" && hasDynamicImageSrc(node)) diagnostics.push("dynamic-image-src")
-				if (hasDynamicTailwindClass(node)) diagnostics.push("dynamic-tailwind-class")
+				if (hasDynamicTailwindClass(node) && !dynamicClassFixed) diagnostics.push("dynamic-tailwind-class")
 				if (diagnostics.length > 0) {
 					dynamicRanges.push({ ...range, diagnostics })
 				}
@@ -520,9 +593,19 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 		)
 	}
 
-	const result: PrecomputeResult = { filePath, modified, dynamicRanges, caretIdViolations: violations }
-	if (modified) {
-		result.correctedSource = recast.print(ast).code
+	const result: PrecomputeResult = { filePath, modified: false, dynamicRanges, caretIdViolations: violations }
+	if (edits.length > 0) {
+		try {
+			const corrected = applyEdits(source, edits)
+			if (corrected !== source) {
+				result.modified = true
+				result.correctedSource = corrected
+			}
+		} catch (err) {
+			// Overlapping spans mean the plan was wrong for this shape — refuse the
+			// whole write rather than corrupt the file. Detection results stand.
+			console.error(`[design] precompute: splice plan failed for ${filePath}, leaving file untouched:`, err)
+		}
 	}
 	return result
 }

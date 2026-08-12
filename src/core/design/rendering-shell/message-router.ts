@@ -16,6 +16,7 @@ import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
 import { resolveParamsFor, spliceColorEdit, spliceParamEdit, spliceTextEdit } from "../param/edit"
 import { PANEL_PROPERTIES } from "../param/params"
+import { getIndex } from "../param/source-index"
 import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
@@ -491,6 +492,7 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 		// Serialized per file: rapid successive edits (or an edit racing the
 		// precompute hook) must never interleave read-modify-writes.
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
+		let refusal: string | undefined
 		const success = await runExclusive(payload.filePath, async () => {
 			if (payload.editType === "text") {
 				// Splice path first: replaces only the trimmed content span, so the
@@ -498,7 +500,10 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 				// for the ordinary case. The recast chain stays as the fallback for
 				// what an index lookup can't serve.
 				const spliced = await spliceTextEdit(payload.filePath, payload.caretId, payload.newValue, payload.oldValue)
-				if (spliced.handled) return spliced.ok
+				if (spliced.handled) {
+					refusal = spliced.reason
+					return spliced.ok
+				}
 				return editJSXText(
 					payload.filePath,
 					payload.lineNumber,
@@ -509,7 +514,9 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 				)
 			}
 			if (payload.editType === "image") {
-				return handleImageEdit(payload, workspacePath)
+				const image = await handleImageEdit(payload, workspacePath)
+				refusal = image.reason
+				return image.ok
 			}
 			return false
 		})
@@ -528,7 +535,9 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 		} else {
 			sendEditResult(workspacePath, {
 				success: false,
-				error: "This content can't be edited inline — it may use dynamic expressions. Use AI Edit to describe the change you want.",
+				error:
+					refusal ??
+					"This content can't be edited inline — it may use dynamic expressions. Use AI Edit to describe the change you want.",
 				suggestAiEdit: true,
 			})
 		}
@@ -740,8 +749,22 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 	}
 }
 
-async function handleImageEdit(payload: InlineEditPayload, workspacePath: string): Promise<boolean> {
-	if (!payload.imageData) return false
+async function handleImageEdit(payload: InlineEditPayload, workspacePath: string): Promise<{ ok: boolean; reason?: string }> {
+	if (!payload.imageData) return { ok: false }
+
+	// Absorbed rule, typed refusal: a computed `src` has no literal to replace.
+	if (payload.caretId) {
+		const source = await fs.readFile(payload.filePath, "utf-8").catch(() => null)
+		if (source !== null) {
+			const srcAttr = getIndex(payload.filePath, source).elements.get(payload.caretId)?.attributes.get("src")
+			if (srcAttr && srcAttr.value === null) {
+				return {
+					ok: false,
+					reason: "This image's src is computed at runtime, so an inline swap can't reach it. Change the value it computes from, or describe the change to the agent.",
+				}
+			}
+		}
+	}
 
 	const assetsDir = path.join(workspacePath, ".caret", "assets")
 	await fs.mkdir(assetsDir, { recursive: true })
@@ -752,7 +775,7 @@ async function handleImageEdit(payload: InlineEditPayload, workspacePath: string
 
 	await fs.writeFile(destPath, Buffer.from(base64Data, "base64"))
 
-	return editJSXImageSrc(payload.filePath, payload.lineNumber, `./assets/${fileName}`, payload.caretId)
+	return { ok: await editJSXImageSrc(payload.filePath, payload.lineNumber, `./assets/${fileName}`, payload.caretId) }
 }
 
 async function handlePageFocused(rawFilePath: string, workspacePath: string): Promise<void> {

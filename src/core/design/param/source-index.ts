@@ -50,6 +50,8 @@ export interface IndexedElement {
 	attributes: Map<string, AttributeSpan>
 	/** Direct JSXText children with non-empty trimmed content. */
 	textSpans: TextSpan[]
+	/** A direct child is a JSX expression — the text comes from data, not source. */
+	hasDynamicText: boolean
 	/** Inside `.map()`/`.forEach()`/… — one source span, N rendered rows. */
 	inIterator: boolean
 }
@@ -146,7 +148,15 @@ export function indexSource(source: string): SourceIndex {
 
 		if (caretId && !elements.has(caretId)) {
 			const textSpans: TextSpan[] = []
+			let hasDynamicText = false
 			for (const child of node.children ?? []) {
+				if (
+					child.type === "JSXExpressionContainer" &&
+					child.expression?.type !== "StringLiteral" &&
+					child.expression?.type !== "JSXEmptyExpression"
+				) {
+					hasDynamicText = true
+				}
 				if (child.type !== "JSXText") continue
 				const raw: string = child.value ?? ""
 				const trimmed = raw.trim()
@@ -171,6 +181,7 @@ export function indexSource(source: string): SourceIndex {
 				openingInsertAt,
 				attributes,
 				textSpans,
+				hasDynamicText,
 				inIterator,
 			})
 		}
