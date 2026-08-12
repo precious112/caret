@@ -148,6 +148,35 @@ export {
 } from "./assets"
 export { CARET_ID_RULES, INLINE_EDITING_RULES } from "./authoring/design-rules"
 export {
+	CATALOG,
+	CATALOG_INSTALL_DIR,
+	type CatalogComponent,
+	type CatalogLibrary,
+	type CatalogTier,
+	catalogImportPath,
+	type EditableGrade,
+	findCatalogComponent,
+	findCatalogLibrary,
+	parseCatalogImport,
+} from "./catalog/catalog"
+export {
+	type CatalogLock,
+	type CatalogLockEntry,
+	type InstallResult,
+	installCatalogComponent,
+	isInstalled,
+	readCatalogLock,
+	rebindHexClasses,
+} from "./catalog/install"
+export {
+	type CatalogImportRef,
+	catalogFindings,
+	planSupply,
+	SIGNATURE_BUDGET_PER_PAGE,
+	type SupplyPlan,
+	scanCatalogImports,
+} from "./catalog/supply"
+export {
 	type CorrectionSignal,
 	markSignal,
 	mineCorrections,

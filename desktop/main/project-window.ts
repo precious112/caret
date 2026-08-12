@@ -29,6 +29,7 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { AgentService } from "./agent-service"
+import { CatalogService } from "./catalog-service"
 import { DesignChecksService } from "./design-checks"
 import { createElectronDesignHost } from "./electron-host"
 import { CaretMcpServer } from "./mcp/server"
@@ -61,6 +62,7 @@ export class ProjectWindow {
 	private canvas: WebContentsView | null = null
 	private agent: AgentService
 	private checks: DesignChecksService
+	private catalog: CatalogService
 	private session: DesignSession
 	private mcp: CaretMcpServer
 	private healer: WatchAndHeal
@@ -103,6 +105,14 @@ export class ProjectWindow {
 			baseUrl: () => this.session.getUrl(),
 		})
 
+		this.catalog = new CatalogService({
+			projectPath: this.projectPath,
+			// The lock is always-on context — a stale index would have the agent
+			// re-import what is already installed under a different name.
+			onInstalled: () =>
+				void regenerateRulesFiles(this.projectPath).catch((err) => Logger.warn(`[window] rules regen failed: ${err}`)),
+		})
+
 		// Constructed before the session, because registering the bridge is what
 		// makes every outbound feature stop refusing.
 		this.agent = new AgentService({
@@ -127,6 +137,7 @@ export class ProjectWindow {
 			onAgentConnectionChanged: () => void this.pushState(),
 			screenshot: (pageId) => this.screenshotPage(pageId),
 			runChecks: (pageId) => this.checks.run(pageId ? [pageId] : undefined),
+			installComponent: (libraryId, componentId) => this.catalog.install(libraryId, componentId),
 			onInterviewPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
 		})
 
@@ -138,6 +149,7 @@ export class ProjectWindow {
 			// An asset can arrive from an agent or from Finder, not only from the
 			// library surface, so the renderer is told rather than left to poll.
 			onAssetsChanged: () => this.sendToChrome("assets:changed", this.projectPath),
+			onPageWritten: (file) => void this.catalog.ensureSuppliedFor(file),
 		})
 
 		this.loadChrome()

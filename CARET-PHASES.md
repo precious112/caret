@@ -806,7 +806,7 @@ the unasked canvas chip).
 
 ---
 
-## [ ] Phase 7.5: Component supply — the curated catalog
+## [x] Phase 7.5: Component supply — the curated catalog
 
 **The supply gap, answered for components.** Reference screenshots (Replit's Mobbin answer) make
 an agent *reproduce* what it saw. A component library makes the quality **transfer as code**, in
@@ -815,49 +815,59 @@ the strictly better answer, and unlike the rest of Phase 11 it does not wait on 
 research: the candidates already exist and the user is already collecting them. Engineering
 detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §5.5.
 
-**Research + curation gate — do this first, then stop and wait:**
+**Research + curation gate — RESOLVED 2026-08-12** (artifact: [CARET-7.5-SURVEY.md](./CARET-7.5-SURVEY.md)):
 
-- [ ] Survey candidate libraries: micro-interactions and transitions, loaders, effects
-      (ASCII, halftone, grain, displacement), hero/section compositions, animated primitives
-- [ ] For each, verify programmatic access **by running it**, not by reading the marketing page:
-      does the CLI/registry install work headlessly, is there a public repo, what is the licence
-- [ ] Produce the review table — name · what it's for · distribution shape · install command ·
-      licence · repo · registry endpoint reachable · editable once installed · **rendered
-      specimen** (taste is being judged, not just mechanics)
-- [ ] **User reviews the full list and picks what ships.** Nothing enters the catalog without
-      that pass — curation is the entire value; an unreviewed catalog is just more averaging.
+- [x] 22 candidates surveyed against live registries and repo LICENSE files; installs verified
+      **by running them** from this machine; 15 rendered specimens
+- [x] Findings that shaped the design: three MIT registries are network-unreachable from here
+      (Vercel edge), one is bot-gated, one "free" library's blocks are paid, and the Originkit
+      class (great CLI, undeclared licence, account + delivery quota) exists — so the catalog
+      needed a **vendored tier**, not just install commands
+- [x] **The user's ruling: everything certified fully free ships** — real MIT/Apache in the
+      repo, no account, no key, no quota. Commons Clause (react-bits, Animate UI) and
+      no-licence candidates (Originkit, Aceternity, Skiper, cursify) excluded.
 
-**Two tiers (settled 2026-08-01):**
+**Two tiers (landed as four install mechanisms under the two-tier idea):**
 
-- [ ] **Shipped catalog** — curated, user-reviewed, versioned with Caret. This is the allowlist:
-      pinned versions, licence per entry, one-line "use when" per component.
-- [ ] **Per-project `.caret/`** — what the agent actually installed for *this* project, with
-      provenance (library, version, component, source URL, licence). Under git, so the choice
-      persists across sessions like every other correction.
+- [x] **Shipped catalog** (`src/core/design/catalog/catalog.ts`): 14 libraries, ~80 curated
+      components, licence + pinned origin + one-line use-when + `editable` grade + `signature`
+      flag per component. The five whose registries can't be trusted from every network
+      (Magic UI, Fancy, motion-primitives, cult/ui, Animata) are **vendored**: MIT source
+      mirrored at pinned SHAs into `assets/catalog/` by `scripts/vendor-catalog.ts` (imports
+      normalised, LICENSE files alongside, a manifest the engine reads; the vendor run fails on
+      any undeclared dep so the catalog can't drift from the source). ui-layouts / Kokonut /
+      SmoothUI / Eldora install from their own registries via Caret's proxy-aware fetch — no
+      third-party CLI ever executes in the project (Lightswind's runs in a throwaway temp dir).
+      ldrs / Paper Shaders / tsParticles are npm tier with generated token-bindable wrappers.
+- [x] **Per-project lock** — `.caret/components/catalog/catalog-lock.json`, versioned:
+      library, component, pinned origin, licence, files, deps per install. The rules index
+      marks installed components, so the choice persists like every other correction.
 
 **Integration rules:**
 
-- [ ] **Use the install path, never the read path.** The agent never fetches a docs site at
-      generation time — bot walls, JS-rendered docs and moved URLs are dependencies Caret does
-      not control. It installs, then reads the resulting source locally, forever.
-- [ ] **Two-axis filter**: *ingestible* (installs programmatically, public repo, readable
-      licence) **and** *editable once installed* (source lands in `.caret/`, takes caret-ids,
-      colours rebindable to `foundation.json`). Both required; they fail independently.
-- [ ] On install: rebind hardcoded colours/type to foundation tokens where they match, and let
-      the Phase 6 watch-and-heal codemod stamp caret-ids (it fires on any `.caret/` write, so
-      installed components become visually editable with no extra machinery)
-- [ ] **Opaque npm packages degrade honestly** — wrap in a `.caret/components/` wrapper that
-      owns props and tokens, mark the interior `writable: false` with a reason. Never a silent
-      dead zone in the canvas.
-- [ ] Catalog **index** (names + "use when") goes in the always-on rules files; full prop APIs
-      are read on demand from installed source. An agent that must *choose* to check the
-      catalog will hand-roll a spinner instead — same failure mode as pull-only `get_guide`.
-- [ ] **Restraint budget: roughly one signature move per page**, enforced in the rules and
-      checked by the Phase 7 acceptance checker. A micro-interaction library is a slop
-      *accelerant* without this — "a bounce animation on every hover" is on the documented
-      slop-tell list, and the reference designs won on restraint everywhere but one move.
-- [ ] Supply-chain posture: allowlist only, pinned versions, explicit user consent on a
-      library's first install into a project
+- [x] **The install path became auto-supply.** The rules advertise exact import paths
+      (`../../components/catalog/<lib>/<component>`); the agent just imports, and after any
+      page write settles (agent turn, hand edit, external save — the healer routes them all)
+      Caret installs what the import names. No tool call to forget. `install_component` exists
+      over MCP for agents that want the source present before writing. No docs site is ever
+      read at generation time.
+- [x] Two-axis filter encoded in the data: only clean licences enter (unit-tested), and every
+      component carries its `editable` grade so the cost is a lookup, not a discovery
+- [x] On install: exact-match hex classes rebind to foundation tokens, the healer stamps
+      caret-ids (it fires on the write), deps land in `.caret/package.json` and install with
+      `--ignore-scripts`
+- [x] npm wrap-only libraries land as generated wrappers owning token-bindable props; the
+      sealed interior is declared (`props-only` in the index) rather than discovered
+- [x] Catalog index in the always-on rules: per-component use-when, `[full]`/`[props]`
+      editability, ⚡ signature marker, `(installed)` state — plus the framing rules (the
+      catalog is default-OFF; prefer the most editable thing that works; unsure → offer it as
+      one take in a variant pick, never the default)
+- [x] **Restraint budget, enforced twice**: auto-supply refuses to install a second ⚡ on a
+      page (the import stays visibly broken), and the acceptance checker flags
+      `restraint-budget` as an error — which feeds back into the writing session
+      automatically. The agent cannot spam what Caret declines to supply.
+- [x] Supply chain: allowlist only (non-catalog ids refuse), pinned SHAs/origins, consent per
+      library per project with real buttons, third-party CLIs never run inside the project
 
 **Deliverable:** the agent reaches for a genuinely good loader, effect or section instead of
 hand-rolling a generic one — from a set the user personally approved, installed as editable

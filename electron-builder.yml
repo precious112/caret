@@ -17,6 +17,9 @@ afterPack: build/after-pack.cjs
 files:
   - out/**/*
   - package.json
+  # The vendored component catalog: MIT/Apache source mirrored at pinned SHAs,
+  # licences alongside. Ships in the bundle so catalog installs need no network.
+  - assets/catalog/**/*
 
 # The coding backend Caret drives. Spawned from here and never from `PATH`, so a
 # user upgrading their own OpenCode cannot change what Caret executes.

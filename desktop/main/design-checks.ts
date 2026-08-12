@@ -9,9 +9,12 @@ import { createRequire } from "node:module"
 import { BrowserWindow } from "electron"
 import * as fs from "fs/promises"
 
+import * as path from "path"
+
 import {
 	type AgentConversation,
 	type CheckFinding,
+	catalogFindings,
 	DESIGN_CHECKS_DOM_SCRIPT,
 	filterByConfig,
 	formatFeedback,
@@ -21,6 +24,7 @@ import {
 	pageIdsFromFiles,
 	type RunOutcome,
 	type RunRequest,
+	readCatalogLock,
 	readChecksConfig,
 	shouldFeedBack,
 	storeChecksResults,
@@ -108,8 +112,15 @@ export class DesignChecksService {
 
 		const results: PageCheckResult[] = []
 		const rendererUp = this.options.baseUrl() !== null
+		const lock = await readCatalogLock(this.options.projectPath)
 		for (const page of targets) {
 			const findings: CheckFinding[] = [...metaFindings(page)]
+			// Catalog restraint findings are computed from SOURCE — a budget breach
+			// must flag even when the renderer is down.
+			const pageSource = await fs
+				.readFile(path.join(this.options.projectPath, ".caret", "pages", page.id, "index.tsx"), "utf-8")
+				.catch(() => "")
+			if (pageSource) findings.push(...catalogFindings(pageSource, page.id, lock))
 			if (rendererUp) {
 				const rendered = await this.checkRendered(page.id).catch((err) => {
 					Logger.warn(`[checks] could not render ${page.id}: ${err}`)

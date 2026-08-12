@@ -85,6 +85,12 @@ export interface WatchAndHealOptions {
 	onFirstDirectWrite?(filePath: string): void
 	/** Called after a heal actually changed a file, so the canvas can be told. */
 	onHealed?(filePath: string): void
+	/**
+	 * Called after any page/component write settles (healed or not) — the
+	 * catalog's auto-supply hook. Whoever wrote the file, an import of a
+	 * catalog component must become true.
+	 */
+	onPageWritten?(filePath: string): void
 	/** Called when foundation tokens change, after the rules files are rewritten. */
 	onTokensChanged?(): void
 	/** Called after the asset index changed, so the library surface can refresh. */
@@ -227,6 +233,8 @@ export class WatchAndHeal {
 			// showing the user — the next save will heal it.
 			Logger.debug(`[heal] could not heal ${filePath}: ${err}`)
 		}
+
+		this.options.onPageWritten?.(resolved)
 	}
 
 	/**

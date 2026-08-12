@@ -2383,6 +2383,141 @@ async function main(): Promise<void> {
 		return `MCP returned ${checksFound.size} check kinds incl. all four planted; canvas chip "${text.trim()}" opened a panel naming the page`
 	})
 
+	await scenario(
+		"bs. a catalog import is auto-supplied on consent, and the budget refuses a second signature piece",
+		async () => {
+			// The 7.5 loop end to end: an externally written page imports a catalog
+			// component by its documented path; the healer routes it to auto-supply;
+			// the consent prompt is answered with a real click; the vendored source
+			// lands with its licence, lock entry and deps; the rules index marks it
+			// installed. Then the restraint budget: two signature imports on one page
+			// — the first is supplied, the second is refused and flagged as an error.
+			const caretDir = path.join(fixture, ".caret")
+			const pageDir = path.join(caretDir, "pages", "catalogdemo")
+			await fs.mkdir(pageDir, { recursive: true })
+			await fs.writeFile(
+				path.join(pageDir, "meta.json"),
+				JSON.stringify({ id: "catalogdemo", title: "Catalog demo", type: "page", states: ["default"], tags: [] }),
+			)
+			await fs.writeFile(
+				path.join(pageDir, "index.tsx"),
+				`import { Marquee } from "../../components/catalog/magicui/marquee"
+
+export default function CatalogDemo() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <Marquee><span>One</span><span>Two</span></Marquee>
+    </div>
+  )
+}
+`,
+			)
+
+			// Consent arrives as a notification in the chrome; the click is real.
+			await chrome.locator('[data-testid="notification-stack"]', { hasText: "Magic UI" }).waitFor({ timeout: 60_000 })
+			await chrome.getByRole("button", { name: "Allow for this project" }).click()
+
+			await waitFor(
+				"the vendored component to land with its lock entry",
+				async () => {
+					const component = await fs
+						.readFile(path.join(caretDir, "components", "catalog", "magicui", "marquee.tsx"), "utf-8")
+						.catch(() => "")
+					const lock = JSON.parse(
+						await fs
+							.readFile(path.join(caretDir, "components", "catalog", "catalog-lock.json"), "utf-8")
+							.catch(() => "{}"),
+					)
+					const entry = (lock.installed ?? []).find(
+						(e: { library: string; component: string }) => e.library === "magicui" && e.component === "marquee",
+					)
+					return component.length > 100 && entry && entry.origin.includes("magicuidesign/magicui@") ? true : null
+				},
+				120_000,
+			)
+
+			// The licence rides with the install, and the dep landed in the design layer.
+			const licence = await fs.readFile(path.join(caretDir, "components", "catalog", "magicui", "LICENSE"), "utf-8")
+			assert(licence.includes("MIT"), "the licence did not travel with the vendored source")
+			const caretPkg = JSON.parse(await fs.readFile(path.join(caretDir, "package.json"), "utf-8"))
+			assert(caretPkg.dependencies?.motion, "the component's dep was not added to the design layer")
+
+			// The rules index knows.
+			await waitFor(
+				"the rules index to mark it installed",
+				async () => {
+					const agents = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
+					return agents.includes("`magicui/marquee`") && agents.includes("(installed)") ? true : null
+				},
+				30_000,
+			)
+
+			// The budget: two signature imports; the consented library needs no second
+			// prompt, the first signature piece is supplied, the second refused.
+			await fs.writeFile(
+				path.join(pageDir, "index.tsx"),
+				`import { Marquee } from "../../components/catalog/magicui/marquee"
+import { Particles } from "../../components/catalog/magicui/particles"
+import PixelTrail from "../../components/catalog/fancy/pixel-trail"
+
+export default function CatalogDemo() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <Particles />
+      <PixelTrail />
+      <Marquee><span>One</span><span>Two</span></Marquee>
+    </div>
+  )
+}
+`,
+			)
+
+			await waitFor(
+				"the first signature component to be supplied",
+				async () =>
+					(await fs
+						.readFile(path.join(caretDir, "components", "catalog", "magicui", "particles.tsx"), "utf-8")
+						.catch(() => "")) !== ""
+						? true
+						: null,
+				120_000,
+			)
+
+			// pixel-trail must NOT be supplied — the page already carries particles.
+			// (fancy has never been consented either, but the budget check fires first
+			// and is the thing this pins.)
+			const pixelTrailLanded = await fs
+				.access(path.join(caretDir, "components", "catalog", "fancy", "pixel-trail.tsx"))
+				.then(() => true)
+				.catch(() => false)
+			assert(!pixelTrailLanded, "the budget did not stop a second signature component")
+
+			// And the checker names it, over the same MCP surface an agent uses.
+			assert(discovery, "no MCP discovery record")
+			const findings = await waitFor(
+				"run_design_checks to flag the budget breach",
+				async () => {
+					const response = await callMcp(discovery!.url, discovery!.token, {
+						jsonrpc: "2.0",
+						id: 81,
+						method: "tools/call",
+						params: { name: "run_design_checks", arguments: { pageId: "catalogdemo" } },
+					})
+					const body = await response.text()
+					const payloadMatch = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body)
+					if (!payloadMatch) return null
+					const parsed = JSON.parse(JSON.parse(`"${payloadMatch[1]}"`))
+					const checks = new Set((parsed.findings ?? []).map((f: { check: string }) => f.check))
+					return checks.has("restraint-budget") ? [...checks] : null
+				},
+				60_000,
+			)
+
+			await fs.rm(pageDir, { recursive: true, force: true })
+			return `marquee auto-supplied on a real consent click (licence + lock + deps + rules index); second signature piece refused; checker flagged restraint-budget (findings: ${findings.join(", ")})`
+		},
+	)
+
 	await scenario("s. a canvas message reaches the host through the preload bridge", async () => {
 		// The preload bridge replaced the VS Code postMessage relay and is written
 		// from scratch. Nothing else here exercises it end to end. Post a message

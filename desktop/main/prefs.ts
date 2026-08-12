@@ -36,6 +36,8 @@ export interface Prefs {
 	 * not consent to rewrite the next one.
 	 */
 	appWritesAllowed: string[]
+	/** `<projectPath>::<libraryId>` pairs the user approved for catalog installs. */
+	catalogAllowed: string[]
 	/**
 	 * Encrypted credentials, keyed by name. Ciphertext only.
 	 *
@@ -73,6 +75,7 @@ const DEFAULTS: Prefs = {
 	backendModel: "",
 	backendEffort: "",
 	appWritesAllowed: [],
+	catalogAllowed: [],
 	secrets: {},
 	visionChecks: {},
 	laneModels: {},

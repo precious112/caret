@@ -28,6 +28,7 @@ import {
 	describeAsset,
 	type FlowDefinition,
 	findAsset,
+	type InstallResult,
 	isViewable,
 	listFlows,
 	listPages,
@@ -59,6 +60,8 @@ export interface ToolContext {
 	screenshot(pageId: string): Promise<ScreenshotResult>
 	/** Runs the deterministic design checks on one page (or all). */
 	runChecks(pageId?: string): Promise<PageCheckResult[]>
+	/** Installs an allowlisted catalog component (consent-gated). */
+	installComponent(libraryId: string, componentId: string): Promise<InstallResult>
 }
 
 export interface ToolResult {
@@ -455,6 +458,30 @@ export const TOOLS: ToolDefinition[] = [
 			if (!found) return fail(`No flow "${args.flowId}" in this design layer.`)
 			await recordEdit(ctx.projectPath, { actor: "agent", action: "write", file: `flows/${args.flowId}.flow.json` })
 			return reply(ctx, { ok: true, flowId: args.flowId })
+		},
+	},
+
+	{
+		name: "install_component",
+		title: "Install a catalog component",
+		description:
+			"Installs an allowlisted component from Caret's curated catalog into .caret/components/catalog/. " +
+			"Only catalog ids install — the catalog index (names + use-when) is in the rules files. " +
+			"Prefer simply IMPORTING the documented path in your page source: Caret auto-supplies missing catalog " +
+			"imports after every write, budget permitting. Call this only when you want the source present before writing.",
+		inputSchema: {
+			libraryId: z.string().describe("Catalog library id, e.g. 'magicui'"),
+			componentId: z.string().describe("Component id within the library, e.g. 'marquee'"),
+		},
+		async handler(ctx, args: { libraryId: string; componentId: string }) {
+			const result = await ctx.installComponent(args.libraryId, args.componentId)
+			if (!result.ok) return fail(result.reason ?? "install failed")
+			return reply(ctx, {
+				ok: true,
+				installed: `${args.libraryId}/${args.componentId}`,
+				importPath: `../../components/catalog/${args.libraryId}/${args.componentId}`,
+				alreadyInstalled: result.alreadyInstalled ?? false,
+			})
 		},
 	},
 

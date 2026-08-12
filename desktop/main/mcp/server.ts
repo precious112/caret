@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http"
 import type { AddressInfo } from "net"
-import type { PageCheckResult } from "../../../src/core/design"
+import type { InstallResult, PageCheckResult } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import type { ScreenshotResult } from "../types"
@@ -36,6 +36,8 @@ export interface CaretMcpServerOptions {
 	screenshot?(pageId: string): Promise<ScreenshotResult>
 	/** Runs the deterministic design checks on one page (or all), returning findings. */
 	runChecks?(pageId?: string): Promise<PageCheckResult[]>
+	/** Installs an allowlisted catalog component into the project (consent-gated). */
+	installComponent?(libraryId: string, componentId: string): Promise<InstallResult>
 	/** Sends an interview question or option set to the chrome renderer. */
 	onInterviewPrompt?(prompt: InterviewPrompt): void
 }
@@ -114,6 +116,9 @@ export class CaretMcpServer {
 				Promise.resolve({ ok: false as const, reason: "this project has no window to render pages in" }),
 			runChecks: (pageId) =>
 				this.options.runChecks?.(pageId) ?? Promise.reject(new Error("this project has no window to render pages in")),
+			installComponent: (libraryId, componentId) =>
+				this.options.installComponent?.(libraryId, componentId) ??
+				Promise.resolve({ ok: false as const, reason: "this project has no window to install into" }),
 		}
 
 		const tools = [...TOOLS, ...buildInterviewTools({ send: (prompt) => this.options.onInterviewPrompt?.(prompt) })]
