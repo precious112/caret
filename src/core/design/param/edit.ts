@@ -14,6 +14,7 @@
  * inline editing overwhelmingly is.
  */
 import type { FoundationTokens } from "../types"
+import { resolveRowTextEdit } from "./map-rows"
 import { type ParamWrite, parseClassName, propertyOf, resolveParam, writeParam } from "./params"
 import { getIndex } from "./source-index"
 import { type SpliceEdit, spliceFile } from "./splice"
@@ -156,6 +157,31 @@ export async function spliceColorEdit(
 			outcome = { handled: true, ok: true }
 			return [{ start: element.openingInsertAt, end: element.openingInsertAt, text: ` className="text-${suffix}"` }]
 		}
+		return null
+	})
+	return outcome
+}
+
+/**
+ * Row-content text edit (Phase 8.6): the text of row N routes to the data
+ * literal the row rendered from. Returns unhandled when the element is not a
+ * row-content case at all; a refusal names exactly what stands in the way.
+ */
+export async function spliceRowTextEdit(
+	filePath: string,
+	caretId: string,
+	instanceIndex: number,
+	newText: string,
+	oldText?: string,
+): Promise<{ kind: "edit" | "refusal" | "unhandled"; reason?: string; itemLabel?: string }> {
+	let outcome: { kind: "edit" | "refusal" | "unhandled"; reason?: string; itemLabel?: string } = { kind: "unhandled" }
+	await spliceFile(filePath, (source) => {
+		const resolution = resolveRowTextEdit(source, caretId, instanceIndex, newText, oldText)
+		if (resolution.kind === "edit") {
+			outcome = { kind: "edit", itemLabel: resolution.itemLabel }
+			return resolution.edits.length > 0 ? resolution.edits : null
+		}
+		outcome = resolution.kind === "refusal" ? { kind: "refusal", reason: resolution.reason } : { kind: "unhandled" }
 		return null
 	})
 	return outcome

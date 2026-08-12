@@ -45,6 +45,8 @@ export interface InlineEditPayload {
 	tagName?: string
 	imageData?: string
 	caretId?: string
+	/** Which rendered row of a .map() template this edit came from (0-based). */
+	instanceIndex?: number
 }
 
 export interface AiEditRequestPayload {

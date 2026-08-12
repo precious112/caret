@@ -377,14 +377,9 @@ export function resolveParam(element: IndexedElement, property: string, context:
 	}
 
 	const classAttr = element.attributes.get("className")
-	if (element.inIterator) {
-		return {
-			...base,
-			origin: "data",
-			writable: false,
-			reason: "this element renders once per data item — a single-instance edit needs the Phase 8.6 list machinery",
-		}
-	}
+	// Iterator elements resolve normally: a look param lives on the TEMPLATE —
+	// one source span, every row follows (Phase 8.6). Row-specific CONTENT goes
+	// through the data literal, not through here.
 	if (classAttr && classAttr.value === null) {
 		return {
 			...base,

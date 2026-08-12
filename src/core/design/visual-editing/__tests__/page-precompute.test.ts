@@ -169,7 +169,7 @@ describe("precomputePage — inline style conversion", () => {
 })
 
 describe("precomputePage — .map() iterator handling", () => {
-	it("should NOT add data-caret-id inside .map()", () => {
+	it("seeds a TEMPLATE caret-id inside .map() — one id, N rendered rows (8.6)", () => {
 		const source = `export default function Page() {
   return (
     <div>
@@ -180,9 +180,8 @@ describe("precomputePage — .map() iterator handling", () => {
   )
 }`
 		const result = precomputePage(source, "test.tsx")
-		if (result.correctedSource) {
-			result.correctedSource.should.not.containEql("data-caret-id")
-		}
+		result.modified.should.be.true()
+		result.correctedSource!.should.containEql('<h3 data-caret-id="h3-1">')
 	})
 
 	it("should mark all elements inside .map() as dynamic", () => {
@@ -424,7 +423,7 @@ describe("precomputePage — caret-id normalization (unique + static)", () => {
 		ids.should.containEql("heading")
 	})
 
-	it("should strip a static caret-id from an element inside .map()", () => {
+	it("keeps a static caret-id on a template element inside .map() (8.6: it addresses the template)", () => {
 		const source = `export default function Page() {
   return (
     <div>
@@ -435,18 +434,17 @@ describe("precomputePage — caret-id normalization (unique + static)", () => {
   )
 }`
 		const result = precomputePage(source, "test.tsx")
-		result.modified.should.be.true()
-		result.correctedSource!.should.not.containEql("data-caret-id")
-		result.caretIdViolations.inIterator.should.equal(1)
+		result.modified.should.be.false()
+		result.caretIdViolations.inIterator.should.equal(0)
 	})
 
-	it("should strip a dynamic caret-id from an element inside .map()", () => {
+	it("normalizes a dynamic caret-id inside .map() to a static template id", () => {
 		const source =
 			"export default function Page() {\n  return (\n    <div>\n      {items.map((item, i) => (\n        <span data-caret-id={`item-${i}`}>{item.label}</span>\n      ))}\n    </div>\n  )\n}"
 		const result = precomputePage(source, "test.tsx")
 		result.modified.should.be.true()
-		result.correctedSource!.should.not.containEql("data-caret-id")
-		result.caretIdViolations.inIterator.should.equal(1)
+		result.correctedSource!.should.containEql('data-caret-id="span-1"')
+		result.caretIdViolations.dynamic.should.equal(1)
 	})
 
 	it("should normalize a dynamic caret-id on a framer-motion element", () => {

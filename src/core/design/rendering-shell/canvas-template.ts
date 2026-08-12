@@ -2823,12 +2823,20 @@ function generateParamPanel(): string {
 		    </div>\`
 		  }).join("")
 
+		  // A .map() row: same template id rendered N times. Look edits are shared
+		  // through the template; content comes from this row's data item.
+		  const twins = Array.from(document.querySelectorAll(\`[data-caret-id="\${currentTarget.caretId}"]\`))
+		  const rowLine =
+		    twins.length > 1
+		      ? \`<div style="color:#8b93a7;font-size:11px;margin:-6px 0 8px">row \${twins.indexOf(currentTarget.element) + 1} of \${twins.length} · look shared · content from item \${twins.indexOf(currentTarget.element) + 1}</div>\`
+		      : ""
+
 		  host.innerHTML = \`
 		    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
 		      <strong style="font-size:12px">\${esc(currentTarget.caretId)}</strong>
 		      <button data-param-close style="all:unset;cursor:pointer;color:#8b93a7;font-size:15px;line-height:1">×</button>
 		    </div>
-		    \${rows}\`
+		    \${rowLine}\${rows}\`
 
 		  host.querySelector("[data-param-close]")?.addEventListener("click", hideParamPanel)
 		  for (const input of host.querySelectorAll<HTMLInputElement>("[data-param-input]")) {
@@ -3380,7 +3388,13 @@ function generateCaretGrabPlugin(): string {
 		          const allText = el.textContent || ""
 		          if (directText.trim() !== allText.trim()) return false
 		          const source = resolveSourceFromFiber(el)
-		          if (source && isInDynamicRange(source.filePath, source.lineNumber, source.columnNumber, "dynamic-text")) return false
+		          if (source && isInDynamicRange(source.filePath, source.lineNumber, source.columnNumber, "dynamic-text")) {
+		            // A .map() row (one template id, many rendered instances) IS
+		            // editable: the content edit routes to the row's data item
+		            // (Phase 8.6). Only single-instance dynamic text stays blocked.
+		            const rowId = el.getAttribute("data-caret-id")
+		            if (!rowId || document.querySelectorAll('[data-caret-id="' + rowId + '"]').length < 2) return false
+		          }
 		          return true
 		        },
 		        async onAction(ctx: any) {
@@ -3406,6 +3420,10 @@ function generateCaretGrabPlugin(): string {
 		            const newText = el.textContent || ""
 		            if (newText !== original) {
 		              log("edit-text: sending", filePath, JSON.stringify(original), "->", JSON.stringify(newText))
+		              // Same-id siblings mean a .map() template: say WHICH row this is,
+		              // so the host can route the content edit to that data item.
+		              const editId = el.getAttribute("data-caret-id") || ""
+		              const twins = editId ? Array.from(document.querySelectorAll('[data-caret-id="' + editId + '"]')) : []
 		              bridge.send({
 		                type: "inline-edit",
 		                payload: {
@@ -3415,7 +3433,8 @@ function generateCaretGrabPlugin(): string {
 		                  oldValue: original,
 		                  newValue: newText,
 		                  tagName: el.tagName.toLowerCase(),
-		                  caretId: el.getAttribute("data-caret-id") || "",
+		                  caretId: editId,
+		                  ...(twins.length > 1 ? { instanceIndex: twins.indexOf(el) } : {}),
 		                },
 		              })
 		            }

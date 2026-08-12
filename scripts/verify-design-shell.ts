@@ -82,12 +82,13 @@ const FIXTURE_PAGES = [
 	{ id: "contact", title: "Contact" },
 	{ id: "dashboard", title: "Dashboard" },
 ]
-// FIXTURE_PAGES plus the pages seeded separately: "listing", "fragmented", and
-// "renamed" (the folder/meta id mismatch of scenario `p`). This arithmetic
+// FIXTURE_PAGES plus the pages seeded separately: "listing", "fragmented",
+// "renamed" (the folder/meta id mismatch of scenario `p`), and "catalog"
+// (the .map() list of scenario `x`). This arithmetic
 // breaking silently is exactly what happened when `renamed` was added — three
 // scenarios failed with "expected 6 frames, got 7" — so if you seed another
 // page below, this line is the other half of that change.
-const EXTRA_SEEDED_PAGES = 3
+const EXTRA_SEEDED_PAGES = 4
 const TOTAL_PAGES = FIXTURE_PAGES.length + EXTRA_SEEDED_PAGES
 
 // JSX fragments used to break the source-capture plugin (its old regex only
@@ -125,6 +126,24 @@ const RESPONSIVE_PAGE = `export default function Listing() {
         </table>
       </div>
     </div>
+  )
+}
+`
+
+const CATALOG_PAGE = `const products = [
+  { id: "a", name: "Monolith Trainer", price: 120 },
+  { id: "b", name: "Aurora Slip-on", price: 95 },
+]
+
+export default function Catalog() {
+  return (
+    <ul className="min-h-screen bg-white p-8 space-y-2">
+      {products.map((product) => (
+        <li key={product.id} className="p-3 rounded-lg border border-zinc-200">
+          <p data-caret-id="cat-name" className="font-bold">{product.name}</p>
+        </li>
+      ))}
+    </ul>
   )
 }
 `
@@ -182,6 +201,17 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 	// A page whose meta.json claims an id its folder does not have. AI-written
 	// meta.json does this, and it used to render and thumbnail perfectly while
 	// being silently impossible to open — see scenario `p`.
+	// A .map() list over a same-file data literal, with a TEMPLATE caret-id
+	// already in place (the codemod that seeds it lives in the Electron host,
+	// which this harness does not run). Scenario `x` edits row 2's text.
+	const catalogDir = path.join(caretDir, "pages", "catalog")
+	await fs.mkdir(catalogDir, { recursive: true })
+	await fs.writeFile(path.join(catalogDir, "index.tsx"), CATALOG_PAGE)
+	await fs.writeFile(
+		path.join(catalogDir, "meta.json"),
+		JSON.stringify({ id: "catalog", title: "Catalog", type: "page", states: [], tags: ["fixture"] }, null, 2),
+	)
+
 	const renamedDir = path.join(caretDir, "pages", "renamed")
 	await fs.mkdir(renamedDir, { recursive: true })
 	await fs.writeFile(path.join(renamedDir, "index.tsx"), PAGE_TEMPLATE("renamed", "Renamed"))
@@ -1332,6 +1362,90 @@ async function main() {
 		} finally {
 			await page.close()
 			await fs.rm(flawedDir, { recursive: true, force: true })
+		}
+	})
+
+	await scenario("x. a .map() row stays text-editable and the edit names its row", async () => {
+		// Phase 8.6's canvas half: dynamic-text inside an iterator no longer
+		// blocks "Edit text" when the element is a rendered row (same template
+		// id, several instances) — and the committed edit carries WHICH row, so
+		// the host can route the content to that data item. The host's data
+		// write is certified in the app suite; here the dynamic-range flag is
+		// injected the way the host would send it.
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=catalog&mode=focused`)
+			await page.waitForSelector('[data-caret-id="cat-name"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2500)
+
+			const catalogFile = path.join(caretDir, "pages", "catalog", "index.tsx")
+			await page.evaluate((filePath) => {
+				;(window as any).__EDITS__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "inline-edit") (window as any).__EDITS__.push(e.data.payload)
+				})
+				// The host's precompute-result, verbatim shape: the whole file is
+				// flagged dynamic-text, which used to disable row editing outright.
+				window.postMessage(
+					{
+						source: "caret-host",
+						type: "precompute-result",
+						payload: {
+							filePath,
+							dynamicRanges: [{ startLine: 1, startCol: 0, endLine: 99, endCol: 0, diagnostics: ["dynamic-text"] }],
+						},
+					},
+					"*",
+				)
+				;(window as any).__REACT_GRAB__?.activate?.()
+			}, catalogFile)
+			await page.waitForTimeout(500)
+
+			// Right-click ROW 2's name.
+			const target = await page.evaluate(() => {
+				const rows = document.querySelectorAll('[data-caret-id="cat-name"]')
+				const el = rows[1] as HTMLElement
+				const r = el.getBoundingClientRect()
+				return { x: r.x + r.width / 2, y: r.y + r.height / 2, count: rows.length }
+			})
+			if (target.count !== 2) throw new Error(`expected 2 rendered rows, got ${target.count}`)
+			await page.mouse.move(target.x, target.y)
+			await page.waitForTimeout(300)
+			await page.mouse.click(target.x, target.y, { button: "right" })
+
+			const editText = page.getByText("Edit text", { exact: true }).first()
+			try {
+				await editText.waitFor({ timeout: 8000 })
+			} catch {
+				const menu = await page.evaluate(() => {
+					const host = document.querySelector("[data-react-grab]") as HTMLElement | null
+					return host?.shadowRoot?.textContent?.slice(0, 300) ?? "no shadow root"
+				})
+				throw new Error(
+					`"Edit text" is not offered on a .map() row — the dynamic-text gate is blocking it. Menu: ${menu}`,
+				)
+			}
+			await editText.click()
+			await page.waitForTimeout(400)
+
+			// The row is contentEditable now; retype its content and commit.
+			await page.evaluate(() => {
+				const el = document.querySelectorAll('[data-caret-id="cat-name"]')[1] as HTMLElement
+				el.textContent = "Aurora Loafer"
+			})
+			await page.keyboard.press("Enter")
+			await waitFor(
+				async () => ((await page.evaluate(() => (window as any).__EDITS__)) as any[]).length > 0,
+				8000,
+				"the committed row edit to post",
+			)
+			const edit = ((await page.evaluate(() => (window as any).__EDITS__)) as any[])[0]
+			if (edit.caretId !== "cat-name" || edit.instanceIndex !== 1 || edit.newValue !== "Aurora Loafer") {
+				throw new Error(`the edit does not name its row: ${JSON.stringify(edit)}`)
+			}
+			return `row 2 stayed editable under a dynamic-text flag; payload carried caretId=cat-name instanceIndex=1`
+		} finally {
+			await page.close()
 		}
 	})
 

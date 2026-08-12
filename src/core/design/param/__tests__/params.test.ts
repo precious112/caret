@@ -115,17 +115,19 @@ describe("resolveParam — the chain", () => {
 		should(at375.variant).be.null()
 	})
 
-	it("refuses dynamic classNames and iterator rows with typed reasons", () => {
+	it("refuses dynamic classNames with a typed reason", () => {
 		const dynamic = `<div data-caret-id="dyn" className={active ? "a" : "b"}>x</div>`
 		const dynParam = resolveParam(elementOf(dynamic, "dyn"), "color", CONTEXT)
 		dynParam.origin.should.equal("data")
 		dynParam.writable.should.be.false()
+	})
 
+	it("resolves iterator rows as ordinary look params — the template is the span (8.6)", () => {
 		const iterated = `<ul>{items.map((i) => (<li data-caret-id="row" className="p-2">{i}</li>))}</ul>`
 		const rowParam = resolveParam(elementOf(iterated, "row"), "padding", CONTEXT)
-		rowParam.origin.should.equal("data")
-		rowParam.writable.should.be.false()
-		rowParam.reason?.should.containEql("per data item")
+		rowParam.origin.should.equal("literal")
+		rowParam.writable.should.be.true()
+		rowParam.utility?.should.equal("p-2")
 	})
 
 	it("absence is inherited for inheritable properties, computed otherwise — both writable", () => {

@@ -2168,6 +2168,169 @@ async function main(): Promise<void> {
 		return `panel named the binding ("token brand-500") and a committed padding spliced p-[24px] onto the subtitle`
 	})
 
+	await scenario("bu. editing one .map() row's text writes that row's data item, and only it", async () => {
+		// Phase 8.6 end to end in the real app: a list page over a same-file data
+		// literal, the row's text edited inline, and the write landing in the
+		// DATA — item 2's field — while the template and every other item stay
+		// byte-identical. The look/content split is the whole point: the template
+		// span belongs to look edits, the data literal to content edits.
+		const caretDir = path.join(fixture, ".caret")
+		const catalogDir = path.join(caretDir, "pages", "list-demo")
+		await fs.mkdir(catalogDir, { recursive: true })
+		const pagePath = path.join(catalogDir, "index.tsx")
+		const pageSource = `const products = [
+  { id: "a", name: "Monolith Trainer", price: 120 },
+  { id: "b", name: "Aurora Slip-on", price: 95 },
+]
+
+export default function ListDemo() {
+  return (
+    <ul className="min-h-screen bg-white p-8 space-y-2">
+      {products.map((product) => (
+        <li key={product.id} className="p-3 rounded-lg border border-zinc-200">
+          <p data-caret-id="demo-name" className="font-bold">{product.name}</p>
+        </li>
+      ))}
+    </ul>
+  )
+}
+`
+		await fs.writeFile(pagePath, pageSource)
+		await fs.writeFile(
+			path.join(catalogDir, "meta.json"),
+			JSON.stringify({ id: "list-demo", title: "List Demo", type: "page", states: [], tags: [] }),
+		)
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				// Leave any focused page, then open the list page from the grid.
+				await wc.executeJavaScript(
+					`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
+				)
+				const findCard = `(() => {
+					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
+					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'List Demo') ?? null
+				})()`
+				let cardReady = false
+				let deadline = Date.now() + 60000
+				while (Date.now() < deadline && !cardReady) {
+					cardReady = await wc.executeJavaScript(`!!${findCard}`).catch(() => false)
+					if (!cardReady) await new Promise((r) => setTimeout(r, 500))
+				}
+				if (!cardReady) return { error: "the List Demo card never appeared on the canvas" }
+				await wc.executeJavaScript(`(${findCard}).click(), true`)
+
+				let pageFrame: any = null
+				deadline = Date.now() + 30000
+				while (Date.now() < deadline && !pageFrame) {
+					pageFrame =
+						wc.mainFrame.frames.find(
+							(f: any) => f.url.includes("mode=focused") && f.url.includes("page=list-demo"),
+						) ?? null
+					if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!pageFrame) return { error: "the focused list page never became a frame" }
+
+				// Both rendered rows present, react-grab up.
+				deadline = Date.now() + 30000
+				let rows = 0
+				while (Date.now() < deadline && rows !== 2) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("page=list-demo")) ?? pageFrame
+					rows = await pageFrame
+						.executeJavaScript(`document.querySelectorAll('[data-caret-id="demo-name"]').length`)
+						.catch(() => 0)
+					if (rows !== 2) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (rows !== 2) return { error: `expected 2 rendered rows, saw ${rows}` }
+				await pageFrame.executeJavaScript(`((window).__REACT_GRAB__?.activate?.(), true)`).catch(() => {})
+				await new Promise((r) => setTimeout(r, 800))
+
+				// Right-click ROW 2's name with a real mouse.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const target = await pageFrame.executeJavaScript(
+					`(() => { const r = document.querySelectorAll('[data-caret-id="demo-name"]')[1].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				const at = { x: Math.round(offset.x + target.x), y: Math.round(offset.y + target.y) }
+
+				let menuClicked = false
+				for (let attempt = 0; attempt < 5 && !menuClicked; attempt++) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("page=list-demo")) ?? pageFrame
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 300))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					const menuDeadline = Date.now() + 4000
+					while (Date.now() < menuDeadline && !menuClicked) {
+						menuClicked = await pageFrame
+							.executeJavaScript(
+								`(() => {
+									const host = document.querySelector('[data-react-grab]')
+									const root = host && host.shadowRoot
+									if (!root) return false
+									const items = Array.from(root.querySelectorAll('button, [role="menuitem"], div'))
+									const item = items.find((n) => n.textContent && n.textContent.trim() === 'Edit text')
+									if (!item) return false
+									item.click()
+									return true
+								})()`,
+							)
+							.catch(() => false)
+						if (!menuClicked) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!menuClicked) return { error: "react-grab's menu never offered Edit text on the row" }
+
+				// The row is contentEditable — set the new text and commit with Enter.
+				await new Promise((r) => setTimeout(r, 500))
+				const committed = await pageFrame.executeJavaScript(
+					`(() => {
+						const el = document.querySelectorAll('[data-caret-id="demo-name"]')[1]
+						if (el.contentEditable !== 'true') return false
+						el.textContent = 'Aurora Loafer'
+						el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+						return true
+					})()`,
+				)
+				if (!committed) return { error: "the row never became contentEditable" }
+
+				return { ok: true }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the row edit failed: ${(outcome as any).error}`)
+
+		await waitFor(
+			"the row edit to land in the DATA literal",
+			async () => {
+				const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				return source.includes('"Aurora Loafer"') ? true : null
+			},
+			20000,
+		)
+		const after = await fs.readFile(pagePath, "utf-8")
+		assert(after.includes('"Monolith Trainer"'), "item 1 was touched — the edit did not stay on its row")
+		assert(after.includes("{product.name}"), "the TEMPLATE was rewritten — content must go to the data, not the JSX")
+		assert(!after.includes("Aurora Slip-on"), "the old value survived — the data write missed")
+
+		return `row 2's text landed in the data literal ("Aurora Loafer"), template and item 1 untouched`
+	})
+
 	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {
 		// Correction capture end to end: two elements bound to brand-600, each
 		// hand-recoloured to the same value through the real Edit color action.

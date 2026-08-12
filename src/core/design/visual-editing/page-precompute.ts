@@ -534,16 +534,14 @@ export function precomputePage(source: string, filePath: string): PrecomputeResu
 			// editor can't locate it. This both auto-corrects and counts AI rule breaks.
 			// Append-only: an existing valid id is never rewritten, and a clean rerun
 			// plans zero edits — no write, no HMR, no heal loop.
+			//
+			// Iterator elements are seeded too (Phase 8.6): the id addresses the
+			// TEMPLATE — one source span, N rendered rows — and the runtime side
+			// carries the instance index. Look edits reach every row through the
+			// template; content edits reach one row through the data literal.
 			if (caretTag && isVisibleTag(caretTag)) {
 				const idAttrs = getCaretIdAttrs(node)
-				if (inIterator) {
-					// Elements inside .map() render N times — a single literal id would
-					// duplicate across rows. Inline editing isn't supported here; strip it.
-					if (idAttrs.length > 0) {
-						for (const attr of idAttrs) edits.push(attrRemovalEdit(source, attr, nameEnd))
-						violations.inIterator++
-					}
-				} else if (idAttrs.length === 0) {
+				if (idAttrs.length === 0) {
 					nameEndInserts.push(` data-caret-id="${freshId(caretTag, node)}"`)
 				} else {
 					const attr = idAttrs[0]

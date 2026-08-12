@@ -14,7 +14,7 @@ import type { AgentTask } from "../agent/bridge"
 import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
-import { resolveParamsFor, spliceColorEdit, spliceParamEdit, spliceTextEdit } from "../param/edit"
+import { resolveParamsFor, spliceColorEdit, spliceParamEdit, spliceRowTextEdit, spliceTextEdit } from "../param/edit"
 import { PANEL_PROPERTIES } from "../param/params"
 import { getIndex } from "../param/source-index"
 import { addPromotedRule } from "../promoted-rules"
@@ -489,37 +489,58 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 			return
 		}
 
-		// Serialized per file: rapid successive edits (or an edit racing the
-		// precompute hook) must never interleave read-modify-writes.
+		// The splice editors serialize internally through spliceFile's own
+		// runExclusive — wrapping them again in the same key DEADLOCKS (the
+		// queue is intentionally non-reentrant). Only the recast fallback and
+		// the image path, which do their own read-modify-write, take the lock
+		// here.
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
 		let refusal: string | undefined
-		const success = await runExclusive(payload.filePath, async () => {
-			if (payload.editType === "text") {
-				// Splice path first: replaces only the trimmed content span, so the
-				// recast reprint (and its compounding-indentation bug) never runs
-				// for the ordinary case. The recast chain stays as the fallback for
-				// what an index lookup can't serve.
-				const spliced = await spliceTextEdit(payload.filePath, payload.caretId, payload.newValue, payload.oldValue)
-				if (spliced.handled) {
-					refusal = spliced.reason
-					return spliced.ok
+		let success = false
+		if (payload.editType === "text") {
+			// Splice path first: replaces only the trimmed content span, so the
+			// recast reprint (and its compounding-indentation bug) never runs
+			// for the ordinary case. The recast chain stays as the fallback for
+			// what an index lookup can't serve.
+			const spliced = await spliceTextEdit(payload.filePath, payload.caretId, payload.newValue, payload.oldValue)
+			if (spliced.handled) {
+				refusal = spliced.reason
+				success = spliced.ok
+				// Dynamic text on a .map() row: the content edit belongs to the
+				// DATA the row rendered from, not the template (Phase 8.6).
+				if (!spliced.ok && payload.caretId && payload.instanceIndex !== undefined) {
+					const row = await spliceRowTextEdit(
+						payload.filePath,
+						payload.caretId,
+						payload.instanceIndex,
+						payload.newValue,
+						payload.oldValue,
+					)
+					if (row.kind === "edit") {
+						refusal = undefined
+						success = true
+					} else if (row.kind === "refusal") {
+						refusal = row.reason
+						success = false
+					}
 				}
-				return editJSXText(
-					payload.filePath,
-					payload.lineNumber,
-					payload.tagName || "",
-					payload.newValue,
-					payload.oldValue,
-					payload.caretId,
+			} else {
+				success = await runExclusive(payload.filePath, () =>
+					editJSXText(
+						payload.filePath,
+						payload.lineNumber,
+						payload.tagName || "",
+						payload.newValue,
+						payload.oldValue,
+						payload.caretId,
+					),
 				)
 			}
-			if (payload.editType === "image") {
-				const image = await handleImageEdit(payload, workspacePath)
-				refusal = image.reason
-				return image.ok
-			}
-			return false
-		})
+		} else if (payload.editType === "image") {
+			const image = await runExclusive(payload.filePath, () => handleImageEdit(payload, workspacePath))
+			refusal = image.reason
+			success = image.ok
+		}
 
 		if (success) {
 			void recordEdit(workspacePath, {

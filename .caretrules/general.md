@@ -35,6 +35,9 @@ This file is the secret sauce for working effectively in this codebase. It captu
 - **Primary evidence for backend bugs is free — read it before theorising.** `~/.local/share/opencode/opencode.db` (sqlite: `session`, `message`, `part`, `event`) holds every session's full transcript, and `~/.local/share/opencode/log/opencode.log` shows the agent loop's own decisions (`loop step=N`, `exiting loop`, `process messageID=...`; timestamps are UTC). Three verify runs were spent testing prompt-wording theories for a turn the model was never given; one query of either source would have shown it. Free-tier models (`opencode/mimo-v2.5-free`) reproduce protocol-level behavior at zero cost — `scripts/probe-idle.ts` is the template, and it must kill the server in a `finally` (a leaked agent loop polls the provider forever).
 - A turn can end with a *legitimate* `session.idle` without the model ever having run. `AgentConversation.run()` therefore fails any turn with zero assistant activity — don't weaken that check, and don't add completion signals off `session.status` (it's a busy-heartbeat, not a turn boundary).
 
+## The Param/Splice Substrate (Phase 8)
+- **`runExclusive` is non-reentrant — nesting it on the same key deadlocks silently.** The splice editors (`spliceTextEdit`/`spliceColorEdit`/`spliceParamEdit`/`spliceRowTextEdit`) all serialize internally via `spliceFile`; wrapping any of them in `runExclusive(filePath, ...)` in the router hangs forever, and every later write to that file queues behind the hang. This shipped in 8.3 and survived until an app scenario finally drove the text path (bu): unit tests call the editors directly and design-shell has no host, so only `verify:app` exercises the router's edit paths. When adding an editor call to the router, the lock belongs around the recast fallback only.
+
 ## gRPC/Protobuf Communication
 The extension and webview communicate via gRPC-like protocol over VS Code message passing.
 
