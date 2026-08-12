@@ -3098,6 +3098,15 @@ function generateCaretGrabPlugin(): string {
 		          const source = resolveElementSource(rgSource, element)
 		          log("onElementSelect:", JSON.stringify(source), "(raw:", JSON.stringify(rgSource), ")")
 		          if (!source) return true
+		          // Selection payload v2: the caret-id addresses the Param model, the
+		          // box carries geometry, and the computed values are the runtime's
+		          // half of source-resolves-runtime-verifies.
+		          const rect = element.getBoundingClientRect()
+		          const cs = window.getComputedStyle(element)
+		          const computed: Record<string, string> = {}
+		          for (const prop of ["color", "background-color", "border-color", "font-size", "font-weight", "padding-top", "padding-right", "padding-bottom", "padding-left", "margin-top", "gap", "width", "height", "border-radius", "opacity"]) {
+		            computed[prop] = cs.getPropertyValue(prop)
+		          }
 		          bridge.send({
 		            type: "element-selected",
 		            payload: {
@@ -3106,6 +3115,9 @@ function generateCaretGrabPlugin(): string {
 		              componentName: source.componentName,
 		              tagName: element.tagName.toLowerCase(),
 		              props: {},
+		              caretId: element.getAttribute("data-caret-id") || "",
+		              box: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+		              computed,
 		            },
 		          })
 		        } catch (err) {

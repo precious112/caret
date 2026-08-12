@@ -4,6 +4,24 @@ export interface ElementSelectedPayload {
 	componentName: string
 	tagName: string
 	props: Record<string, unknown>
+	/** Selection payload v2 — the Param model's address and the runtime's half. */
+	caretId?: string
+	box?: { x: number; y: number; width: number; height: number }
+	computed?: Record<string, string>
+}
+
+/** The generalized edit: one Param path set to a token or a raw value. */
+export interface ParamEditPayload {
+	filePath: string
+	caretId: string
+	/** CSS property from the panel set (`background-color`, `padding`, …). */
+	property: string
+	/** A foundation token name (`brand-500`) — wins over `raw`. */
+	token?: string
+	/** A raw CSS value (`#ff0000`, `24px`). */
+	raw?: string
+	/** The canvas viewport, so the edit lands on the ACTIVE responsive variant. */
+	viewportWidth: number
 }
 
 export interface OpenFilePayload {
@@ -158,6 +176,8 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"design-sync-now": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
+	"param-edit": (p) =>
+		isStr(p.filePath) && isStr(p.caretId) && isStr(p.property) && isNum(p.viewportWidth) && (isStr(p.token) || isStr(p.raw)),
 	"variant-pick": (p) => typeof p.variantId === "string",
 	log: () => true,
 }
@@ -184,6 +204,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
 	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
 	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
+	| { source: "caret-vite"; type: "param-edit"; payload: ParamEditPayload }
 	| { source: "caret-vite"; type: "variant-pick"; payload: VariantPickPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }

@@ -14,6 +14,7 @@ import type { AgentTask } from "../agent/bridge"
 import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
+import { spliceColorEdit, spliceParamEdit, spliceTextEdit } from "../param/edit"
 import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
@@ -45,6 +46,7 @@ import type {
 	FlowEdgeUpdatePayload,
 	InlineEditPayload,
 	OverlayEditPayload,
+	ParamEditPayload,
 	PromoteTokenPayload,
 } from "./messages"
 import { isValidDesignMessagePayload } from "./messages"
@@ -207,6 +209,11 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 
 		case "variant-request":
 			await handleVariantRequest(message.payload, workspacePath)
+			break
+
+		case "param-edit":
+			message.payload.filePath = await resolveCaretPath(message.payload.filePath, workspacePath)
+			await handleParamEdit(message.payload, workspacePath)
 			break
 
 		case "variant-pick":
@@ -401,6 +408,45 @@ async function handleVariantPick(payload: import("./messages").VariantPickPayloa
 	}
 }
 
+/**
+ * The generalized edit: one Param path (`<caretId>/style/<property>`) set to a
+ * token or a raw value, spliced onto the variant active at the canvas's
+ * viewport. What the property panel speaks.
+ */
+async function handleParamEdit(payload: ParamEditPayload, workspacePath: string): Promise<void> {
+	try {
+		const tokens = await readFoundationTokens(workspacePath)
+		hostFor(workspacePath).noteSelfWrite(payload.filePath)
+		const result = await spliceParamEdit(
+			payload.filePath,
+			payload.caretId,
+			payload.property,
+			{ token: payload.token, raw: payload.raw },
+			payload.viewportWidth,
+			tokens,
+		)
+		if (!result.ok) {
+			sendEditResult(workspacePath, { success: false, error: result.refused ?? "the edit was refused" })
+			return
+		}
+		void recordEdit(workspacePath, {
+			actor: "inline",
+			action: "write",
+			file: payload.filePath,
+			param: `${payload.caretId}/style/${payload.property}`,
+			newValue: payload.token ?? payload.raw,
+		})
+		sendEditResult(workspacePath, {
+			success: true,
+			editTarget: { filePath: payload.filePath, lineNumber: 0, caretId: payload.caretId },
+		})
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err)
+		Logger.error(`[design] param edit failed: ${errorMsg}`)
+		sendEditResult(workspacePath, { success: false, error: errorMsg })
+	}
+}
+
 async function handleInlineEdit(payload: InlineEditPayload, workspacePath: string): Promise<void> {
 	try {
 		if (payload.editType === "color") {
@@ -413,6 +459,12 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
 		const success = await runExclusive(payload.filePath, async () => {
 			if (payload.editType === "text") {
+				// Splice path first: replaces only the trimmed content span, so the
+				// recast reprint (and its compounding-indentation bug) never runs
+				// for the ordinary case. The recast chain stays as the fallback for
+				// what an index lookup can't serve.
+				const spliced = await spliceTextEdit(payload.filePath, payload.caretId, payload.newValue, payload.oldValue)
+				if (spliced.handled) return spliced.ok
 				return editJSXText(
 					payload.filePath,
 					payload.lineNumber,
@@ -471,9 +523,12 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 		const bindTo = tokenClassForHex(payload.newValue, tokens) ?? undefined
 
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
-		const result = await runExclusive(payload.filePath, () =>
-			editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId, bindTo),
-		)
+		const spliced = await spliceColorEdit(payload.filePath, payload.caretId, payload.newValue, bindTo)
+		const result = spliced.handled
+			? { ok: spliced.ok, replacedClass: spliced.replacedClass }
+			: await runExclusive(payload.filePath, () =>
+					editJSXColor(payload.filePath, payload.lineNumber, payload.newValue, payload.caretId, bindTo),
+				)
 
 		if (!result.ok) {
 			sendEditResult(workspacePath, {
