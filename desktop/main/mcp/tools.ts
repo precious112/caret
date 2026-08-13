@@ -43,6 +43,7 @@ import {
 	recordMappings,
 	registerExternalVariants,
 	runSync,
+	startReverseSyncProposal,
 	validateFoundationTokens,
 	validatePageMeta,
 	writeFoundationTokens,
@@ -649,6 +650,29 @@ export const TOOLS: ToolDefinition[] = [
 			try {
 				const report = await computeDrift(ctx.projectPath)
 				return reply(ctx, { ok: true, ...report })
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
+		},
+	},
+
+	{
+		name: "propose_design_update",
+		title: "Start an app→design review for a drifted page",
+		description:
+			"When get_drift shows 'app-drift' or 'conflict' on a page, this starts the reverse half: Caret's agent " +
+			"translates the app's current truth back into a PROPOSAL page, and the user reviews it side by side " +
+			"against the current design and chooses. Nothing is written to the design without that choice — " +
+			"never write .caret/ pages yourself to 'fix' drift.",
+		inputSchema: {
+			designPath: z.string().describe("The drifted design file, e.g. .caret/pages/checkout/index.tsx"),
+		},
+		async handler(ctx, args: { designPath: string }) {
+			try {
+				const result = await startReverseSyncProposal(ctx.projectPath, args.designPath)
+				return result.ok
+					? reply(ctx, { ok: true, proposalId: result.proposalId })
+					: fail(result.reason ?? "could not start the review")
 			} catch (err) {
 				return fail(err instanceof Error ? err.message : String(err))
 			}

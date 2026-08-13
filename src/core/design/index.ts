@@ -311,6 +311,7 @@ export {
 export { DesignSession, type DesignSessionOptions } from "./session"
 export { computeDrift, type DriftEntry, type DriftReport } from "./sync/drift"
 export { type MappingEntry, pruneManifest, readManifest, recordMappings, type SyncManifest } from "./sync/mapping-manifest"
+export { startReverseSyncProposal } from "./sync/reverse-sync"
 export { createSyncWatcher, runSyncInteractive } from "./sync/SyncWatcher"
 export {
 	type CompleteSyncOutcome,

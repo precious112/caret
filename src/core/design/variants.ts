@@ -43,6 +43,12 @@ export interface VariantSet {
 	startedAt: string
 	/** Who produced the takes — Caret's own loop, or an external agent via MCP. */
 	source: "caret" | "external"
+	/** What the pick means. "explore": takes on an instruction (the default).
+	 * "drift-proposal": the take is the app's current truth translated back to
+	 * design — accepting refreshes the sync mapping (Phase 9 reverse sync). */
+	kind?: "explore" | "drift-proposal"
+	/** For drift proposals: the app files whose truth the take reflects. */
+	proposalAppPaths?: string[]
 	variants: VariantEntry[]
 }
 
@@ -98,7 +104,12 @@ async function copyDir(from: string, to: string): Promise<void> {
  * Copies the page N times and records the set. Refuses when a set is already
  * in flight — two concurrent picks over one scratch file would corrupt both.
  */
-export async function createVariantSet(workspacePath: string, pageId: string, instruction: string): Promise<VariantSet> {
+export async function createVariantSet(
+	workspacePath: string,
+	pageId: string,
+	instruction: string,
+	opts: { count?: number; kind?: "explore" | "drift-proposal"; proposalAppPaths?: string[]; label?: string } = {},
+): Promise<VariantSet> {
 	const existing = await readVariantSet(workspacePath)
 	if (existing) {
 		throw new Error(
@@ -110,16 +121,26 @@ export async function createVariantSet(workspacePath: string, pageId: string, in
 	await fs.access(path.join(sourceDir, "index.tsx"))
 	const meta = JSON.parse(await fs.readFile(path.join(sourceDir, "meta.json"), "utf-8").catch(() => "{}"))
 
+	const count = opts.count ?? VARIANT_COUNT
 	const variants: VariantEntry[] = []
-	for (let n = 1; n <= VARIANT_COUNT; n++) {
+	for (let n = 1; n <= count; n++) {
 		const id = variantPageId(pageId, n)
 		const dir = path.join(pagesDir(workspacePath), id)
 		await copyDir(sourceDir, dir)
 		await writeFileAtomic(
 			path.join(dir, "meta.json"),
-			JSON.stringify({ ...meta, id, title: `${meta.title ?? pageId} — take ${n}`, variantOf: pageId }, null, 2),
+			JSON.stringify(
+				{ ...meta, id, title: `${meta.title ?? pageId} — ${opts.label ?? `take ${n}`}`, variantOf: pageId },
+				null,
+				2,
+			),
 		)
-		variants.push({ id, label: `Take ${n}`, angle: VARIANT_ANGLES[(n - 1) % VARIANT_ANGLES.length], status: "working" })
+		variants.push({
+			id,
+			label: opts.label ?? `Take ${n}`,
+			angle: VARIANT_ANGLES[(n - 1) % VARIANT_ANGLES.length],
+			status: "working",
+		})
 	}
 
 	const set: VariantSet = {
@@ -128,6 +149,8 @@ export async function createVariantSet(workspacePath: string, pageId: string, in
 		instruction,
 		startedAt: new Date().toISOString(),
 		source: "caret",
+		...(opts.kind ? { kind: opts.kind } : {}),
+		...(opts.proposalAppPaths ? { proposalAppPaths: opts.proposalAppPaths } : {}),
 		variants,
 	}
 	await writeVariantSet(workspacePath, set)

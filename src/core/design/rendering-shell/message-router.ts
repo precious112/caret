@@ -10,6 +10,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
+import { getLatestGitCommitHash } from "@/utils/git"
 import type { AgentTask } from "../agent/bridge"
 import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
@@ -20,6 +21,7 @@ import { getIndex } from "../param/source-index"
 import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
+import { recordMappings } from "../sync/mapping-manifest"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
 import { captureUndoStep, undoLastStep } from "../undo/design-undo"
 import {
@@ -416,6 +418,20 @@ async function handleVariantPick(payload: import("./messages").VariantPickPayloa
 			}
 			await applyVariantChoice(workspacePath, payload.variantId)
 			Logger.info(`[design] variant pick: ${payload.variantId} applied over ${set?.pageId}`)
+
+			// A drift proposal accepted IS the reverse sync: the design now
+			// reflects the app, so the mapping's hashes are re-recorded and the
+			// entry reads clean (Phase 9.4). A normal explore pick changes the
+			// design and must NOT refresh — that movement is forward-sync work.
+			if (set?.kind === "drift-proposal" && set.proposalAppPaths?.length) {
+				const head = await getLatestGitCommitHash(workspacePath)
+				const refreshed = await recordMappings(
+					workspacePath,
+					[{ designPath: `.caret/pages/${set.pageId}/index.tsx`, appPaths: set.proposalAppPaths }],
+					head,
+				)
+				Logger.info(`[design] reverse sync accepted for ${set.pageId}: mapping refreshed (${refreshed.recorded})`)
+			}
 		} else {
 			await discardVariantSet(workspacePath)
 			Logger.info(`[design] variant pick: kept the original, takes discarded`)
