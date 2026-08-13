@@ -26,6 +26,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
 		fs.writeFile(path.join(libDir, "param-panel.ts"), generateParamPanel()),
 		fs.writeFile(path.join(libDir, "size-resolver.ts"), generateSizeResolver()),
+		fs.writeFile(path.join(libDir, "layers-panel.ts"), generateLayersPanel()),
 		fs.writeFile(path.join(libDir, "asset-picker.ts"), generateAssetPicker()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
 	])
@@ -471,6 +472,7 @@ function generateCanvasView(): string {
 		  const [edgeDrag, setEdgeDrag] = useState<{ fromPage: string; mouseX: number; mouseY: number; originX: number; originY: number; reassignFlowId?: string; reassignOldTo?: string; reassignIsError?: boolean } | null>(null)
 		  const [selectedEdge, setSelectedEdge] = useState<{ flowId: string; from: string; to: string; isError?: boolean } | null>(null)
 		  const containerRef = useRef<HTMLDivElement>(null)
+		  const contentRef = useRef<HTMLDivElement>(null)
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 
 		  // The acceptance checker's findings, shown whether or not anything asked
@@ -493,6 +495,47 @@ function generateCanvasView(): string {
 		  const activeFrameWidth = VIEWPORT_PRESETS[viewport].width
 		  const activeThumbHeight = FRAME_HEIGHT * (THUMB_WIDTH / activeFrameWidth)
 		  const autoItems = layoutMode === "auto" ? computeAutoPositions(pages, activeThumbHeight) : null
+
+		  /**
+		   * Which cards get a live iframe (Phase 10.7). Two gates, both measured:
+		   *
+		   * - **On screen.** The card's box after the pan/zoom must land within a
+		   *   margin of the window.
+		   * - **Big enough to be worth it.** The canvas fits everything on open,
+		   *   so 200 artboards open at ~4% zoom where every card IS on screen but
+		   *   renders 12px wide. A live iframe there is a whole page load showing
+		   *   a smudge — 200 of them wedge the main thread for nothing. Below the
+		   *   legibility floor the card is a placeholder, and real renders swap in
+		   *   as the user zooms into what they are actually looking at.
+		   */
+		  const LIVE_MARGIN = 500
+		  const LEGIBLE_PX = 60
+
+		  // The live set is computed from a SETTLED transform, not the live one.
+		  // Panning at high zoom otherwise drags fresh cards into range on every
+		  // frame, and each one is a whole page load mid-gesture (measured: 91ms
+		  // median frames while panning 200 artboards). Frozen during the
+		  // gesture, the pan is just a CSS transform; the set fills in when the
+		  // hand stops.
+		  const [settledTransform, setSettledTransform] = useState(transform)
+		  useEffect(() => {
+		    const timer = setTimeout(() => setSettledTransform(transform), 140)
+		    return () => clearTimeout(timer)
+		  }, [transform])
+
+		  function isLive(x: number, y: number): boolean {
+		    const width = THUMB_WIDTH * settledTransform.scale
+		    if (width < LEGIBLE_PX) return false
+		    const left = x * settledTransform.scale + settledTransform.x
+		    const top = y * settledTransform.scale + settledTransform.y
+		    const height = (LABEL_H + activeThumbHeight) * settledTransform.scale
+		    return (
+		      left < window.innerWidth + LIVE_MARGIN &&
+		      left + width > -LIVE_MARGIN &&
+		      top < window.innerHeight + LIVE_MARGIN &&
+		      top + height > -LIVE_MARGIN
+		    )
+		  }
 		  // Scaling the full card pitch (thumb + label) keeps cards that fit at the
 		  // reference viewport from ever overlapping at taller viewports.
 		  const layoutScaleY = (activeThumbHeight + LABEL_H) / (REF_THUMB_HEIGHT + LABEL_H)
@@ -604,23 +647,43 @@ function generateCanvasView(): string {
 		      .catch((e) => log("[canvas] canvas-layout.json is unreadable — falling back to auto layout (" + e + ")"))
 		  }, [])
 
+		  /**
+		   * A pan is a DOM transform, not a React render (Phase 10.7). Committing
+		   * every wheel event to state re-renders every artboard on the canvas —
+		   * measured at 41ms median frames with 200 of them, and it grows with the
+		   * project. The gesture writes the element's transform directly and
+		   * commits to state once it settles, which is also what makes the live
+		   * set stable during the gesture.
+		   */
+		  const pendingTransform = useRef(transform)
+		  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+		  const applyTransform = useCallback((next: CanvasTransform) => {
+		    pendingTransform.current = next
+		    const node = contentRef.current
+		    if (node) node.style.transform = "translate(" + next.x + "px, " + next.y + "px) scale(" + next.scale + ")"
+		    if (commitTimer.current) clearTimeout(commitTimer.current)
+		    commitTimer.current = setTimeout(() => setTransform(pendingTransform.current), 140)
+		  }, [])
+		  useEffect(() => {
+		    pendingTransform.current = transform
+		  }, [transform])
+
 		  const handleWheel = useCallback((e: React.WheelEvent) => {
 		    e.preventDefault()
+		    const prev = pendingTransform.current
 		    if (e.ctrlKey || e.metaKey) {
 		      const rect = containerRef.current?.getBoundingClientRect()
 		      if (!rect) return
 		      const mx = e.clientX - rect.left
 		      const my = e.clientY - rect.top
-		      setTransform(prev => {
-		        const factor = e.deltaY > 0 ? 0.9 : 1.1
-		        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * factor))
-		        const ratio = newScale / prev.scale
-		        return { x: mx - (mx - prev.x) * ratio, y: my - (my - prev.y) * ratio, scale: newScale }
-		      })
+		      const factor = e.deltaY > 0 ? 0.9 : 1.1
+		      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * factor))
+		      const ratio = newScale / prev.scale
+		      applyTransform({ x: mx - (mx - prev.x) * ratio, y: my - (my - prev.y) * ratio, scale: newScale })
 		    } else {
-		      setTransform(prev => ({ ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY }))
+		      applyTransform({ ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY })
 		    }
-		  }, [])
+		  }, [applyTransform])
 
 		  const handlePointerDown = useCallback((e: React.PointerEvent) => {
 		    if (selectedEdge) setSelectedEdge(null)
@@ -899,6 +962,7 @@ function generateCanvasView(): string {
 		        </div>
 		      )}
 		      <div
+		        ref={contentRef}
 		        className="caret-canvas-content"
 		        style={{
 		          transform: \`translate(\${transform.x}px, \${transform.y}px) scale(\${transform.scale})\`,
@@ -919,7 +983,7 @@ function generateCanvasView(): string {
 		                <div className="caret-canvas-thumb-wrapper" style={{ position: "absolute", left: x, top: y }}>
 		                  {page.broken
 		                    ? <BrokenPageCard pageId={page.id} title={page.title || page.id} thumbWidth={THUMB_WIDTH} thumbHeight={activeThumbHeight} />
-		                    : <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} onClick={hasRoute ? () => onFocus(page.id) : undefined} />}
+		                    : <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH} live={isLive(x, y)} onClick={hasRoute ? () => onFocus(page.id) : undefined} />}
 		                  {showFlows && (
 		                    <div className="caret-edge-connector" style={{ top: conn.y - y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
 		                  )}
@@ -942,6 +1006,7 @@ function generateCanvasView(): string {
 		                {page.broken
 		                  ? <BrokenPageCard pageId={page.id} title={page.title || page.id} thumbWidth={THUMB_WIDTH} thumbHeight={activeThumbHeight} />
 		                  : <PageThumbnail pageId={page.id} title={page.title || page.id} tags={page.tags || []} frameWidth={activeFrameWidth} frameHeight={FRAME_HEIGHT} thumbWidth={THUMB_WIDTH}
+		                      live={isLive(pos.x, pos.y)}
 		                      onClick={hasRoute && !dragState?.moved ? () => onFocus(page.id) : undefined} />}
 		                {showFlows && (
 		                  <div className="caret-edge-connector" style={{ top: conn.y - pos.y }} onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); log("[edge-drag-start] from=" + page.id); setEdgeDrag({ fromPage: page.id, mouseX: conn.x, mouseY: conn.y, originX: conn.x, originY: conn.y }) }} />
@@ -1030,6 +1095,8 @@ function generatePageThumbnail(): string {
 		  frameHeight: number
 		  thumbWidth: number
 		  onClick?: () => void
+		  /** Near enough to the viewport to be worth a live iframe (Phase 10.7). */
+		  live?: boolean
 		}
 
 		export function BrokenPageCard({ pageId, title, thumbWidth, thumbHeight }: { pageId: string; title: string; thumbWidth: number; thumbHeight: number }) {
@@ -1052,9 +1119,17 @@ function generatePageThumbnail(): string {
 		  )
 		}
 
-		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick }: Props) {
+		export function PageThumbnail({ pageId, title, tags, frameWidth, frameHeight, thumbWidth, onClick, live = true }: Props) {
 		  const scale = thumbWidth / frameWidth
 		  const thumbHeight = frameHeight * scale
+
+		  // Virtualized (Phase 10.7): liveness is decided by the CANVAS, which knows
+		  // both the card's position and the pan/zoom transform — plain geometry,
+		  // no observer. IntersectionObserver was tried first and reported every
+		  // card as intersecting inside the transformed, overflow-hidden canvas
+		  // (measured: 209 live iframes for 209 cards), so the canvas computes it
+		  // instead of asking the browser.
+		  const near = live
 
 		  React.useEffect(() => {
 		    window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: "[thumb] " + pageId + " frameWidth=" + frameWidth + " scale=" + scale.toFixed(4) + " thumbHeight=" + thumbHeight.toFixed(1) } }, "*")
@@ -1073,17 +1148,21 @@ function generatePageThumbnail(): string {
 		        )}
 		      </div>
 		      <div className="caret-canvas-frame-viewport" style={{ width: thumbWidth, height: thumbHeight }}>
-		        <iframe
-		          src={\`/?page=\${encodeURIComponent(pageId)}\`}
-		          className="caret-canvas-frame-iframe"
-		          title={title}
-		          style={{
-		            width: frameWidth,
-		            height: frameHeight,
-		            transform: \`scale(\${scale})\`,
-		          }}
-		          tabIndex={-1}
-		        />
+		        {near ? (
+		          <iframe
+		            src={\`/?page=\${encodeURIComponent(pageId)}\`}
+		            className="caret-canvas-frame-iframe"
+		            title={title}
+		            style={{
+		              width: frameWidth,
+		              height: frameHeight,
+		              transform: \`scale(\${scale})\`,
+		            }}
+		            tabIndex={-1}
+		          />
+		        ) : (
+		          <div className="caret-canvas-frame-placeholder" style={{ width: thumbWidth, height: thumbHeight, background: "linear-gradient(135deg, #1b1b26, #14141d)" }} />
+		        )}
 		      </div>
 		    </div>
 		  )
@@ -2718,6 +2797,145 @@ function generateEditPill(): string {
 	`
 }
 
+function generateLayersPanel(): string {
+	return dedent`
+		import { bridge } from "./bridge"
+		import { showParamPanel } from "./param-panel"
+
+		/**
+		 * The layers panel — the page's element tree, mirrored from the LIVE DOM
+		 * (Phase 10.6). Built from rendered data-caret-id elements rather than a
+		 * source parse: what you see is what is actually on screen, iterator rows
+		 * and all, and clicking a row is exactly the click-on-canvas selection.
+		 * Toggled with L, closed with Escape or ×.
+		 */
+
+		let host: HTMLDivElement | null = null
+
+		export function isLayersOpen(): boolean {
+		  return !!host?.isConnected
+		}
+
+		export function toggleLayersPanel(filePath: string) {
+		  if (isLayersOpen()) {
+		    closeLayersPanel()
+		    return
+		  }
+		  host = document.createElement("div")
+		  host.id = "caret-layers-panel"
+		  host.setAttribute("data-react-grab-ignore-events", "")
+		  host.style.cssText =
+		    "position:fixed;top:64px;left:16px;width:220px;max-height:70vh;overflow:auto;z-index:99998;background:rgba(20,20,30,0.97);border:1px solid #3a3a4a;border-radius:12px;padding:10px 6px;font:12px/1.6 system-ui;color:#c9cede;pointer-events:auto;"
+		  document.body.appendChild(host)
+		  render(filePath)
+		}
+
+		export function closeLayersPanel() {
+		  host?.remove()
+		  host = null
+		}
+
+		function render(filePath: string) {
+		  if (!host) return
+		  const rows: string[] = []
+		  const elements = Array.from(document.querySelectorAll("[data-caret-id]")).filter(
+		    (el) => !el.closest("#caret-param-panel") && !el.closest("#caret-layers-panel"),
+		  )
+		  for (const el of elements) {
+		    let depth = 0
+		    let node = el.parentElement
+		    while (node) {
+		      if (node.hasAttribute("data-caret-id")) depth++
+		      node = node.parentElement
+		    }
+		    const id = el.getAttribute("data-caret-id") ?? ""
+		    rows.push(
+		      \`<div data-layer="\${id}" style="padding:2px 8px 2px \${8 + depth * 14}px;cursor:pointer;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">\` +
+		        \`<span style="color:#8b93a7">\${el.tagName.toLowerCase()}</span> \${id}</div>\`,
+		    )
+		  }
+		  host.innerHTML =
+		    '<div style="display:flex;justify-content:space-between;align-items:center;padding:0 8px 6px"><strong style="font-size:11px;letter-spacing:0.06em;color:#8b93a7">LAYERS</strong>' +
+		    '<button data-layers-close style="all:unset;cursor:pointer;color:#8b93a7">×</button></div>' +
+		    (rows.join("") || '<div style="padding:0 8px;color:#8b93a7">no addressable elements</div>')
+
+		  host.querySelector("[data-layers-close]")?.addEventListener("click", closeLayersPanel)
+		  for (const row of host.querySelectorAll<HTMLElement>("[data-layer]")) {
+		    row.addEventListener("click", () => {
+		      const id = row.dataset.layer ?? ""
+		      // First rendered instance: for .map() rows that IS row 1, which
+		      // matches what a canvas click on the first row selects.
+		      const el = document.querySelector(\`[data-caret-id="\${id}"]\`)
+		      if (!el) return
+		      el.scrollIntoView({ block: "nearest", behavior: "smooth" })
+		      showParamPanel(el, filePath, 0)
+		      row.style.background = "#2d2d40"
+		      setTimeout(() => { row.style.background = "" }, 600)
+		    })
+		  }
+		}
+
+		/**
+		 * The keyboard map (Phase 10.8) — one discoverable place, showing only
+		 * what actually exists. Opened with ?.
+		 */
+		export function toggleShortcuts() {
+		  const existing = document.getElementById("caret-shortcuts")
+		  if (existing) {
+		    existing.remove()
+		    return
+		  }
+		  const overlay = document.createElement("div")
+		  overlay.id = "caret-shortcuts"
+		  overlay.setAttribute("data-react-grab-ignore-events", "")
+		  overlay.style.cssText =
+		    "position:fixed;inset:0;z-index:99999;background:rgba(10,10,16,0.72);display:flex;align-items:center;justify-content:center;pointer-events:auto;"
+		  const SHORTCUTS: Array<[string, string]> = [
+		    ["Click", "select an element (opens the property panel)"],
+		    ["Shift+Click", "grow the selection — one edit hits all of it"],
+		    ["Drag a handle", "resize; flex and grid preview through a clamp"],
+		    ["Enter (in a panel row)", "commit the value"],
+		    ["\u2318Z / Ctrl+Z", "undo the last design change (one step per gesture)"],
+		    ["L", "toggle the layers panel"],
+		    ["Esc", "close panels, cancel a drag, deselect"],
+		    ["?", "this map"],
+		  ]
+		  overlay.innerHTML =
+		    '<div style="background:#16161f;border:1px solid #3a3a4a;border-radius:14px;padding:20px 26px;min-width:380px;font:13px/2 system-ui;color:#c9cede">' +
+		    '<strong style="display:block;margin-bottom:8px;color:#fff">Keyboard & gestures</strong>' +
+		    SHORTCUTS.map(
+		      (s) =>
+		        \`<div style="display:flex;gap:16px"><code style="min-width:130px;color:#a5b4fc">\${s[0]}</code><span>\${s[1]}</span></div>\`,
+		    ).join("") +
+		    "</div>"
+		  overlay.addEventListener("click", () => overlay.remove())
+		  document.body.appendChild(overlay)
+		}
+
+		window.addEventListener("keydown", (e) => {
+		  const active = document.activeElement as HTMLElement | null
+		  if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return
+		  if (e.key === "?") {
+		    e.preventDefault()
+		    toggleShortcuts()
+		  }
+		  if (e.key.toLowerCase() === "l" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+		    const page = (window as any).__CARET_FOCUSED_PAGE__
+		    if (!page?.filePath) return
+		    e.preventDefault()
+		    toggleLayersPanel(page.filePath)
+		  }
+		  if (e.key === "Escape") {
+		    closeLayersPanel()
+		    document.getElementById("caret-shortcuts")?.remove()
+		  }
+		})
+
+		// Keep the module referenced so the bundler includes the listeners.
+		void bridge
+	`
+}
+
 function generateSizeResolver(): string {
 	return dedent`
 		/**
@@ -3412,6 +3630,7 @@ function generateCaretGrabPlugin(): string {
 		import { ackEdit, editPillEngaged } from "./edit-pill"
 		import { attachAssetPicker } from "./asset-picker"
 		import { extendParamSelection, hideParamPanel, isParamPanelOpen, showParamPanel } from "./param-panel"
+		import "./layers-panel"
 
 		// react-grab never reports a modifier-click as a selection, so shift-click
 		// multi-select is the plugin's own gesture. Two subtleties: react-grab's

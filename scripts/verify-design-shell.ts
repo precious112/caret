@@ -1817,6 +1817,134 @@ async function main() {
 		}
 	})
 
+	await scenario("bb. 200 artboards: iframes virtualize and the grid stays responsive", async () => {
+		// Phase 10.7: a large canvas must not mount every page as a live iframe.
+		// 200 pages are seeded; the grid may mount only the ones near the
+		// viewport (placeholders elsewhere), and scrolling must stay fluid. The
+		// iframe count is the virtualization proof; the frame-time sample is the
+		// experience check, with headless-CI headroom in the threshold.
+		const pagesDir = path.join(caretDir, "pages")
+		const seeded: string[] = []
+		try {
+			for (let n = 1; n <= 200; n++) {
+				const id = `perf-${String(n).padStart(3, "0")}`
+				const dir = path.join(pagesDir, id)
+				await fs.mkdir(dir, { recursive: true })
+				await fs.writeFile(
+					path.join(dir, "index.tsx"),
+					`export default function Perf${n}() {\n  return <div className="min-h-screen bg-white p-8"><h1>Perf ${n}</h1></div>\n}\n`,
+				)
+				await fs.writeFile(
+					path.join(dir, "meta.json"),
+					JSON.stringify({ id, title: `Perf ${n}`, type: "page", states: [], tags: [] }),
+				)
+				seeded.push(dir)
+			}
+
+			const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+			try {
+				await page.goto(`http://localhost:${port}/`)
+				await waitFor(
+					async () =>
+						((await page.evaluate(() => document.querySelectorAll(".caret-canvas-frame").length)) as number) >= 200,
+					60000,
+					"all 200+ cards to appear on the grid",
+				)
+
+				// Let the canvas layout settle before counting: the canvas fits all
+				// artboards on open, which for 200 pages means ~4% zoom.
+				await page.waitForTimeout(1500)
+				const mounted = (await page.evaluate(
+					() => document.querySelectorAll(".caret-canvas-frame-iframe").length,
+				)) as number
+				const placeholders = (await page.evaluate(
+					() => document.querySelectorAll(".caret-canvas-frame-placeholder").length,
+				)) as number
+				if (!(mounted === 0 && placeholders > 200)) {
+					const diag = await page.evaluate(() => {
+						const content = document.querySelector(".caret-canvas-content") as HTMLElement | null
+						return {
+							transform: content?.style.transform ?? "none",
+							window: `${window.innerWidth}x${window.innerHeight}`,
+						}
+					})
+					throw new Error(
+						`at fit-zoom every card should be a placeholder: ${mounted} live iframes, ${placeholders} placeholders — ${JSON.stringify(diag)}`,
+					)
+				}
+
+				// Zoom in: what the user is actually looking at must become real.
+				await page.evaluate(async () => {
+					const container = document.querySelector(".caret-canvas-container")
+					if (!container) return
+					for (let step = 0; step < 40; step++) {
+						container.dispatchEvent(
+							new WheelEvent("wheel", {
+								deltaY: -120,
+								ctrlKey: true,
+								bubbles: true,
+								cancelable: true,
+								clientX: 700,
+								clientY: 500,
+							}),
+						)
+						await new Promise((resolve) => requestAnimationFrame(resolve))
+					}
+				})
+				await page.waitForTimeout(1200)
+				const zoomedIn = (await page.evaluate(
+					() => document.querySelectorAll(".caret-canvas-frame-iframe").length,
+				)) as number
+				if (zoomedIn === 0 || zoomedIn > 40) {
+					const scale = await page.evaluate(
+						() => (document.querySelector(".caret-canvas-content") as HTMLElement | null)?.style.transform ?? "none",
+					)
+					throw new Error(`zooming in mounted ${zoomedIn} iframes (expected a handful) at ${scale}`)
+				}
+
+				// The canvas is a transform-based pan/zoom surface (overflow:hidden),
+				// not a scroller — panning is what a user does, so pan by wheel and
+				// sample the frame times that gesture actually produces.
+				// No function-valued consts in an evaluate body — esbuild's keepNames
+				// wraps them in a __name helper that does not exist in the page.
+				const timing = (await page.evaluate(async () => {
+					const container = document.querySelector(".caret-canvas-container")
+					if (!container) return { error: "no canvas container found" }
+					const deltas: number[] = []
+					let last = performance.now()
+					for (let step = 0; step < 60; step++) {
+						await new Promise((resolve) => requestAnimationFrame(resolve))
+						const now = performance.now()
+						deltas.push(now - last)
+						last = now
+						container.dispatchEvent(
+							new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true, clientX: 700, clientY: 500 }),
+						)
+					}
+					deltas.sort((a, b) => a - b)
+					return {
+						median: deltas[Math.floor(deltas.length / 2)],
+						p90: deltas[Math.floor(deltas.length * 0.9)],
+					}
+				})) as { error?: string; median?: number; p90?: number }
+				if (timing.error) throw new Error(timing.error)
+				// 60fps is 16.7ms; headless CI gets headroom, but a wedged main
+				// thread (every iframe live) measures hundreds of ms per frame.
+				if ((timing.median ?? 999) >= 30) {
+					throw new Error(
+						`panning is not fluid: median frame ${timing.median?.toFixed(1)}ms, p90 ${timing.p90?.toFixed(1)}ms`,
+					)
+				}
+
+				return `fit-zoom: 0 live iframes for ${placeholders} cards; zoomed in: ${zoomedIn} live; pan median ${timing.median?.toFixed(1)}ms, p90 ${timing.p90?.toFixed(1)}ms`
+			} finally {
+				await page.close()
+			}
+		} finally {
+			for (const dir of seeded) await fs.rm(dir, { recursive: true, force: true })
+		}
+	})
+
 	await scenario("w. property panel opens on selection, renders real Params, and emits param-edit", async () => {
 		// The panel's read side is certified against the REAL resolver: the same
 		// resolveParamsFor the host runs, applied to the same fixture source, is
