@@ -25,6 +25,7 @@ import {
 	assetUrl,
 	caretDirectoryExists,
 	completeSync,
+	computeDrift,
 	describeAsset,
 	type FlowDefinition,
 	findAsset,
@@ -631,6 +632,26 @@ export const TOOLS: ToolDefinition[] = [
 		async handler(ctx) {
 			const result = await runSync(ctx.projectPath)
 			return reply(ctx, result)
+		},
+	},
+
+	{
+		name: "get_drift",
+		title: "Where the app and the design disagree",
+		description:
+			"Compares content hashes recorded at the last sync against the files on disk, both directions. " +
+			"'forward' entries are ordinary design→app syncs waiting to happen; 'app-drift' entries are app files " +
+			"someone changed directly since their design was translated — the design layer no longer tells the " +
+			"truth about them; 'conflict' means both sides moved and a human must choose. Only mapped files appear: " +
+			"the mapping comes from report_sync_mapping calls during past syncs.",
+		inputSchema: {},
+		async handler(ctx) {
+			try {
+				const report = await computeDrift(ctx.projectPath)
+				return reply(ctx, { ok: true, ...report })
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
 		},
 	},
 
