@@ -205,7 +205,9 @@ application file in this turn — the user reviews the plan first, and any write
 refused. If they accept, you will be asked to carry it out.
 
 Do NOT edit .caret/sync-state.json. Caret records the sync itself once the changes are applied.`
-		: `When you are done, call the \`complete_sync\` tool on the Caret MCP server with syncId "${input.syncId}". That is the ONLY way to record the sync. Do NOT edit .caret/sync-state.json by hand — Caret owns that file, and writing it yourself will be overwritten.`
+		: `As you translate, call \`report_sync_mapping\` on the Caret MCP server once per design file, at the moment its app files are written — you know which app files a design file's content landed in right now, and Caret cannot infer it later. The mapping is what makes the NEXT sync incremental and app-side drift visible; skip it and both are lost.
+
+When you are done, call the \`complete_sync\` tool on the Caret MCP server with syncId "${input.syncId}". That is the ONLY way to record the sync. Do NOT edit .caret/sync-state.json by hand — Caret owns that file, and writing it yourself will be overwritten.`
 }
 </explicit_instructions>`
 

@@ -44,6 +44,9 @@ const IGNORED = [
 	"**/.caret/caret-theme.css",
 	"**/.caret/canvas-layout.json",
 	"**/.caret/.sync-pending.json",
+	// Mapping metadata Caret writes during sync — versioned, but not healable
+	// content, and waking the healer once per recorded mapping is noise.
+	"**/.caret/sync-manifest.json",
 	"**/.caret/.provenance.jsonl",
 	"**/.caret/.mcp.json",
 	// Caret's own scratch, rewritten on every interview step. Not design content,

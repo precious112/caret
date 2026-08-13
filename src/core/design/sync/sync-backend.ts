@@ -61,7 +61,12 @@ open the file, say so and stop rather than improvising a different change — th
 a specific plan.
 
 Do not touch \`.caret/\` — the design layer is already correct; it is the source you are
-translating *from*. Do not write \`sync-state.json\`: Caret records the sync itself.`
+translating *from*. Do not write \`sync-state.json\`: Caret records the sync itself.
+
+As you finish each design file's translation, call \`report_sync_mapping\` on the Caret MCP
+server with that design file and every app file its content landed in. You know the
+correspondence right now and Caret cannot infer it later — the mapping is what makes the next
+sync incremental and app-side drift visible to the design layer.`
 
 /**
  * Runs the whole two-phase sync. Long-lived — the caller starts it and returns.

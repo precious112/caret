@@ -39,6 +39,7 @@ import {
 	readFoundationTokens,
 	readPageMeta,
 	readSyncState,
+	recordMappings,
 	registerExternalVariants,
 	runSync,
 	validateFoundationTokens,
@@ -53,7 +54,7 @@ import { PANEL_PROPERTIES } from "../../../src/core/design/param/params"
 import { recordEdit } from "../../../src/core/design/provenance"
 import { captureUndoStep } from "../../../src/core/design/undo/design-undo"
 import { Logger } from "../../../src/shared/services/Logger"
-import { getDesignLayerChangedFiles } from "../../../src/utils/git"
+import { getDesignLayerChangedFiles, getLatestGitCommitHash } from "../../../src/utils/git"
 import { buildFoundationContext, buildGuide } from "../rules/context"
 import type { ScreenshotResult } from "../types"
 
@@ -630,6 +631,40 @@ export const TOOLS: ToolDefinition[] = [
 		async handler(ctx) {
 			const result = await runSync(ctx.projectPath)
 			return reply(ctx, result)
+		},
+	},
+
+	{
+		name: "report_sync_mapping",
+		title: "Record which app files a design file translated into",
+		description:
+			"Call this DURING a design→app sync, once per design file, at the moment its app files are written — " +
+			"you know the correspondence right now, and Caret cannot infer it later. The mapping powers drift " +
+			"detection and incremental sync: skip it and the next sync re-reports everything you just did, and " +
+			"app-side edits to these files become invisible to the design layer. Report every app file the design " +
+			"file's content landed in (a page split across a route and extracted components lists them all).",
+		inputSchema: {
+			mappings: z
+				.array(
+					z.object({
+						designPath: z.string().describe("The design file you translated, e.g. .caret/pages/checkout/index.tsx"),
+						appPaths: z.array(z.string()).min(1).describe("Every app file its content landed in"),
+					}),
+				)
+				.min(1),
+		},
+		async handler(ctx, args: { mappings: Array<{ designPath: string; appPaths: string[] }> }) {
+			try {
+				const head = await getLatestGitCommitHash(ctx.projectPath)
+				const result = await recordMappings(ctx.projectPath, args.mappings, head)
+				return reply(ctx, {
+					ok: result.refused.length === 0,
+					recorded: result.recorded,
+					...(result.refused.length > 0 ? { refused: result.refused } : {}),
+				})
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
 		},
 	},
 

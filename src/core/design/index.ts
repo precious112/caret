@@ -309,6 +309,7 @@ export {
 	unregisterProjectServices,
 } from "./services"
 export { DesignSession, type DesignSessionOptions } from "./session"
+export { type MappingEntry, pruneManifest, readManifest, recordMappings, type SyncManifest } from "./sync/mapping-manifest"
 export { createSyncWatcher, runSyncInteractive } from "./sync/SyncWatcher"
 export {
 	type CompleteSyncOutcome,
