@@ -279,6 +279,10 @@ async function readDiscovery(projectPath: string): Promise<{ url: string; token:
 }
 
 async function callMcp(url: string, token: string | null, body: unknown): Promise<Response> {
+	// Hard timeout: a wedged MCP session otherwise leaves fetch awaiting
+	// response headers FOREVER, and no scenario-level waitFor deadline can
+	// interrupt an await that never settles — a full run hung 20+ minutes
+	// inside bs exactly this way.
 	return fetch(url, {
 		method: "POST",
 		headers: {
@@ -287,6 +291,7 @@ async function callMcp(url: string, token: string | null, body: unknown): Promis
 			...(token ? { authorization: `Bearer ${token}` } : {}),
 		},
 		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(30_000),
 	})
 }
 
@@ -385,6 +390,17 @@ async function main(): Promise<void> {
 		return `OS window title: ${title}`
 	})
 
+	// The window LOOKS stuck during long model waits, and at least one full run
+	// died to a mid-suite window close (stamped 2:02:08 in main.log, inside bs's
+	// checker render). Say what the window is, in the title a human reads before
+	// closing it. Best-effort: the chrome may retitle on navigation.
+	await app!
+		.evaluate(({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			win?.setTitle(`⚠ CERTIFICATION RUN — do not close — ${win.getTitle()}`)
+		})
+		.catch(() => {})
+
 	const discovery = await scenario("b. MCP discovery file is written with a token", async () => {
 		const record = await waitFor("the MCP discovery file", () => readDiscovery(fixture), 60_000)
 		assert(record.url.startsWith("http://127.0.0.1:"), `expected a loopback URL, got ${record.url}`)
@@ -405,6 +421,7 @@ async function main(): Promise<void> {
 		assert(discovery, "no discovery record")
 		const response = await fetch(discovery.url, {
 			method: "POST",
+			signal: AbortSignal.timeout(30_000),
 			headers: {
 				"content-type": "application/json",
 				accept: "application/json, text/event-stream",
@@ -999,7 +1016,9 @@ async function main(): Promise<void> {
 			60_000,
 		)
 
-		const served = await fetch(`${base}/caret-assets/${encodeURIComponent("Hero Shot@2x.png")}`)
+		const served = await fetch(`${base}/caret-assets/${encodeURIComponent("Hero Shot@2x.png")}`, {
+			signal: AbortSignal.timeout(30_000),
+		})
 		assert(served.ok, `serving the asset failed with ${served.status}`)
 		assert(served.headers.get("content-type") === "image/png", `wrong content type: ${served.headers.get("content-type")}`)
 		const bytes = Buffer.from(await served.arrayBuffer())
@@ -1008,7 +1027,9 @@ async function main(): Promise<void> {
 		// `.caret/assets/` is a directory anything can write to and the middleware
 		// takes a path from the URL, so the confinement check is load-bearing —
 		// and it has to survive encoding, since %2e%2e is still traversal.
-		const escaped = await fetch(`${base}/caret-assets/%2e%2e%2f%2e%2e%2fpackage.json`)
+		const escaped = await fetch(`${base}/caret-assets/%2e%2e%2f%2e%2e%2fpackage.json`, {
+			signal: AbortSignal.timeout(30_000),
+		})
 		assert(escaped.status === 403 || escaped.status === 404, `traversal was not refused: ${escaped.status}`)
 		return `${bytes.length} bytes served as image/png; encoded traversal → ${escaped.status}`
 	})
@@ -1302,7 +1323,7 @@ async function main(): Promise<void> {
 				}),
 			60_000,
 		)
-		const served = await fetch(`${origin_}/caret-assets/${String(entry?.file)}`)
+		const served = await fetch(`${origin_}/caret-assets/${String(entry?.file)}`, { signal: AbortSignal.timeout(30_000) })
 		assert(served.ok, `the generated asset was not served: ${served.status}`)
 		assert((served.headers.get("content-type") ?? "").includes("svg"), `served as ${served.headers.get("content-type")}`)
 		const rules = await fs.readFile(path.join(fixture, "AGENTS.md"), "utf-8").catch(() => "")
@@ -2516,7 +2537,84 @@ export default function ListDemo() {
 		assert(after.includes("{product.name}"), "the TEMPLATE was rewritten — content must go to the data, not the JSX")
 		assert(!after.includes("Aurora Slip-on"), "the old value survived — the data write missed")
 
+		// Leave the canvas on its grid: scenarios that "reuse the focused frame"
+		// (bo's home edits) must not inherit the list page. This exact pollution
+		// cost a full-suite run.
+		await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			await canvas?.webContents
+				.executeJavaScript(`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`)
+				.catch(() => {})
+		})
+
 		return `row 2's text landed in the data literal ("Aurora Loafer"), template and item 1 untouched`
+	})
+
+	await scenario("bw. an agent reads and writes the same Params over MCP", async () => {
+		// The shared human/agent surface, closed end to end: get_params resolves
+		// the subtitle the way the user's panel does — naming its token binding —
+		// and set_param lands the same minimal splice the panel writes, on disk.
+		assert(discovery, "no discovery record (scenario b must run first)")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const read = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 71,
+			method: "tools/call",
+			params: { name: "get_params", arguments: { pageId: "home", caretId: "hero-subtitle" } },
+		})
+		const readText = await read.text()
+		assert(
+			readText.includes("brand-500"),
+			`get_params did not name the subtitle's token binding. Server said: ${readText.slice(0, 400)}`,
+		)
+
+		const write = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 72,
+			method: "tools/call",
+			params: {
+				name: "set_param",
+				arguments: { pageId: "home", caretId: "hero-subtitle", property: "margin-top", raw: "12px" },
+			},
+		})
+		const writeText = await write.text()
+		// The reply is pretty-printed inside the SSE frame — assert on the error
+		// flag and the echoed param, not on JSON spacing.
+		assert(
+			!writeText.includes('"isError":true') && writeText.includes("margin-top"),
+			`set_param did not succeed. Server said: ${writeText.slice(0, 400)}`,
+		)
+
+		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
+		await waitFor(
+			"the agent's param write to land in the page file",
+			async () => {
+				const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				return source.includes("mt-[12px]") ? true : null
+			},
+			10000,
+		)
+
+		// A refusal must be typed, not a shrug.
+		const missing = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 73,
+			method: "tools/call",
+			params: {
+				name: "set_param",
+				arguments: { pageId: "home", caretId: "no-such-element", property: "padding", raw: "1px" },
+			},
+		})
+		const missingText = await missing.text()
+		assert(
+			missingText.includes("caret-id"),
+			`a missing element did not refuse with its cause. Server said: ${missingText.slice(0, 300)}`,
+		)
+
+		return `get_params named the token binding; set_param spliced mt-[12px] onto the subtitle; a bad target refused with its cause`
 	})
 
 	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {
@@ -3536,7 +3634,20 @@ export default function CatalogDemo() {
 						.catch(() => false)
 					if (!painter) await new Promise((r) => setTimeout(r, 250))
 				}
-				if (!painter) return { error: "the paint control never appeared" }
+				if (!painter) {
+					const diag = await pageFrame
+						.executeJavaScript(
+							`(() => ({
+								url: location.href,
+								fabs: document.querySelectorAll('.caret-focused-fab').length,
+								rootChildren: document.getElementById('root')?.children.length ?? -1,
+								bodyHead: document.body?.innerHTML?.slice(0, 200) ?? 'no body',
+								viteOverlay: !!document.querySelector('vite-error-overlay'),
+							}))()`,
+						)
+						.catch((e: any) => `frame probe failed: ${String(e).slice(0, 120)}`)
+					return { error: "the paint control never appeared — diag: " + JSON.stringify(diag) }
+				}
 
 				let overlayUp = false
 				for (let attempt = 0; attempt < 5 && !overlayUp; attempt++) {

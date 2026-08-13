@@ -18,6 +18,7 @@
  * and cannot feed itself.
  */
 import chokidar, { type FSWatcher } from "chokidar"
+import * as fsp from "fs/promises"
 import * as path from "path"
 
 import { assetIndexPath, reindexAssets, writeThemeCss } from "../../src/core/design"
@@ -126,6 +127,25 @@ export class WatchAndHeal {
 
 		this.watcher.on("add", (file) => this.schedule(file, "create"))
 		this.watcher.on("change", (file) => this.schedule(file, "write"))
+		// A new directory's files can be created before chokidar's watcher for
+		// that directory attaches — with ignoreInitial they then read as
+		// "already there" and NO EVENT EVER FIRES. An agent writing
+		// pages/<new>/index.tsx right after mkdir hits this race routinely (a
+		// certification run caught it: the healer never saw the page, so the
+		// catalog was never supplied). Catch up by scanning the new directory
+		// once it settles; schedule() debounces duplicates from the normal path.
+		this.watcher.on("addDir", (dir) => {
+			setTimeout(() => {
+				void fsp
+					.readdir(dir, { withFileTypes: true })
+					.then((entries) => {
+						for (const entry of entries) {
+							if (entry.isFile()) this.schedule(path.join(dir, entry.name), "create")
+						}
+					})
+					.catch(() => {})
+			}, 500)
+		})
 		this.watcher.on("unlink", (file) => {
 			void recordEdit(this.options.projectPath, { actor: "external", action: "delete", file })
 		})

@@ -154,6 +154,43 @@ export class DesignChecksService {
 		const base = this.options.baseUrl()
 		if (!base) return []
 
+		// The whole render is DEADLINED. A page whose module graph never settles
+		// (an unresolvable import leaves the dev server holding the request) hangs
+		// loadURL forever, and an unbounded await here wedged run_design_checks,
+		// the MCP reply carrying it, and three full certification runs in a row.
+		// A hang is reported the same way a down server is: honestly.
+		try {
+			return await Promise.race([
+				this.renderAndAudit(pageId, base),
+				new Promise<CheckFinding[]>((resolve) =>
+					setTimeout(
+						() =>
+							resolve([
+								{
+									check: "render-unavailable",
+									severity: "info",
+									message: "the page render did not settle within 20s — checks that need a render were skipped",
+									pageId,
+								},
+							]),
+						20_000,
+					),
+				),
+			])
+		} finally {
+			// Whichever branch won, no isolated window may outlive the check.
+			for (const window of BrowserWindow.getAllWindows()) {
+				if (
+					!window.isDestroyed() &&
+					window.webContents.getURL().includes(`page=${encodeURIComponent(pageId)}&isolated=1`)
+				) {
+					window.destroy()
+				}
+			}
+		}
+	}
+
+	private async renderAndAudit(pageId: string, base: string): Promise<CheckFinding[]> {
 		const window = new BrowserWindow({
 			show: false,
 			width: 1440,

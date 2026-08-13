@@ -190,6 +190,7 @@ export class ProjectWindow {
 
 	async close(): Promise<void> {
 		if (this.closed) return
+		Logger.info(`[window] close() invoked for ${this.projectPath}`)
 		this.closed = true
 		this.checks.close()
 		await Promise.allSettled([this.session.stop(), this.mcp.stop(), this.healer.stop(), this.agent.close()])
@@ -443,6 +444,7 @@ export class ProjectWindow {
 
 	private onWindowClosed(): void {
 		if (this.closed) return
+		Logger.info(`[window] project window 'closed' event fired (not via close()) for ${this.projectPath}`)
 		this.closed = true
 		void this.session.stop()
 		void this.mcp.stop()

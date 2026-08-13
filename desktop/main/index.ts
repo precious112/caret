@@ -5,7 +5,7 @@
  * project-specific lives on a {@link ProjectWindow}; this file only decides what
  * exists and when.
  */
-import { app, dialog, nativeImage, shell } from "electron"
+import { app, BrowserWindow, dialog, nativeImage, shell } from "electron"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
@@ -135,6 +135,9 @@ async function main(): Promise<void> {
 	})
 
 	app.on("before-quit", () => {
+		// Diagnostic: full-suite runs died with a clean shutdown mid-scenario and
+		// no attributable initiator. Name the moment quit begins.
+		Logger.info(`[main] before-quit fired (windows open: ${BrowserWindow.getAllWindows().length})`)
 		void windows.closeAll()
 		// The embedded backend is a child process. Left running it would outlive
 		// the app and keep holding a port.

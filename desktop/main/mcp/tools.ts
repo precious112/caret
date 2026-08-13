@@ -48,7 +48,10 @@ import {
 } from "../../../src/core/design"
 import { runExclusive, writeFileAtomic } from "../../../src/core/design/file-mutation-queue"
 import { mutateFlowDefinition } from "../../../src/core/design/flow-meta"
+import { resolveParamsFor, spliceParamEdit } from "../../../src/core/design/param/edit"
+import { PANEL_PROPERTIES } from "../../../src/core/design/param/params"
 import { recordEdit } from "../../../src/core/design/provenance"
+import { captureUndoStep } from "../../../src/core/design/undo/design-undo"
 import { Logger } from "../../../src/shared/services/Logger"
 import { getDesignLayerChangedFiles } from "../../../src/utils/git"
 import { buildFoundationContext, buildGuide } from "../rules/context"
@@ -530,6 +533,88 @@ export const TOOLS: ToolDefinition[] = [
 			try {
 				const set = await registerExternalVariants(ctx.projectPath, args.pageId, args.variantIds, args.instruction)
 				return reply(ctx, { ok: true, pageId: set.pageId, takes: set.variants.length })
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
+		},
+	},
+
+	{
+		name: "get_params",
+		title: "Read an element's resolved style Params",
+		description:
+			"Resolves every panel property of one element FROM SOURCE: token bindings named as bindings, the responsive " +
+			"variant active at the given viewport, inherited/computed origins, and typed refusals where a write cannot " +
+			"land. This is the same resolution the property panel shows the user — read it before styling an element so " +
+			"your edit speaks the same vocabulary (tokens first, exact values second).",
+		inputSchema: {
+			pageId: z.string().describe("The page the element lives on"),
+			caretId: z.string().describe("The element's data-caret-id"),
+			viewportWidth: z.number().optional().describe("Viewport in px for responsive resolution (default 1440)"),
+		},
+		async handler(ctx, args: { pageId: string; caretId: string; viewportWidth?: number }) {
+			try {
+				const filePath = path.join(ctx.projectPath, ".caret", "pages", args.pageId, "index.tsx")
+				const source = await fs.readFile(filePath, "utf-8")
+				const tokens = await readFoundationTokens(ctx.projectPath)
+				const params = resolveParamsFor(
+					source,
+					filePath,
+					args.caretId,
+					PANEL_PROPERTIES,
+					args.viewportWidth ?? 1440,
+					tokens,
+				)
+				if (!params) return fail(`no element with caret-id "${args.caretId}" on page "${args.pageId}"`)
+				return reply(ctx, { ok: true, caretId: args.caretId, params })
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err))
+			}
+		},
+	},
+
+	{
+		name: "set_param",
+		title: "Set one element's style Param",
+		description:
+			"Writes `<caretId>/style/<property>` as a minimal source splice — the exact write path the user's own panel " +
+			"edits take, undoable on the same stack. Prefer `token` (a foundation token name like 'brand-500') over `raw`; " +
+			"a raw value detaches the element from the token system. The edit lands on the responsive variant active at " +
+			"the given viewport. A refusal names its cause — respect it rather than editing the file around it.",
+		inputSchema: {
+			pageId: z.string().describe("The page the element lives on"),
+			caretId: z.string().describe("The element's data-caret-id"),
+			property: z.string().describe("CSS property (background-color, padding, font-size, ...)"),
+			token: z.string().optional().describe("A foundation token name — wins over raw"),
+			raw: z.string().optional().describe("An exact CSS value (#0b7aff, 24px)"),
+			viewportWidth: z.number().optional().describe("Viewport in px the edit targets (default 1440)"),
+		},
+		async handler(
+			ctx,
+			args: { pageId: string; caretId: string; property: string; token?: string; raw?: string; viewportWidth?: number },
+		) {
+			try {
+				if (!args.token && !args.raw) return fail("one of token or raw is required")
+				const filePath = path.join(ctx.projectPath, ".caret", "pages", args.pageId, "index.tsx")
+				const tokens = await readFoundationTokens(ctx.projectPath)
+				await captureUndoStep(ctx.projectPath, `agent set_param: ${args.property} on ${args.caretId}`, "agent")
+				const result = await spliceParamEdit(
+					filePath,
+					args.caretId,
+					args.property,
+					{ token: args.token, raw: args.raw },
+					args.viewportWidth ?? 1440,
+					tokens,
+				)
+				if (!result.ok) return fail(result.refused ?? "the edit was refused")
+				void recordEdit(ctx.projectPath, {
+					actor: "agent",
+					action: "write",
+					file: filePath,
+					param: `${args.caretId}/style/${args.property}`,
+					newValue: args.token ?? args.raw,
+				})
+				return reply(ctx, { ok: true, param: `${args.caretId}/style/${args.property}`, value: args.token ?? args.raw })
 			} catch (err) {
 				return fail(err instanceof Error ? err.message : String(err))
 			}

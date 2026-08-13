@@ -288,7 +288,15 @@ ${await catalogIndexLines(projectPath)}
 
 ${
 	audience === "mcp"
-		? `## Before you declare page work finished
+		? `## Styling one element precisely
+
+For a targeted style change, \`get_params\` then \`set_param\` beat editing the file: they
+resolve the element the way the user's own property panel does (token bindings named, the
+responsive variant picked by viewport, refusals typed) and the write is a minimal splice on
+the same undo stack as the user's edits. Prefer a token name over a raw value — a raw value
+detaches the element from the design's token system.
+
+## Before you declare page work finished
 
 Call \`run_design_checks\` on every page you wrote or changed, and fix what it reports.
 The checks are mechanical, not taste — contrast failures, repeated card text, missing alt,

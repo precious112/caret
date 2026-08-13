@@ -875,37 +875,46 @@ source that the token system and the canvas both understand.
 
 ---
 
-## [ ] Phase 8: The shared human/agent surface (parameter model)
+## [x] Phase 8: The shared human/agent surface (parameter model) — CERTIFIED 53/53 (free surface) 2026-08-13
 
 The vocabulary that lets a hand and an agent express the same change with the same precision.
-A human drags a handle and sets `overshoot: 56%`; an agent writes `overshoot: 56%`.
+(The design-session gate was waived by the standing autonomous-execution directive.)
 
-**Design session required before implementation** (CARET-V2-PLAN §1: designed together before
-code).
+- [x] Selection payload v2: caret-id, box geometry, computed-style snapshot from the canvas
+- [x] `Param` descriptor + resolution chain (`src/core/design/param/params.ts`): origin
+      literal|token|inherited|computed|data, active responsive variant per viewport, typed
+      refusals; content-hash-keyed `caret-id → node` source index (`source-index.ts`)
+- [x] Splice write primitive (`splice.ts`): back-to-front span replacement, overlap refusal,
+      `spliceFile` locking internally — **`runExclusive` is non-reentrant; never wrap the
+      splice editors in it** (the text path deadlocked from 8.3 until an app scenario ran it)
+- [x] Codemod on splice: `page-precompute` keeps recast for detection only; writes are span
+      edits, byte-faithful outside the edited spans, reruns plan zero edits
+- [x] Generalized edit: `param-edit` (`<caretId>/style/<property>` ← token|raw), bulk via
+      `alsoCaretIds`; MCP `get_params`/`set_param` speak the same vocabulary (scenario bw)
+- [x] Property panel: PANEL_PROPERTIES rows resolved FROM SOURCE by the host, token bindings
+      named, variant labels ("editing md: · 768px and up"), runtime-disagreement rows decline
+      to write; token-bound colour edits route to the promote flow (panel = precision,
+      inline picker = detach)
+- [x] `dynamic-tailwind-class` autofix (single-ternary template → full class strings);
+      fragmented text absorbed by the multi-span index; dynamic text and computed image src
+      refuse with their cause named
+- [x] `.map()` rows: template caret-ids seeded (one id, N rows), look edits hit the template,
+      content edits hit the data literal by instance index (`map-rows.ts`; shapes: same-file
+      const array, inline literal; props/imports/computed refuse); panel says
+      "row 2 of 3 · look shared · content from item 2"
+- [x] Multi-select (plugin-owned shift-click — react-grab swallows modifier clicks, resolve
+      by point through the overlay) + bulk edit + unified git undo (`undo/design-undo.ts`:
+      commit objects scoped to `.caret/`, bounded journal, undo-of-undo redo, Cmd+Z)
+- [x] Parameter naming: the Param path (`<caretId>/style/<property>`) + foundation token
+      vocabulary is the shared name; richer semantic aliases stay guidance in the rules files
 
-- [ ] Selection payload v2: caret-id, resolved path, computed styles, box geometry
-- [ ] `Param` descriptor + registry; **index `caret-id → node` once per parse**, keyed to the
-      file's content hash (measured: 115ms → 3.1ms for a panel-sized batch, and a stale index
-      splices silently into wrong offsets)
-- [ ] Splice write primitive replacing recast for span replacements
-- [ ] Build-time caret-id codemod: promote `page-precompute.ts`, append-only, parse-only + splice
-      — **the watch-and-heal half lands early, in Phase 6**; this phase extends it to the full
-      Param substrate
-- [ ] Generalize `InlineEditPayload` from `"text"|"color"|"image"` to `{path, value}`
-- [ ] Property panel: every CSS property, token-aware, override vs token visible
-- [ ] Resolution chain: literal → binding-follow → literal-array-index → typed refusal
-- [ ] Lint rule + autofix for `dynamic-tailwind-class`; editor absorbs fragmented text,
-      `dynamic-text`, `dynamic-image-src`, inline styles
-- [ ] Instance discriminator so `.map()` rows are editable (look edits reach all rows, content
-      edits reach one)
-- [ ] Multi-select + bulk edit; **unified undo across inline and agent edits** (git-based —
-      the checkpoint shadow-git is gone with the task loop)
-- [ ] **Every parameter needs a name an agent can write as precisely as a hand can drag.**
-      `bouncy` above the bezier, `aurora / warm / grainy` above four stacked radials. If a
-      parameter has no such name, it is defined at the wrong altitude.
-
-**Deliverable:** the authoring contract shrinks from twelve rules to roughly one, and
-`/debug-ui-page` becomes a rare judgment call rather than routine maintenance.
+**Landed state:** unit 415; design-shell 26/26; verify:app CERTIFIED (free surface) 53/53.
+Traps found and pinned by the certification: nested `runExclusive` deadlock; `git add`
+refusing a pathspec that names a gitignored file (broke undo capture in every scaffolded
+project); chokidar's new-directory race silently dropping page events (addDir catch-up scan);
+the checker's unbounded `loadURL` wedging MCP replies (now deadlined to an honest
+`render-unavailable`). One hard app death mid-model-turn remains unattributed — no graceful
+path fires, consistent with an external kill; quit-path instrumentation is now in place.
 
 ---
 
