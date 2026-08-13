@@ -114,3 +114,48 @@ describe("partitionWorklist — the manifest makes the worklist exact", () => {
 		partition.toSync.length.should.equal(0)
 	})
 })
+
+describe("framework checkpoint — the mapping layer does not care what the app is written in", () => {
+	let dir: string
+	const designPath = ".caret/pages/checkout/index.tsx"
+
+	beforeEach(async () => {
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "framework-"))
+		await fs.mkdir(path.join(dir, ".caret", "pages", "checkout"), { recursive: true })
+		await fs.mkdir(path.join(dir, "src", "routes"), { recursive: true })
+		await fs.writeFile(path.join(dir, designPath), "design v1")
+	})
+	afterEach(async () => {
+		await fs.rm(dir, { recursive: true, force: true })
+	})
+
+	it("records, detects drift, and partitions over a Vue app", async () => {
+		const vuePath = "src/routes/Checkout.vue"
+		await fs.writeFile(path.join(dir, vuePath), "<template><div>checkout</div></template>")
+		await recordMappings(dir, [{ designPath, appPaths: [vuePath] }], "abc")
+		;(await computeDrift(dir)).clean.should.equal(1)
+
+		await fs.writeFile(path.join(dir, vuePath), "<template><div>edited directly</div></template>")
+		const report = await computeDrift(dir)
+		report.appDrift.should.equal(1)
+		report.entries[0].changedAppPaths.should.eql([vuePath])
+
+		const partition = await partitionWorklist(dir, [designPath])
+		partition.appDrifted.should.eql([designPath])
+	})
+
+	it("records, detects drift, and partitions over a Svelte app", async () => {
+		const sveltePath = "src/routes/checkout/+page.svelte"
+		await fs.mkdir(path.join(dir, "src", "routes", "checkout"), { recursive: true })
+		await fs.writeFile(path.join(dir, sveltePath), "<script></script><div>checkout</div>")
+		await recordMappings(dir, [{ designPath, appPaths: [sveltePath] }], "abc")
+
+		await fs.writeFile(path.join(dir, designPath), "design v2")
+		await fs.writeFile(path.join(dir, sveltePath), "<script></script><div>both moved</div>")
+		const report = await computeDrift(dir)
+		report.conflicts.should.equal(1)
+
+		const partition = await partitionWorklist(dir, [designPath])
+		partition.conflicts.should.eql([designPath])
+	})
+})
