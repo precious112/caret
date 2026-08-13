@@ -2617,6 +2617,107 @@ export default function ListDemo() {
 		return `get_params named the token binding; set_param spliced mt-[12px] onto the subtitle; a bad target refused with its cause`
 	})
 
+	await scenario("bx. the mapping is recorded over MCP and drift is a hash comparison, both ways", async () => {
+		// Phase 9's bookkeeping loop, deterministically: an agent reports which
+		// app file a design page translated into, drift reads clean, then an
+		// app-side edit turns into 'app-drift' naming the file, a design-side
+		// edit turns it into 'conflict', and the proposal trigger refuses
+		// non-cases with their cause.
+		assert(discovery, "no MCP discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+
+		const appFile = path.join(fixture, "src", "checkout-view.tsx")
+		await fs.writeFile(appFile, "export const CheckoutView = () => <div>translated v1</div>\n")
+
+		const report = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 91,
+			method: "tools/call",
+			params: {
+				name: "report_sync_mapping",
+				arguments: {
+					mappings: [{ designPath: ".caret/pages/home/index.tsx", appPaths: ["src/checkout-view.tsx"] }],
+				},
+			},
+		})
+		const reportText = await report.text()
+		assert(
+			reportText.includes('"recorded": 1') || reportText.includes('\\"recorded\\": 1'),
+			`mapping not recorded: ${reportText.slice(0, 300)}`,
+		)
+
+		const clean = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 92,
+			method: "tools/call",
+			params: { name: "get_drift", arguments: {} },
+		})
+		const cleanText = await clean.text()
+		assert(
+			cleanText.includes('"clean": 1') || cleanText.includes('\\"clean\\": 1'),
+			`expected a clean mapping: ${cleanText.slice(0, 300)}`,
+		)
+
+		// The app walks away.
+		await fs.writeFile(appFile, "export const CheckoutView = () => <div>edited directly in the app</div>\n")
+		const drifted = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 93,
+			method: "tools/call",
+			params: { name: "get_drift", arguments: {} },
+		})
+		const driftedText = await drifted.text()
+		assert(
+			(driftedText.includes('"appDrift": 1') || driftedText.includes('\\"appDrift\\": 1')) &&
+				driftedText.includes("checkout-view"),
+			`app drift was not detected by hash: ${driftedText.slice(0, 400)}`,
+		)
+
+		// The design moves too — now it is a conflict, and nothing merges it.
+		const pagePath = path.join(fixture, ".caret", "pages", "home", "index.tsx")
+		const page = await fs.readFile(pagePath, "utf-8")
+		await fs.writeFile(pagePath, `${page}\n{/* moved after mapping */}\n`)
+		const conflicted = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 94,
+			method: "tools/call",
+			params: { name: "get_drift", arguments: {} },
+		})
+		const conflictedText = await conflicted.text()
+		assert(
+			conflictedText.includes('"conflicts": 1') || conflictedText.includes('\\"conflicts\\": 1'),
+			`both-sides movement did not classify as conflict: ${conflictedText.slice(0, 400)}`,
+		)
+
+		// Restore BOTH sides — scenarios between here and by (ff/gg sync flows)
+		// must not inherit a conflicted mapping, or their forward sync correctly
+		// holds home back and their plan never starts. by re-creates its own
+		// drift when it runs.
+		await fs.writeFile(pagePath, page)
+		await fs.writeFile(appFile, "export const CheckoutView = () => <div>translated v1</div>\n")
+		const restored = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 98,
+			method: "tools/call",
+			params: { name: "get_drift", arguments: {} },
+		})
+		const restoredText = await restored.text()
+		assert(
+			restoredText.includes('"clean": 1') || restoredText.includes('\\"clean\\": 1'),
+			`the mapping did not read clean after restore: ${restoredText.slice(0, 300)}`,
+		)
+		const notDrifted = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 95,
+			method: "tools/call",
+			params: { name: "propose_design_update", arguments: { designPath: ".caret/tokens/foundation.json" } },
+		})
+		const notDriftedText = await notDrifted.text()
+		assert(notDriftedText.includes("not a page"), `a non-page did not refuse with its cause: ${notDriftedText.slice(0, 300)}`)
+
+		return `mapping recorded; clean → app-drift (file named) → conflict → restored to clean; non-page proposal refused with its cause`
+	})
+
 	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {
 		// Correction capture end to end: two elements bound to brand-600, each
 		// hand-recoloured to the same value through the real Edit color action.
@@ -2861,6 +2962,7 @@ export default function ListDemo() {
 		// a page written moments ago is not routable until Vite reloads the
 		// router module, and a check against the "page not found" card honestly
 		// finds nothing — the checker is eventually consistent with the render.
+		let lastFound: string[] = []
 		const checksFound = await waitFor(
 			"the planted tells to be found once the page renders",
 			async () => {
@@ -2876,6 +2978,7 @@ export default function ListDemo() {
 				const parsed = JSON.parse(JSON.parse(`"${payloadMatch[1]}"`))
 				if (!parsed.ok) return null
 				const found = new Set<string>((parsed.findings as Array<{ check: string }>).map((f) => f.check))
+				lastFound = [...found]
 				const planted = ["placeholder-box", "missing-alt", "image-upscaled", "identical-cards"]
 				return planted.every((check) => found.has(check)) ? found : null
 			},
@@ -2883,7 +2986,9 @@ export default function ListDemo() {
 			// when this scenario runs in a subset, and the checker honestly reports
 			// render-unavailable until it is up.
 			300_000,
-		)
+		).catch((err) => {
+			throw new Error(`${err} — last findings: ${JSON.stringify(lastFound)}`)
+		})
 
 		// The results landed where the canvas reads them.
 		const stored = JSON.parse(await fs.readFile(path.join(fixture, ".caret", ".checks-results.json"), "utf-8"))
@@ -3577,7 +3682,10 @@ export default function CatalogDemo() {
 		// surface fills in as takes land, and a real click on "Use this one"
 		// replaces the page and cleans the takes up.
 		const caretDir = path.join(fixture, ".caret")
-		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+		// About, not home: the chat/sync scenarios have a model rewrite home, and
+		// a runtime-broken rewrite leaves the focused view honestly showing its
+		// error card — no FABs, nothing to drive. About is never model-touched.
+		const pagePath = path.join(caretDir, "pages", "about", "index.tsx")
 		const scratchPath = path.join(caretDir, ".variants.json")
 
 		// The canvas must be the visible surface — other scenarios leave the
@@ -3607,22 +3715,34 @@ export default function CatalogDemo() {
 			const wc = canvas.webContents
 
 			try {
-				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
-				if (!pageFrame) {
+				// Always open About fresh — never inherit another scenario's focused
+				// page (it may be a model-broken home showing the error card).
+				await wc.executeJavaScript(
+					`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
+				)
+				const findAbout = `(() => {
+					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
+					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'About') ?? null
+				})()`
+				let pageFrame: any = null
+				{
 					let deadline0 = Date.now() + 30000
 					let ready = false
 					while (Date.now() < deadline0 && !ready) {
-						ready = await wc.executeJavaScript(`!!document.querySelector('.caret-canvas-frame')`).catch(() => false)
+						ready = await wc.executeJavaScript(`!!${findAbout}`).catch(() => false)
 						if (!ready) await new Promise((r) => setTimeout(r, 250))
 					}
-					if (!ready) return { error: "no page card ever appeared on the canvas" }
-					await wc.executeJavaScript(`(document.querySelector('.caret-canvas-frame')).click(), true`)
+					if (!ready) return { error: "the About card never appeared on the canvas" }
+					await wc.executeJavaScript(`(${findAbout}).click(), true`)
 					deadline0 = Date.now() + 30000
 					while (Date.now() < deadline0 && !pageFrame) {
-						pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+						pageFrame =
+							wc.mainFrame.frames.find(
+								(f: any) => f.url.includes("mode=focused") && f.url.includes("page=about"),
+							) ?? null
 						if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
 					}
-					if (!pageFrame) return { error: "the focused page never became a frame of the canvas" }
+					if (!pageFrame) return { error: "the focused About page never became a frame of the canvas" }
 				}
 
 				let deadline = Date.now() + 30000
@@ -3809,6 +3929,117 @@ export default function CatalogDemo() {
 
 		await shot(chrome, "24-variant-pick")
 		return `3 takes ran (${ready.length} ready), ${chosen.id} chosen by click, page replaced, takes cleaned up`
+	})
+
+	await inference("by. app drift becomes a reviewed proposal, and accepting it makes the design true again", async () => {
+		// Phase 9 end to end: bx left home mapped to src/checkout-view.tsx and
+		// CLEAN. Drift it now — self-contained, nothing between bx and here
+		// inherits it. Then propose_design_update runs a real model turn that
+		// writes the App's-version take; the compare surface offers it against
+		// the current design; a real click accepts it; the mapping refreshes and
+		// get_drift reads clean — the design tells the truth again.
+		assert(discovery, "no MCP discovery record")
+		await openMcpSession(discovery.url, discovery.token)
+		await fs.writeFile(
+			path.join(fixture, "src", "checkout-view.tsx"),
+			"export const CheckoutView = () => <div>edited directly in the app, after translation</div>\n",
+		)
+
+		const start = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 96,
+			method: "tools/call",
+			params: { name: "propose_design_update", arguments: { designPath: ".caret/pages/home/index.tsx" } },
+		})
+		const startText = await start.text()
+		assert(
+			startText.includes("proposalId") && !startText.includes('"isError":true'),
+			`the proposal did not start: ${startText.slice(0, 400)}`,
+		)
+
+		// The take streams in behind the compare surface; wait for it to be ready.
+		// A model that produces NOTHING in six minutes is the model's failure,
+		// not Caret's — same five-minute rule gg and ii draw (observed on the
+		// free tier: an assistant turn with zero parts, no tools, no text).
+		const scratchPath = path.join(fixture, ".caret", ".variants.json")
+		try {
+			await waitFor(
+				"the App's-version take to finish its model turn",
+				async () => {
+					const raw = await fs.readFile(scratchPath, "utf-8").catch(() => null)
+					if (!raw) return null
+					const set = JSON.parse(raw)
+					if (set.kind !== "drift-proposal") return null
+					const take = set.variants?.[0]
+					if (take?.status === "failed") throw new Error(`the proposal turn failed: ${take.error}`)
+					return take?.status === "ready" ? true : null
+				},
+				360_000,
+			)
+		} catch (err) {
+			if (String(err).includes("Timed out")) {
+				throw new Inconclusive("the model did not produce the proposal within six minutes")
+			}
+			throw err
+		}
+
+		// The compare overlay is on the canvas; accept the App's version by click.
+		const picked = await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return false
+			const wc = canvas.webContents
+			const deadline = Date.now() + 30000
+			while (Date.now() < deadline) {
+				const clicked = await wc
+					.executeJavaScript(
+						`(() => {
+							const b = document.querySelector('[data-testid="variant-use-home--v1"]')
+							if (!b) return false
+							b.click()
+							return true
+						})()`,
+					)
+					.catch(() => false)
+				if (clicked) return true
+				await new Promise((r) => setTimeout(r, 300))
+			}
+			return false
+		})
+		assert(picked, "the App's-version take never became acceptable on the compare surface")
+
+		// The deterministic contract of an accept: the take applies and cleans up,
+		// and the mapping refreshes. What the model WROTE into the proposal is the
+		// model's business — a lazy take may even match the page byte-for-byte —
+		// so page content is not asserted.
+		await waitFor(
+			"the pick to apply and the takes to clean up",
+			async () => {
+				const scratchGone = await fs
+					.access(scratchPath)
+					.then(() => false)
+					.catch(() => true)
+				return scratchGone ? true : null
+			},
+			30_000,
+		)
+
+		// The acceptance IS the reverse sync: the mapping refreshed, drift clean.
+		const after = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 97,
+			method: "tools/call",
+			params: { name: "get_drift", arguments: {} },
+		})
+		const afterText = await after.text()
+		assert(
+			(afterText.includes('"appDrift": 0') || afterText.includes('\\"appDrift\\": 0')) &&
+				(afterText.includes('"conflicts": 0') || afterText.includes('\\"conflicts\\": 0')),
+			`the accepted proposal did not refresh the mapping: ${afterText.slice(0, 400)}`,
+		)
+
+		return `app drift → model-written proposal → accepted by click → mapping refreshed, drift clean`
 	})
 
 	// ── the authored and 3D lanes, for real ────────────────────────────────────

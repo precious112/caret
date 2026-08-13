@@ -126,6 +126,14 @@ export class WatchAndHeal {
 			ignored: IGNORED,
 			ignoreInitial: true,
 			awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+			// Polling, deliberately: FSEvents drops events for files (and even the
+			// addDir) when a whole new directory appears at once — an agent's
+			// mkdir+write of pages/<new>/ was missed in two certification runs,
+			// so the page was never healed and the catalog never supplied. The
+			// .caret tree is small and node_modules/lib are ignored, so a 1s poll
+			// is cheap; correctness beats elegance here.
+			usePolling: true,
+			interval: 1000,
 		})
 
 		this.watcher.on("add", (file) => this.schedule(file, "create"))

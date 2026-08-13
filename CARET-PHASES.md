@@ -918,17 +918,41 @@ path fires, consistent with an external kill; quit-path instrumentation is now i
 
 ---
 
-## [ ] Phase 9: Stop the design layer lying (reverse sync)
+## [x] Phase 9: Stop the design layer lying (reverse sync) — CERTIFIED 55/55 (free surface) 2026-08-13
 
-- [ ] Design↔app mapping manifest, **recorded at translation time, never inferred**
-- [ ] Bidirectional drift detection from content hashes
-- [ ] App→design sync path, producing a reviewable proposal and never a silent write
-- [ ] Incremental sync driven by the manifest instead of full re-reconciliation
-- [ ] Conflict presentation — surface, never auto-merge
-- [ ] Framework-agnostic checkpoint: verified against Vue and Svelte, not only React
+- [x] Mapping manifest (`.caret/sync-manifest.json`, versioned; `sync/mapping-manifest.ts`)
+      recorded at translation time via `report_sync_mapping` — instructed in both sync prompts
+      (external agents and the internal apply turn); content hashes of both sides captured at
+      record time; upsert wholesale per design file; corrupt manifest degrades to empty
+- [x] Bidirectional drift detection (`sync/drift.ts`): design moved → forward, app moved
+      (edit or deletion) → app-drift, both → conflict; `get_drift` over MCP; the HEAD watcher
+      checks drift BY HASH on app-only commits — the previously invisible case now raises
+      "the design no longer tells the truth" with a review action
+- [x] App→design proposals (`sync/reverse-sync.ts`): the agent translates the app's truth
+      back into an "App's version" take reviewed on the variant compare surface; accepting
+      applies through the normal variant path and REFRESHES the mapping; discarding leaves
+      the drift standing; `propose_design_update` over MCP; typed refusals for non-cases
+- [x] Incremental worklist (`partitionWorklist`): verified-already-translated files drop out
+      (the forgot-`complete_sync` case re-reports nothing), conflicts held back, app-drift
+      routed to reverse sync; unmapped files pass through on the git signal
+- [x] Conflict presentation: surfaced on the sync result, held out of the forward worklist,
+      and reviewed on the same compare surface — "Original" is the design's version, "App's
+      version" is the app's; an explicit human choice, never a merge
+- [x] Framework checkpoint: record → drift → partition pinned over a Vue SFC and a SvelteKit
+      `+page.svelte`; the forward prompt audited framework-neutral for the app side
 
-**Deliverable:** prerequisite for both collaboration and CI drift diffs, and the fix for
-declared-vs-built gaps being filled in confidently and wrongly.
+**Landed state:** unit 433; design-shell 26/26; verify:app CERTIFIED (free surface) 55/55
+(new scenarios bx: the deterministic mapping/drift loop over MCP; by: drift → model-written
+proposal → accepted by click → mapping refreshed clean). The healer's watcher moved to
+chokidar polling (1s over the small ignored-pruned .caret tree): FSEvents drops events —
+including addDir — when a whole subtree appears at once, which twice cost a certification
+run its catalog-supply scenario. Suite lessons pinned: never assert model OUTPUT content
+(only Caret's deterministic contract), and scenarios must be self-contained (bx's leftover
+drift correctly held home out of ff/gg's forward sync — the product working as designed
+against a leaky test).
+
+**Deliverable delivered:** the design layer can now catch itself lying — the prerequisite
+for collaboration and CI drift diffs.
 
 ---
 
