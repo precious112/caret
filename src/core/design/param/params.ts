@@ -24,7 +24,7 @@ import type { SpliceEdit } from "./splice"
 // The descriptor
 // ---------------------------------------------------------------------------
 
-export type ParamType = "color" | "length" | "number" | "enum" | "string"
+export type ParamType = "color" | "length" | "number" | "enum" | "string" | "keyword"
 
 export type ParamOrigin = "literal" | "token" | "inherited" | "computed" | "data"
 
@@ -194,7 +194,16 @@ export function propertyOf(base: string): PropertyMatch | null {
 		["gap-", "gap"],
 		["w-", "width"],
 		["h-", "height"],
+		["basis-", "flex-basis"],
+		["shrink-", "flex-shrink"],
+		["grow-", "flex-grow"],
 	]
+	if (base.startsWith("flex-")) {
+		const suffix = base.slice("flex-".length)
+		if (["1", "auto", "initial", "none"].includes(suffix) || arbitrary(suffix)) {
+			return { property: "flex", type: "keyword", suffix }
+		}
+	}
 	for (const [prefix, property] of spacing) {
 		if (!base.startsWith(prefix)) continue
 		const suffix = base.slice(prefix.length)
@@ -439,6 +448,10 @@ const PROPERTY_PREFIX: Record<string, string> = {
 	"margin-right": "mr-",
 	"margin-bottom": "mb-",
 	"margin-left": "ml-",
+	flex: "flex-",
+	"flex-basis": "basis-",
+	"flex-shrink": "shrink-",
+	"flex-grow": "grow-",
 	gap: "gap-",
 	width: "w-",
 	height: "h-",

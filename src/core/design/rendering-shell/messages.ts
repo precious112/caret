@@ -10,6 +10,18 @@ export interface ElementSelectedPayload {
 	computed?: Record<string, string>
 }
 
+/** A resize drag's single source commit, on release. */
+export interface ResizeCommitPayload {
+	filePath: string
+	caretId: string
+	axis: "width" | "height"
+	/** The released size, CSS pixels, rounded. */
+	px: number
+	/** The layout context the resolver classified AT POINTERDOWN. */
+	kind: string
+	viewportWidth: number
+}
+
 /** The panel asking for an element's resolved Params. */
 export interface ParamResolvePayload {
 	filePath: string
@@ -189,6 +201,8 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
 	"param-resolve": (p) => isStr(p.filePath) && isStr(p.caretId) && isNum(p.viewportWidth),
+	"resize-commit": (p) =>
+		isStr(p.filePath) && isStr(p.caretId) && (p.axis === "width" || p.axis === "height") && isNum(p.px) && isStr(p.kind),
 	"param-edit": (p) =>
 		isStr(p.filePath) && isStr(p.caretId) && isStr(p.property) && isNum(p.viewportWidth) && (isStr(p.token) || isStr(p.raw)),
 	"variant-pick": (p) => typeof p.variantId === "string",
@@ -220,6 +234,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
 	| { source: "caret-vite"; type: "param-edit"; payload: ParamEditPayload }
 	| { source: "caret-vite"; type: "param-resolve"; payload: ParamResolvePayload }
+	| { source: "caret-vite"; type: "resize-commit"; payload: ResizeCommitPayload }
 	| { source: "caret-vite"; type: "variant-pick"; payload: VariantPickPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }

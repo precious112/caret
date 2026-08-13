@@ -227,6 +227,11 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 			await handleParamResolve(message.payload, workspacePath)
 			break
 
+		case "resize-commit":
+			message.payload.filePath = await resolveCaretPath(message.payload.filePath, workspacePath)
+			await handleResizeCommit(message.payload, workspacePath)
+			break
+
 		case "variant-pick":
 			await handleVariantPick(message.payload, workspacePath)
 			break
@@ -473,6 +478,79 @@ async function handleParamResolve(payload: ParamResolvePayload, workspacePath: s
 			type: "param-resolve-result",
 			payload: { caretId: payload.caretId, params: [] },
 		})
+	}
+}
+
+/**
+ * A resize drag's commit — ONE write on release, encoded for the layout
+ * context the resolver classified at pointerdown (Phase 10.2):
+ *
+ *   flex-main:   basis-[Npx] shrink-0 — writing w-* does nothing against
+ *                flex-basis:0, and this is byte-identical to the clamp preview
+ *   grid-track:  REFUSED with the constrainer named — a written width verifies
+ *                clean on the node and visibly breaks the neighbours (measured)
+ *   elsewhere:   w-[Npx] / h-[Npx] through the ordinary param path
+ */
+async function handleResizeCommit(payload: import("./messages").ResizeCommitPayload, workspacePath: string): Promise<void> {
+	try {
+		const tokens = await readFoundationTokens(workspacePath)
+		hostFor(workspacePath).noteSelfWrite(payload.filePath)
+		await captureUndoStep(workspacePath, `resize ${payload.axis} of ${payload.caretId} to ${payload.px}px`)
+
+		if (payload.kind === "grid-track") {
+			sendEditResult(workspacePath, {
+				success: false,
+				error: "This width is controlled by the parent's grid — writing it on the item would overlap its siblings. Edit the parent's columns instead (select it and change grid-cols / gap).",
+			})
+			return
+		}
+
+		const raw = `${Math.round(payload.px)}px`
+		if (payload.kind === "flex-main" && payload.axis === "width") {
+			const basis = await spliceParamEdit(
+				payload.filePath,
+				payload.caretId,
+				"flex-basis",
+				{ raw },
+				payload.viewportWidth,
+				tokens,
+			)
+			if (!basis.ok) {
+				sendEditResult(workspacePath, { success: false, error: basis.refused ?? "the resize was refused" })
+				return
+			}
+			await spliceParamEdit(payload.filePath, payload.caretId, "flex-shrink", { token: "0" }, payload.viewportWidth, tokens)
+		} else {
+			const result = await spliceParamEdit(
+				payload.filePath,
+				payload.caretId,
+				payload.axis,
+				{ raw },
+				payload.viewportWidth,
+				tokens,
+			)
+			if (!result.ok) {
+				sendEditResult(workspacePath, { success: false, error: result.refused ?? "the resize was refused" })
+				return
+			}
+		}
+
+		void recordEdit(workspacePath, {
+			actor: "inline",
+			action: "write",
+			file: payload.filePath,
+			param: `${payload.caretId}/style/${payload.axis}`,
+			newValue: raw,
+			note: `resize (${payload.kind})`,
+		})
+		sendEditResult(workspacePath, {
+			success: true,
+			editTarget: { filePath: payload.filePath, lineNumber: 0, caretId: payload.caretId },
+		})
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err)
+		Logger.error(`[design] resize commit failed: ${errorMsg}`)
+		sendEditResult(workspacePath, { success: false, error: errorMsg })
 	}
 }
 

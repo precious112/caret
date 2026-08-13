@@ -154,7 +154,7 @@ export default function Catalog() {
 const LAYOUTS_PAGE = `export default function Layouts() {
   return (
     <div className="min-h-screen bg-white p-8">
-      <div data-testid="lay-declared" className="w-64 bg-zinc-100">declared</div>
+      <div data-testid="lay-declared" data-caret-id="lay-declared" className="w-64 bg-zinc-100">declared</div>
       <div className="max-w-[520px]">
         <div>
           <div>
@@ -163,7 +163,7 @@ const LAYOUTS_PAGE = `export default function Layouts() {
         </div>
       </div>
       <div className="flex flex-row gap-3 w-[520px]">
-        <div data-testid="lay-flex" className="flex-1 bg-zinc-100">flex child</div>
+        <div data-testid="lay-flex" data-caret-id="lay-flex" className="flex-1 bg-zinc-100">flex child</div>
         <div className="flex-1">sibling</div>
       </div>
       <div className="grid grid-cols-3 gap-3 w-[520px]">
@@ -1630,7 +1630,11 @@ async function main() {
 			// No function-valued consts in an evaluate body — esbuild's keepNames
 			// wraps them in a __name helper that does not exist in the page.
 			const results = await page.evaluate(async () => {
-				const mod = await import("/lib/size-resolver.ts")
+				// Non-literal specifier: this import resolves in the BROWSER against
+				// the Vite root; tsc must not try to resolve it from disk.
+				const resolverUrl = "/lib/size-resolver.ts"
+				// biome-ignore lint/suspicious/noExplicitAny: browser-module boundary
+				const mod: any = await import(/* @vite-ignore */ resolverUrl)
 				const out: Record<string, { kind: string; chain: number; preview: string }> = {}
 				for (const probe of [
 					["declaredW", "lay-declared", "width"],
@@ -1682,6 +1686,132 @@ async function main() {
 			}
 
 			return `six contexts classified correctly on both axes; fill chain walked ${results.chainW.chain} participants; flex/grid preview through the clamp`
+		} finally {
+			await page.close()
+		}
+	})
+
+	await scenario("aa. a drag previews through the context's channel and commits once; modes speak intent", async () => {
+		// Phase 10.2/10.3: selecting shows handles; dragging a FLEX child
+		// previews through the min/max clamp (measured: el.style.width does
+		// nothing there) so the box tracks the pointer mid-drag; release sends
+		// ONE resize-commit carrying the pointerdown-resolved context; and the
+		// mode chips write intent (Fill on a flex child = flex-1, not w-full).
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=layouts&mode=focused`)
+			await page.waitForSelector('[data-testid="lay-flex"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2000)
+			await page.evaluate(() => {
+				;(window as any).__MSGS__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "resize-commit" || e.data?.type === "param-edit") (window as any).__MSGS__.push(e.data)
+				})
+			})
+
+			// Select the flex child; the panel and the handles appear.
+			const flexPoint = await page.evaluate(() => {
+				const el = document.querySelector('[data-testid="lay-flex"]')!
+				const r = el.getBoundingClientRect()
+				return { x: r.x + r.width / 2, y: r.y + r.height / 2, width: r.width }
+			})
+			await page.mouse.click(flexPoint.x, flexPoint.y)
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector("#caret-resize-handles")),
+				10000,
+				"the resize handles to appear on selection",
+			)
+
+			// Drag the right-edge handle +60px.
+			const handle = await page.evaluate(() => {
+				const host = document.querySelector("#caret-resize-handles")!
+				const r = (host.children[0] as HTMLElement).getBoundingClientRect()
+				return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+			})
+			await page.mouse.move(handle.x, handle.y)
+			await page.mouse.down()
+			await page.mouse.move(handle.x + 60, handle.y, { steps: 6 })
+			await page.waitForTimeout(150)
+
+			// Mid-drag: the box must TRACK the pointer — this is the clamp channel
+			// working where el.style.width would have done nothing.
+			const midWidth = await page.evaluate(
+				() => document.querySelector('[data-testid="lay-flex"]')!.getBoundingClientRect().width,
+			)
+			if (Math.abs(midWidth - (flexPoint.width + 60)) > 3) {
+				throw new Error(
+					`mid-drag width ${midWidth}px does not track the pointer (started ${flexPoint.width}px, dragged +60) — the preview channel is dead`,
+				)
+			}
+			await page.mouse.up()
+
+			const commit = await waitFor2(
+				async () =>
+					await page.evaluate(() => (window as any).__MSGS__.find((m: any) => m.type === "resize-commit") ?? null),
+				8000,
+				"the single resize-commit on release",
+			)
+			const c = commit.payload
+			if (
+				c.caretId !== "lay-flex" ||
+				c.axis !== "width" ||
+				c.kind !== "flex-main" ||
+				Math.abs(c.px - (flexPoint.width + 60)) > 3
+			) {
+				throw new Error(`the commit does not carry the pointerdown context: ${JSON.stringify(c)}`)
+			}
+			// And the preview cleaned up: no inline clamp left behind.
+			const inline = await page.evaluate(
+				() => (document.querySelector('[data-testid="lay-flex"]') as HTMLElement).style.cssText,
+			)
+			if (/min-width|max-width/.test(inline)) throw new Error(`the preview clamp survived the release: "${inline}"`)
+
+			// Modes render with the panel rows, and rows render on the host's
+			// reply — which this harness plays (there is no Electron host here).
+			await page.evaluate(() => {
+				window.postMessage(
+					{
+						source: "caret-host",
+						type: "param-resolve-result",
+						payload: {
+							caretId: "lay-flex",
+							params: [
+								{
+									property: "width",
+									type: "length",
+									value: null,
+									origin: "computed",
+									writable: true,
+									variant: null,
+									utility: null,
+								},
+							],
+						},
+					},
+					"*",
+				)
+			})
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector('[data-size-mode="width:fill"]')),
+				8000,
+				"the sizing mode chips to render",
+			)
+
+			// Modes: Fill on a flex child writes INTENT — flex-1, not w-full.
+			await page.click('[data-size-mode="width:fill"]')
+			const fill = await waitFor2(
+				async () =>
+					await page.evaluate(
+						() =>
+							(window as any).__MSGS__.find((m: any) => m.type === "param-edit" && m.payload.property === "flex") ??
+							null,
+					),
+				8000,
+				"the Fill mode's param-edit",
+			)
+			if (fill.payload.token !== "1") throw new Error(`Fill on a flex child wrote ${JSON.stringify(fill.payload)}`)
+
+			return `clamp preview tracked the pointer (+60px), one commit carried kind=flex-main, Fill wrote flex-1`
 		} finally {
 			await page.close()
 		}

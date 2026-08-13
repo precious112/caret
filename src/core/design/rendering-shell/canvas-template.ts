@@ -2912,6 +2912,7 @@ function generateSizeResolver(): string {
 function generateParamPanel(): string {
 	return dedent`
 		import { bridge } from "./bridge"
+		import { resolveSizeContext, type SizeContext } from "./size-resolver"
 
 		/**
 		 * The property panel — the Param model's face. Opens on element selection
@@ -2974,8 +2975,129 @@ function generateParamPanel(): string {
 
 		export function hideParamPanel() {
 		  panel?.remove()
+		  removeResizeHandles()
 		  clearSelectionExtras()
 		  currentTarget = null
+		}
+
+		/* ── resize handles — Phase 10.2 ─────────────────────────────────────────
+		 * The resolver runs AT POINTERDOWN (the preview channel depends on the
+		 * layout context, so it must be known before the first frame), the drag
+		 * previews through that channel (flex/grid via a min/max clamp —
+		 * el.style.width does nothing on a flex-basis:0 child), and release
+		 * clears the preview and commits ONCE through the source path. The
+		 * preview never shows a state the commit cannot reproduce. */
+
+		let handleHost: HTMLDivElement | null = null
+
+		function removeResizeHandles() {
+		  handleHost?.remove()
+		  handleHost = null
+		}
+
+		function positionResizeHandles() {
+		  if (!handleHost || !currentTarget) return
+		  const rect = currentTarget.element.getBoundingClientRect()
+		  const right = handleHost.children[0] as HTMLElement
+		  const bottom = handleHost.children[1] as HTMLElement
+		  right.style.cssText =
+		    "position:fixed;z-index:99997;width:10px;height:28px;border-radius:5px;background:#7c6cf3;cursor:ew-resize;pointer-events:auto;" +
+		    \`left:\${rect.right - 5}px;top:\${rect.top + rect.height / 2 - 14}px;\`
+		  bottom.style.cssText =
+		    "position:fixed;z-index:99997;width:28px;height:10px;border-radius:5px;background:#7c6cf3;cursor:ns-resize;pointer-events:auto;" +
+		    \`left:\${rect.left + rect.width / 2 - 14}px;top:\${rect.bottom - 5}px;\`
+		}
+
+		function attachResizeHandles() {
+		  removeResizeHandles()
+		  if (!currentTarget) return
+		  handleHost = document.createElement("div")
+		  handleHost.id = "caret-resize-handles"
+		  handleHost.setAttribute("data-react-grab-ignore-events", "")
+		  const right = document.createElement("div")
+		  right.dataset.axis = "width"
+		  const bottom = document.createElement("div")
+		  bottom.dataset.axis = "height"
+		  handleHost.append(right, bottom)
+		  document.body.appendChild(handleHost)
+		  positionResizeHandles()
+
+		  for (const handle of [right, bottom]) {
+		    handle.addEventListener("pointerdown", (e) => startResizeDrag(e, handle.dataset.axis as "width" | "height"))
+		  }
+		}
+
+		function startResizeDrag(e: PointerEvent, axis: "width" | "height") {
+		  if (!currentTarget) return
+		  e.preventDefault()
+		  e.stopPropagation()
+		  const el = currentTarget.element as HTMLElement
+		  const target = currentTarget
+
+		  // The resolver runs NOW — the preview channel must be known before the
+		  // first frame of the drag.
+		  const context: SizeContext = resolveSizeContext(el, axis)
+		  const startRect = el.getBoundingClientRect()
+		  const startPointer = axis === "width" ? e.clientX : e.clientY
+		  let lastPx = axis === "width" ? startRect.width : startRect.height
+
+		  const preview = (px: number) => {
+		    if (context.previewChannel === "minmax-clamp") {
+		      if (axis === "width") {
+		        el.style.minWidth = el.style.maxWidth = \`\${px}px\`
+		      } else {
+		        el.style.minHeight = el.style.maxHeight = \`\${px}px\`
+		      }
+		    } else if (axis === "width") {
+		      el.style.width = \`\${px}px\`
+		    } else {
+		      el.style.height = \`\${px}px\`
+		    }
+		  }
+		  const clearPreview = () => {
+		    el.style.removeProperty("width")
+		    el.style.removeProperty("height")
+		    el.style.removeProperty("min-width")
+		    el.style.removeProperty("max-width")
+		    el.style.removeProperty("min-height")
+		    el.style.removeProperty("max-height")
+		  }
+
+		  const onMove = (ev: PointerEvent) => {
+		    const delta = (axis === "width" ? ev.clientX : ev.clientY) - startPointer
+		    lastPx = Math.max(8, Math.round((axis === "width" ? startRect.width : startRect.height) + delta))
+		    preview(lastPx)
+		    positionResizeHandles()
+		  }
+		  const onUp = () => {
+		    window.removeEventListener("pointermove", onMove, true)
+		    window.removeEventListener("pointerup", onUp, true)
+		    window.removeEventListener("keydown", onKey, true)
+		    clearPreview()
+		    bridge.send({
+		      type: "resize-commit",
+		      payload: {
+		        filePath: target.filePath,
+		        caretId: target.caretId,
+		        axis,
+		        px: lastPx,
+		        kind: context.kind,
+		        viewportWidth: viewportWidth(),
+		      },
+		    })
+		  }
+		  const onKey = (ev: KeyboardEvent) => {
+		    if (ev.key !== "Escape") return
+		    ev.stopPropagation()
+		    window.removeEventListener("pointermove", onMove, true)
+		    window.removeEventListener("pointerup", onUp, true)
+		    window.removeEventListener("keydown", onKey, true)
+		    clearPreview()
+		    positionResizeHandles()
+		  }
+		  window.addEventListener("pointermove", onMove, true)
+		  window.addEventListener("pointerup", onUp, true)
+		  window.addEventListener("keydown", onKey, true)
 		}
 
 		/** Opens (or refreshes) the panel for a selected element. */
@@ -3000,6 +3122,7 @@ function generateParamPanel(): string {
 		  outline(element, true)
 		  for (const extra of alsoSelected) outline(extra.element, true)
 		  ensurePanel().dataset.selectionCount = String(alsoSelected.length + 1)
+		  attachResizeHandles()
 		  const host = ensurePanel()
 		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
 		  bridge.send({ type: "param-resolve", payload: { filePath, caretId, viewportWidth: viewportWidth() } })
@@ -3065,14 +3188,60 @@ function generateParamPanel(): string {
 		      ? \`<div style="color:#8b93a7;font-size:11px;margin:-6px 0 8px">row \${twins.indexOf(currentTarget.element) + 1} of \${twins.length} · look shared · content from item \${twins.indexOf(currentTarget.element) + 1}</div>\`
 		      : ""
 
+		  // Sizing modes — intent exposed, not inferred from a drag (Phase 10.3).
+		  // Height leads with Hug: a pixel height clips when copy grows, so fixing
+		  // it deserves more friction than fixing a width.
+		  const chip = (axis: string, mode: string, label: string) =>
+		    \`<button data-size-mode="\${axis}:\${mode}" style="all:unset;cursor:pointer;border:1px solid #3a3a4a;border-radius:6px;padding:1px 7px;font-size:11px;color:#c9cede">\${label}</button>\`
+		  const modesLine =
+		    alsoSelected.length === 0
+		      ? \`<div style="display:flex;gap:6px;align-items:center;margin:-2px 0 10px;color:#8b93a7;font-size:11px">
+		          <span>W</span>\${chip("width", "hug", "Hug")}\${chip("width", "fill", "Fill")}\${chip("width", "fixed", "Fixed")}
+		          <span style="margin-left:6px">H</span>\${chip("height", "hug", "Hug")}\${chip("height", "fill", "Fill")}\${chip("height", "fixed", "Fixed")}
+		        </div>\`
+		      : ""
+
 		  host.innerHTML = \`
 		    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
 		      <strong style="font-size:12px">\${esc(currentTarget.caretId)}</strong>
 		      <button data-param-close style="all:unset;cursor:pointer;color:#8b93a7;font-size:15px;line-height:1">×</button>
 		    </div>
-		    \${bulkLine}\${rowLine}\${rows}\`
+		    \${bulkLine}\${rowLine}\${modesLine}\${rows}\`
 
 		  host.querySelector("[data-param-close]")?.addEventListener("click", hideParamPanel)
+		  for (const button of host.querySelectorAll<HTMLButtonElement>("[data-size-mode]")) {
+		    button.addEventListener("click", () => {
+		      if (!currentTarget) return
+		      const [axis, mode] = (button.dataset.sizeMode ?? "").split(":") as ["width" | "height", string]
+		      const el = currentTarget.element as HTMLElement
+		      const rect = el.getBoundingClientRect()
+		      const context = resolveSizeContext(el, axis)
+		      let property = axis as string
+		      let write: { token?: string; raw?: string }
+		      if (mode === "hug") {
+		        write = { token: axis === "width" ? "fit" : "auto" }
+		      } else if (mode === "fill") {
+		        if (axis === "width" && (context.kind === "flex-main" || context.kind === "flex-cross")) {
+		          property = "flex"
+		          write = { token: "1" }
+		        } else {
+		          write = { token: "full" }
+		        }
+		      } else {
+		        write = { raw: \`\${Math.round(axis === "width" ? rect.width : rect.height)}px\` }
+		      }
+		      bridge.send({
+		        type: "param-edit",
+		        payload: {
+		          filePath: currentTarget.filePath,
+		          caretId: currentTarget.caretId,
+		          property,
+		          ...write,
+		          viewportWidth: viewportWidth(),
+		        },
+		      })
+		    })
+		  }
 		  for (const input of host.querySelectorAll<HTMLInputElement>("[data-param-input]")) {
 		    input.addEventListener("keydown", (e) => {
 		      if (e.key !== "Enter" || !currentTarget) return
