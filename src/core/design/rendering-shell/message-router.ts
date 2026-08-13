@@ -16,6 +16,7 @@ import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
 import { resolveParamsFor, spliceColorEdit, spliceParamEdit, spliceRowTextEdit, spliceTextEdit } from "../param/edit"
+import { flexWidthEncodingFor } from "../param/encoding"
 import { PANEL_PROPERTIES } from "../param/params"
 import { getIndex } from "../param/source-index"
 import { addPromotedRule } from "../promoted-rules"
@@ -507,19 +508,56 @@ async function handleResizeCommit(payload: import("./messages").ResizeCommitPayl
 
 		const raw = `${Math.round(payload.px)}px`
 		if (payload.kind === "flex-main" && payload.axis === "width") {
-			const basis = await spliceParamEdit(
-				payload.filePath,
-				payload.caretId,
-				"flex-basis",
-				{ raw },
-				payload.viewportWidth,
-				tokens,
-			)
-			if (!basis.ok) {
-				sendEditResult(workspacePath, { success: false, error: basis.refused ?? "the resize was refused" })
-				return
+			// Project convention beats the context default: a design that already
+			// writes flex-[0_0_Npx] is matched; the cold-start default is the
+			// explicit basis-[Npx] shrink-0 — the encoding worth propagating,
+			// since the first write seeds what every later write copies.
+			const pageSources: string[] = []
+			try {
+				const pagesDir = path.join(workspacePath, ".caret", "pages")
+				for (const entry of await fs.readdir(pagesDir, { withFileTypes: true })) {
+					if (!entry.isDirectory()) continue
+					const src = await fs.readFile(path.join(pagesDir, entry.name, "index.tsx"), "utf-8").catch(() => null)
+					if (src) pageSources.push(src)
+				}
+			} catch {
+				// No pages dir: cold start, the default applies.
 			}
-			await spliceParamEdit(payload.filePath, payload.caretId, "flex-shrink", { token: "0" }, payload.viewportWidth, tokens)
+			if (flexWidthEncodingFor(pageSources) === "flex-shorthand") {
+				const flex = await spliceParamEdit(
+					payload.filePath,
+					payload.caretId,
+					"flex",
+					{ raw: `0_0_${Math.round(payload.px)}px` },
+					payload.viewportWidth,
+					tokens,
+				)
+				if (!flex.ok) {
+					sendEditResult(workspacePath, { success: false, error: flex.refused ?? "the resize was refused" })
+					return
+				}
+			} else {
+				const basis = await spliceParamEdit(
+					payload.filePath,
+					payload.caretId,
+					"flex-basis",
+					{ raw },
+					payload.viewportWidth,
+					tokens,
+				)
+				if (!basis.ok) {
+					sendEditResult(workspacePath, { success: false, error: basis.refused ?? "the resize was refused" })
+					return
+				}
+				await spliceParamEdit(
+					payload.filePath,
+					payload.caretId,
+					"flex-shrink",
+					{ token: "0" },
+					payload.viewportWidth,
+					tokens,
+				)
+			}
 		} else {
 			const result = await spliceParamEdit(
 				payload.filePath,

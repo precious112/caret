@@ -3074,6 +3074,10 @@ function generateParamPanel(): string {
 		    window.removeEventListener("pointerup", onUp, true)
 		    window.removeEventListener("keydown", onKey, true)
 		    clearPreview()
+		    // The neighbourhood snapshot, BEFORE the commit: a write can succeed,
+		    // verify clean on the node, and still break a sibling (measured on
+		    // grid tracks). Verify the neighbourhood, not the node.
+		    const snapshot = snapshotNeighbourhood(el)
 		    bridge.send({
 		      type: "resize-commit",
 		      payload: {
@@ -3085,6 +3089,7 @@ function generateParamPanel(): string {
 		        viewportWidth: viewportWidth(),
 		      },
 		    })
+		    pendingVerify = { caretId: target.caretId, axis, wantPx: lastPx, snapshot, chainNote: context.chain[context.chain.length - 1]?.note ?? "" }
 		  }
 		  const onKey = (ev: KeyboardEvent) => {
 		    if (ev.key !== "Escape") return
@@ -3296,14 +3301,107 @@ function generateParamPanel(): string {
 		  })
 		}
 
+		/* ── neighbourhood verification — Phase 10.4 ─────────────────────────────
+		 * The verifier's own failure modes are designed against (all measured):
+		 * transitions mid-animation report mismatches that don't exist, so they
+		 * are suppressed during measurement; fonts settle first; comparison uses
+		 * an epsilon (0.5px) because grid tracks are fractional and Math.round
+		 * is not integer-safe. A verifier that cries wolf is worse than none. */
+
+		interface NeighbourSnapshot {
+		  siblings: Array<{ el: Element; left: number; top: number; width: number }>
+		  parentOverflowed: boolean
+		}
+		let pendingVerify: { caretId: string; axis: "width" | "height"; wantPx: number; snapshot: NeighbourSnapshot; chainNote: string } | null = null
+
+		function snapshotNeighbourhood(el: Element): NeighbourSnapshot {
+		  const parent = el.parentElement
+		  const siblings = parent
+		    ? Array.from(parent.children)
+		        .filter((child) => child !== el)
+		        .map((child) => {
+		          const r = child.getBoundingClientRect()
+		          return { el: child, left: r.left, top: r.top, width: r.width }
+		        })
+		    : []
+		  const parentOverflowed = parent ? parent.scrollWidth > parent.clientWidth + 1 : false
+		  return { siblings, parentOverflowed }
+		}
+
+		function verifyToast(message: string, isWarn: boolean) {
+		  const el = document.createElement("div")
+		  el.textContent = message
+		  el.style.cssText =
+		    "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;padding:8px 16px;border-radius:8px;font:12.5px system-ui;color:#fff;box-shadow:0 2px 12px rgba(0,0,0,0.35);background:" +
+		    (isWarn ? "#b45309" : "#16a34a")
+		  document.body.appendChild(el)
+		  setTimeout(() => el.remove(), isWarn ? 6000 : 2200)
+		}
+
+		async function runPendingVerify() {
+		  const job = pendingVerify
+		  pendingVerify = null
+		  if (!job) return
+
+		  // Settle protocol: transitions suppressed, fonts ready, two settled
+		  // frames — then measure. Without this the verifier reports the middle
+		  // of an animation as a mismatch.
+		  const suppress = document.createElement("style")
+		  suppress.textContent = "* { transition: none !important; animation: none !important; }"
+		  document.head.appendChild(suppress)
+		  try {
+		    await document.fonts.ready
+		    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+
+		    // HMR may have remounted the page — re-find by caret-id, never by handle.
+		    const el = document.querySelector(\`[data-caret-id="\${job.caretId}"]\`)
+		    if (!el) return
+		    const rect = el.getBoundingClientRect()
+		    const got = job.axis === "width" ? rect.width : rect.height
+
+		    if (Math.abs(got - job.wantPx) > 0.5) {
+		      verifyToast(
+		        \`The \${job.axis} is \${Math.round(got)}px, not \${job.wantPx}px — it is decided by \${job.chainNote || "a parent constraint"}. Select that element to change it.\`,
+		        true,
+		      )
+		      return
+		    }
+
+		    // The node is right — now the neighbourhood.
+		    const regressions: string[] = []
+		    const parent = el.parentElement
+		    if (parent && parent.scrollWidth > parent.clientWidth + 1 && !job.snapshot.parentOverflowed) {
+		      regressions.push("the container now overflows")
+		    }
+		    for (const before of job.snapshot.siblings) {
+		      if (!before.el.isConnected) continue
+		      const now = before.el.getBoundingClientRect()
+		      const shift = Math.max(Math.abs(now.left - before.left), Math.abs(now.top - before.top))
+		      const shrink = before.width > 0 ? (before.width - now.width) / before.width : 0
+		      if (shift > 8) regressions.push(\`a sibling shifted \${Math.round(shift)}px\`)
+		      else if (shrink > 0.25) regressions.push(\`a sibling shrank \${Math.round(shrink * 100)}%\`)
+		    }
+		    if (regressions.length > 0) {
+		      verifyToast(\`Resized to \${job.wantPx}px, but \${regressions[0]} — Cmd+Z undoes it.\`, true)
+		    } else {
+		      verifyToast(\`\${job.axis === "width" ? "Width" : "Height"} \${job.wantPx}px ✓\`, false)
+		    }
+		  } finally {
+		    suppress.remove()
+		  }
+		}
+
 		bridge.on("param-resolve-result", (payload: any) => {
 		  if (!currentTarget || payload?.caretId !== currentTarget.caretId) return
 		  render((payload.params || []) as PanelParam[])
 		})
 
-		// After any successful edit, re-resolve — spans have moved.
+		// After any successful edit, re-resolve — spans have moved. A resize's
+		// verify runs after the HMR that applies it has had a beat to land.
 		bridge.on("edit-result", (payload: any) => {
 		  if (payload?.success && currentTarget) setTimeout(requestRefresh, 250)
+		  if (payload?.success && pendingVerify) setTimeout(() => void runPendingVerify(), 700)
+		  if (payload?.success === false) pendingVerify = null
 		})
 	`
 }
