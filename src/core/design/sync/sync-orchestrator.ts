@@ -11,6 +11,7 @@ import {
 import { NoBackendError } from "../agent/backend"
 import { caretDirectoryExists } from "../scaffold"
 import { bridgeFor, conversationFor } from "../services"
+import { partitionWorklist } from "./drift"
 import { runBackendSync } from "./sync-backend"
 import { clearPendingSync, registerPendingSync } from "./sync-completion"
 import { commitDesignLayer, ensureGitRepo } from "./sync-git"
@@ -36,6 +37,10 @@ export interface SyncResult {
 	changedCount?: number
 	/** Id of the sync just started, for `complete_sync`. Present when status === "started". */
 	syncId?: string
+	/** Mapped files where BOTH sides moved — excluded from the forward sync, a human chooses. */
+	conflicts?: string[]
+	/** Mapped files where only the APP moved — reverse-sync material, not forward work. */
+	appDrifted?: string[]
 }
 
 export interface SyncOptions {
@@ -117,7 +122,39 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 
 	// Net cumulative changed-files worklist (no file content) — the agent reads the
 	// current `.caret/` + app sources itself. See buildSyncPrompt.
-	const changedFiles = await getDesignLayerChangedFiles(cwd, lastSyncedCommit)
+	const gitChangedFiles = await getDesignLayerChangedFiles(cwd, lastSyncedCommit)
+
+	// The manifest makes the worklist EXACT where the bookmark is coarse:
+	// entries verified already-translated drop out (the forgot-complete_sync
+	// case re-reports nothing), conflicts are excluded from the forward sync
+	// and surfaced, and app-only drift is reported as reverse-sync material.
+	const partition = await partitionWorklist(
+		cwd,
+		gitChangedFiles.map((f) => f.path),
+	)
+	const toSyncSet = new Set(partition.toSync)
+	const changedFiles = gitChangedFiles.filter((f) => toSyncSet.has(f.path))
+
+	if (changedFiles.length === 0) {
+		const held =
+			partition.conflicts.length > 0
+				? ` ${partition.conflicts.length} file(s) are in conflict (both sides changed) and need your choice.`
+				: ""
+		const drifted =
+			partition.appDrifted.length > 0
+				? ` ${partition.appDrifted.length} app file group(s) drifted from the design — review them from the Sync panel.`
+				: ""
+		return {
+			status: "up-to-date",
+			message:
+				partition.alreadyTranslated.length > 0
+					? `Every changed design file is verified already translated (the mapping manifest checked content, not the bookmark).${held}${drifted}`
+					: `Design layer is already in sync with the app.${held}${drifted}`,
+			...(partition.conflicts.length > 0 ? { conflicts: partition.conflicts } : {}),
+			...(partition.appDrifted.length > 0 ? { appDrifted: partition.appDrifted } : {}),
+		}
+	}
+
 	const intentLog = await getDesignLayerLog(cwd, lastSyncedCommit)
 	const isFirstSync = lastSyncedCommit === null
 
@@ -155,9 +192,15 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 		status: "started",
 		syncId,
 		changedCount: changedFiles.length,
+		...(partition.conflicts.length > 0 ? { conflicts: partition.conflicts } : {}),
+		...(partition.appDrifted.length > 0 ? { appDrifted: partition.appDrifted } : {}),
 		message:
 			changedFiles.length === 0
 				? "Syncing design → app (reconciling full design state)."
-				: `Syncing design → app: ${changedFiles.length} changed design file(s).`,
+				: `Syncing design → app: ${changedFiles.length} changed design file(s)${
+						partition.conflicts.length > 0
+							? ` — ${partition.conflicts.length} conflicted file(s) held back for your choice`
+							: ""
+					}.`,
 	}
 }

@@ -62,6 +62,63 @@ async function classifyEntry(workspacePath: string, entry: MappingEntry): Promis
 	return { designPath: entry.designPath, appPaths: entry.appPaths, classification, designChanged, changedAppPaths }
 }
 
+export interface WorklistPartition {
+	/** Genuinely needing a forward sync: unmapped, or design-hash moved with the app still. */
+	toSync: string[]
+	/** Mapped and verified already translated — the bookkeeping beats the bookmark. */
+	alreadyTranslated: string[]
+	/** Both sides moved since the mapping was recorded — a human chooses, never a merge. */
+	conflicts: string[]
+	/** The app moved and the design did not — reverse-sync material, not forward work. */
+	appDrifted: string[]
+}
+
+/**
+ * Filters a git-derived changed-file list through the manifest, making the
+ * worklist EXACT instead of bookmark-coarse. The honor-system failure this
+ * closes: an external agent that syncs but forgets `complete_sync` leaves the
+ * bookmark stale, and the next sync re-reports everything it just did. The
+ * manifest knows better — an entry whose hashes are unmoved on both sides is
+ * already translated, whatever the bookmark thinks.
+ *
+ * Unmapped files pass through: a page that has never been synced has no entry,
+ * and the git list is the only signal for it.
+ */
+export async function partitionWorklist(workspacePath: string, changedPaths: string[]): Promise<WorklistPartition> {
+	const manifest = await readManifest(workspacePath)
+	const byDesignPath = new Map(manifest.entries.map((entry) => [entry.designPath, entry]))
+
+	const partition: WorklistPartition = { toSync: [], alreadyTranslated: [], conflicts: [], appDrifted: [] }
+
+	for (const changedPath of changedPaths) {
+		const entry = byDesignPath.get(changedPath)
+		if (!entry) {
+			partition.toSync.push(changedPath)
+			continue
+		}
+		const classified = await classifyEntry(workspacePath, entry)
+		switch (classified.classification) {
+			case "clean":
+				partition.alreadyTranslated.push(changedPath)
+				break
+			case "forward":
+				partition.toSync.push(changedPath)
+				break
+			case "conflict":
+				partition.conflicts.push(changedPath)
+				break
+			case "app-drift":
+				// The git list says the design moved since the bookmark, but the
+				// hash says it is back to (or still at) its recorded content — the
+				// only live movement is the app's. Not forward work.
+				partition.appDrifted.push(changedPath)
+				break
+		}
+	}
+
+	return partition
+}
+
 /** The full drift picture for every mapped design file. */
 export async function computeDrift(workspacePath: string): Promise<DriftReport> {
 	const manifest = await readManifest(workspacePath)

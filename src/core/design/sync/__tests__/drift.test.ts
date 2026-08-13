@@ -4,7 +4,7 @@ import * as path from "path"
 
 import "should"
 
-import { computeDrift } from "../drift"
+import { computeDrift, partitionWorklist } from "../drift"
 import { recordMappings } from "../mapping-manifest"
 
 describe("drift detection — hashes both ways, inference nowhere", () => {
@@ -65,5 +65,52 @@ describe("drift detection — hashes both ways, inference nowhere", () => {
 		await fs.rm(path.join(dir, designPath))
 		const report = await computeDrift(dir)
 		report.forward.should.equal(1)
+	})
+})
+
+describe("partitionWorklist — the manifest makes the worklist exact", () => {
+	let dir: string
+	const designPath = ".caret/pages/checkout/index.tsx"
+	const appPath = "src/routes/checkout.tsx"
+
+	beforeEach(async () => {
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "partition-"))
+		await fs.mkdir(path.join(dir, ".caret", "pages", "checkout"), { recursive: true })
+		await fs.mkdir(path.join(dir, "src", "routes"), { recursive: true })
+		await fs.writeFile(path.join(dir, designPath), "design v1")
+		await fs.writeFile(path.join(dir, appPath), "app v1")
+		await recordMappings(dir, [{ designPath, appPaths: [appPath] }], "abc123")
+	})
+	afterEach(async () => {
+		await fs.rm(dir, { recursive: true, force: true })
+	})
+
+	it("drops verified-already-translated files even when the bookmark says changed", async () => {
+		// The forgot-complete_sync case: git-since-bookmark reports the file, the
+		// manifest knows the translation already happened.
+		const partition = await partitionWorklist(dir, [designPath])
+		partition.alreadyTranslated.should.eql([designPath])
+		partition.toSync.length.should.equal(0)
+	})
+
+	it("keeps genuinely moved design files, and passes unmapped files through", async () => {
+		await fs.writeFile(path.join(dir, designPath), "design v2")
+		const partition = await partitionWorklist(dir, [designPath, ".caret/pages/new-page/index.tsx"])
+		partition.toSync.should.eql([designPath, ".caret/pages/new-page/index.tsx"])
+	})
+
+	it("holds conflicts out of the forward worklist", async () => {
+		await fs.writeFile(path.join(dir, designPath), "design v2")
+		await fs.writeFile(path.join(dir, appPath), "app v2")
+		const partition = await partitionWorklist(dir, [designPath])
+		partition.conflicts.should.eql([designPath])
+		partition.toSync.length.should.equal(0)
+	})
+
+	it("classifies app-only movement as reverse-sync material, not forward work", async () => {
+		await fs.writeFile(path.join(dir, appPath), "app v2")
+		const partition = await partitionWorklist(dir, [designPath])
+		partition.appDrifted.should.eql([designPath])
+		partition.toSync.length.should.equal(0)
 	})
 })
