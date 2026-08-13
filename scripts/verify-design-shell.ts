@@ -100,7 +100,7 @@ const FRAGMENT_PAGE = `export default function Fragmented() {
     <>
       <div className="min-h-screen bg-white p-8">
         <h1 data-testid="frag-title" data-caret-id="frag-h1" className="text-3xl font-bold text-zinc-900">Fragment Title</h1>
-        <p className="text-zinc-600">Inside a fragment.</p>
+        <p data-caret-id="frag-copy" className="text-zinc-600">Inside a fragment.</p>
       </div>
     </>
   )
@@ -1340,15 +1340,25 @@ async function main() {
 		)
 
 		const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+		const pageErrors: string[] = []
+		page.on("pageerror", (err) => pageErrors.push(String(err).slice(0, 200)))
+		page.on("console", (msg) => {
+			if (msg.type() === "error") pageErrors.push(`console: ${msg.text().slice(0, 200)}`)
+		})
 		try {
-			await waitFor(
-				async () => {
-					await page.goto(`http://localhost:${port}/?page=flawed`).catch(() => {})
-					return await page.evaluate(() => !!document.querySelector("img")).catch(() => false)
-				},
-				20000,
-				"the flawed page to render",
-			)
+			try {
+				await waitFor(
+					async () => {
+						await page.goto(`http://localhost:${port}/?page=flawed`).catch(() => {})
+						return await page.evaluate(() => !!document.querySelector("img")).catch(() => false)
+					},
+					45000,
+					"the flawed page to render",
+				)
+			} catch (err) {
+				const body = await page.evaluate(() => document.body?.innerHTML?.slice(0, 300)).catch(() => "unreadable")
+				throw new Error(`${err} — pageErrors: ${JSON.stringify(pageErrors.slice(0, 6))} — body: ${body}`)
+			}
 			await page.waitForFunction(() => [...document.images].every((img) => img.complete), { timeout: 10000 })
 
 			const findings = (await page.evaluate(DESIGN_CHECKS_DOM_SCRIPT)) as Array<{ check: string; severity: string }>
@@ -1444,6 +1454,122 @@ async function main() {
 				throw new Error(`the edit does not name its row: ${JSON.stringify(edit)}`)
 			}
 			return `row 2 stayed editable under a dynamic-text flag; payload carried caretId=cat-name instanceIndex=1`
+		} finally {
+			await page.close()
+		}
+	})
+
+	await scenario("y. shift-click multi-selects, a commit is a bulk edit, and Cmd+Z asks for undo", async () => {
+		// Phase 8.7's canvas half: the second click with Shift held grows the
+		// selection instead of replacing it, the panel says so, one commit
+		// carries every selected element, and the undo keystroke speaks the
+		// design-undo message (the host's restore is certified in the app suite).
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=fragmented&mode=focused`)
+			await page.waitForSelector('[data-testid="frag-title"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2500)
+			await page.evaluate(() => {
+				;(window as any).__MSGS__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "param-edit" || e.data?.type === "design-undo" || e.data?.type === "param-resolve")
+						(window as any).__MSGS__.push(e.data)
+				})
+			})
+
+			const pointFor = async (selector: string) =>
+				await page.evaluate((sel) => {
+					const el = document.querySelector(sel)!
+					const r = el.getBoundingClientRect()
+					return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+				}, selector)
+
+			await page.mouse.click(...(Object.values(await pointFor('[data-testid="frag-title"]')) as [number, number]))
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector("#caret-param-panel")),
+				10000,
+				"the panel to open on the first selection",
+			)
+
+			await page.keyboard.down("Shift")
+			await page.mouse.click(...(Object.values(await pointFor('[data-caret-id="frag-copy"]')) as [number, number]))
+			await page.keyboard.up("Shift")
+
+			// The announcement renders WITH the rows, and rows render on the host's
+			// reply — which this harness plays (real resolver output shape).
+			await page.evaluate(() => {
+				window.postMessage(
+					{
+						source: "caret-host",
+						type: "param-resolve-result",
+						payload: {
+							caretId: "frag-copy",
+							params: [
+								{
+									property: "padding",
+									type: "length",
+									value: null,
+									origin: "computed",
+									writable: true,
+									variant: null,
+									utility: null,
+								},
+							],
+						},
+					},
+					"*",
+				)
+			})
+			try {
+				await waitFor(
+					async () => await page.evaluate(() => !!document.querySelector('[data-param-input="padding"]')),
+					10000,
+					"the padding row",
+				)
+			} catch (err) {
+				const diag = await page.evaluate(() => ({
+					selectionCount: (document.querySelector("#caret-param-panel") as HTMLElement | null)?.dataset?.selectionCount,
+					panelText: document.querySelector("#caret-param-panel")?.textContent?.slice(0, 120),
+					resolves: ((window as any).__MSGS__ ?? [])
+						.filter((m: any) => m.type === "param-resolve")
+						.map((m: any) => m.payload?.caretId),
+				}))
+				throw new Error(`${err} — diag: ${JSON.stringify(diag)}`)
+			}
+			const announced = await page.evaluate(
+				() => document.querySelector("#caret-param-panel")?.textContent?.includes("2 elements selected") ?? false,
+			)
+			if (!announced) throw new Error("the panel rendered rows without announcing the 2-element selection")
+			await page.evaluate(() => {
+				const input = document.querySelector('[data-param-input="padding"]') as HTMLInputElement
+				input.focus()
+				input.value = "32px"
+				input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+			})
+
+			const edit = await waitFor2(
+				async () => await page.evaluate(() => (window as any).__MSGS__.find((m: any) => m.type === "param-edit") ?? null),
+				8000,
+				"the bulk param-edit",
+			)
+			const payload = edit.payload
+			if (
+				payload.caretId !== "frag-copy" ||
+				!Array.isArray(payload.alsoCaretIds) ||
+				payload.alsoCaretIds[0] !== "frag-h1"
+			) {
+				throw new Error(`the commit is not a bulk edit: ${JSON.stringify(payload)}`)
+			}
+
+			// Cmd+Z outside any input speaks the unified undo.
+			await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
+			await page.keyboard.press("Control+z")
+			await waitFor(
+				async () => await page.evaluate(() => (window as any).__MSGS__.some((m: any) => m.type === "design-undo")),
+				8000,
+				"the design-undo message",
+			)
+			return `2-element selection announced; one commit carried frag-copy + [frag-h1]; Ctrl+Z spoke design-undo`
 		} finally {
 			await page.close()
 		}

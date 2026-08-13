@@ -21,6 +21,7 @@ import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
+import { captureUndoStep, undoLastStep } from "../undo/design-undo"
 import {
 	applyVariantChoice,
 	createVariantSet,
@@ -228,6 +229,16 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 			await handleVariantPick(message.payload, workspacePath)
 			break
 
+		case "design-undo": {
+			const undo = await undoLastStep(workspacePath)
+			hostFor(workspacePath).sendToCanvas({
+				source: "caret-host",
+				type: "undo-result",
+				payload: { undone: undo.undone, label: undo.label ?? "", error: undo.error ?? "" },
+			})
+			break
+		}
+
 		case "edit-cancel":
 			await editLaneFor(workspacePath)?.cancel()
 			break
@@ -240,6 +251,7 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 
 async function handleAiEdit(payload: AiEditRequestPayload, workspacePath: string): Promise<void> {
 	try {
+		await captureUndoStep(workspacePath, `agent edit: ${payload.instruction.slice(0, 60)}`, "agent")
 		const prompt = await buildVisualEditPrompt(payload, workspacePath)
 		if (
 			await requestAgent(workspacePath, {
@@ -452,27 +464,47 @@ async function handleParamEdit(payload: ParamEditPayload, workspacePath: string)
 	try {
 		const tokens = await readFoundationTokens(workspacePath)
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
-		const result = await spliceParamEdit(
-			payload.filePath,
-			payload.caretId,
-			payload.property,
-			{ token: payload.token, raw: payload.raw },
-			payload.viewportWidth,
-			tokens,
+
+		// Bulk edit: one gesture, several elements, ONE undo step. Failures are
+		// per-element — a mixed selection reports what it could not reach.
+		const targets = [payload.caretId, ...(payload.alsoCaretIds ?? [])]
+		await captureUndoStep(
+			workspacePath,
+			targets.length > 1
+				? `${payload.property} on ${targets.length} elements`
+				: `${payload.property} on ${payload.caretId}`,
 		)
-		if (!result.ok) {
-			sendEditResult(workspacePath, { success: false, error: result.refused ?? "the edit was refused" })
+
+		const refused: string[] = []
+		for (const caretId of targets) {
+			const result = await spliceParamEdit(
+				payload.filePath,
+				caretId,
+				payload.property,
+				{ token: payload.token, raw: payload.raw },
+				payload.viewportWidth,
+				tokens,
+			)
+			if (result.ok) {
+				void recordEdit(workspacePath, {
+					actor: "inline",
+					action: "write",
+					file: payload.filePath,
+					param: `${caretId}/style/${payload.property}`,
+					newValue: payload.token ?? payload.raw,
+				})
+			} else {
+				refused.push(`${caretId}: ${result.refused ?? "refused"}`)
+			}
+		}
+
+		if (refused.length === targets.length) {
+			sendEditResult(workspacePath, { success: false, error: refused.join("; ") })
 			return
 		}
-		void recordEdit(workspacePath, {
-			actor: "inline",
-			action: "write",
-			file: payload.filePath,
-			param: `${payload.caretId}/style/${payload.property}`,
-			newValue: payload.token ?? payload.raw,
-		})
 		sendEditResult(workspacePath, {
 			success: true,
+			...(refused.length > 0 ? { error: `some elements were skipped — ${refused.join("; ")}` } : {}),
 			editTarget: { filePath: payload.filePath, lineNumber: 0, caretId: payload.caretId },
 		})
 	} catch (err) {
@@ -484,6 +516,7 @@ async function handleParamEdit(payload: ParamEditPayload, workspacePath: string)
 
 async function handleInlineEdit(payload: InlineEditPayload, workspacePath: string): Promise<void> {
 	try {
+		await captureUndoStep(workspacePath, `${payload.editType} edit on ${payload.caretId || `line ${payload.lineNumber}`}`)
 		if (payload.editType === "color") {
 			await handleColorEdit(payload, workspacePath)
 			return
@@ -733,6 +766,7 @@ async function applyTokenCorrection(workspacePath: string, token: string, hex: s
  */
 async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: string): Promise<void> {
 	try {
+		await captureUndoStep(workspacePath, `promote ${payload.token} to ${payload.hex}`)
 		const tokens = await readFoundationTokens(workspacePath)
 		if (!tokens || !setFoundationTokenValue(tokens, payload.token, payload.hex)) {
 			sendEditResult(workspacePath, {

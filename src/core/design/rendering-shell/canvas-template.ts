@@ -2148,6 +2148,11 @@ function generateBridge(): string {
 		    if (!success) showToast(error || "Edit failed", true)
 		  }
 
+		  if (e.data.type === "undo-result") {
+		    const { undone, label, error } = e.data.payload
+		    showToast(undone ? \`Undid: \${label}\` : (error || "Nothing to undo"), !undone)
+		  }
+
 		  const handlers = listeners.get(e.data.type)
 		  if (handlers) {
 		    handlers.forEach(fn => fn(e.data.payload))
@@ -2743,6 +2748,24 @@ function generateParamPanel(): string {
 		let currentTarget: { filePath: string; caretId: string; lineNumber: number; element: Element } | null = null
 		let lastParams: Map<string, PanelParam> = new Map()
 
+		/** Multi-select (shift-click): the rest of the selection behind currentTarget. */
+		let alsoSelected: Array<{ caretId: string; element: Element }> = []
+		let shiftHeld = false
+		window.addEventListener("keydown", (e) => { if (e.key === "Shift") shiftHeld = true })
+		window.addEventListener("keyup", (e) => { if (e.key === "Shift") shiftHeld = false })
+		window.addEventListener("blur", () => { shiftHeld = false })
+
+		function outline(el: Element, on: boolean) {
+		  ;(el as HTMLElement).style.outline = on ? "2px solid #7c6cf3" : ""
+		  ;(el as HTMLElement).style.outlineOffset = on ? "2px" : ""
+		}
+
+		function clearSelectionExtras() {
+		  for (const extra of alsoSelected) outline(extra.element, false)
+		  if (currentTarget) outline(currentTarget.element, false)
+		  alsoSelected = []
+		}
+
 		function viewportWidth(): number {
 		  return window.innerWidth
 		}
@@ -2759,6 +2782,7 @@ function generateParamPanel(): string {
 
 		export function hideParamPanel() {
 		  panel?.remove()
+		  clearSelectionExtras()
 		  currentTarget = null
 		}
 
@@ -2769,7 +2793,21 @@ function generateParamPanel(): string {
 		    hideParamPanel()
 		    return
 		  }
+		  // Shift-click grows the selection; a plain click resets it. The clicked
+		  // element always becomes the one whose Params the rows show.
+		  if (shiftHeld && currentTarget && currentTarget.filePath === filePath && currentTarget.caretId !== caretId) {
+		    const previous = currentTarget
+		    if (!alsoSelected.some((s) => s.caretId === previous.caretId)) {
+		      alsoSelected.push({ caretId: previous.caretId, element: previous.element })
+		    }
+		    alsoSelected = alsoSelected.filter((s) => s.caretId !== caretId)
+		  } else {
+		    clearSelectionExtras()
+		  }
 		  currentTarget = { filePath, caretId, lineNumber, element }
+		  outline(element, true)
+		  for (const extra of alsoSelected) outline(extra.element, true)
+		  ensurePanel().dataset.selectionCount = String(alsoSelected.length + 1)
 		  const host = ensurePanel()
 		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
 		  bridge.send({ type: "param-resolve", payload: { filePath, caretId, viewportWidth: viewportWidth() } })
@@ -2826,6 +2864,10 @@ function generateParamPanel(): string {
 		  // A .map() row: same template id rendered N times. Look edits are shared
 		  // through the template; content comes from this row's data item.
 		  const twins = Array.from(document.querySelectorAll(\`[data-caret-id="\${currentTarget.caretId}"]\`))
+		  const bulkLine =
+		    alsoSelected.length > 0
+		      ? \`<div style="color:#c4b5fd;font-size:11px;margin:-6px 0 8px">\${alsoSelected.length + 1} elements selected · edits apply to all</div>\`
+		      : ""
 		  const rowLine =
 		    twins.length > 1
 		      ? \`<div style="color:#8b93a7;font-size:11px;margin:-6px 0 8px">row \${twins.indexOf(currentTarget.element) + 1} of \${twins.length} · look shared · content from item \${twins.indexOf(currentTarget.element) + 1}</div>\`
@@ -2836,7 +2878,7 @@ function generateParamPanel(): string {
 		      <strong style="font-size:12px">\${esc(currentTarget.caretId)}</strong>
 		      <button data-param-close style="all:unset;cursor:pointer;color:#8b93a7;font-size:15px;line-height:1">×</button>
 		    </div>
-		    \${rowLine}\${rows}\`
+		    \${bulkLine}\${rowLine}\${rows}\`
 
 		  host.querySelector("[data-param-close]")?.addEventListener("click", hideParamPanel)
 		  for (const input of host.querySelectorAll<HTMLInputElement>("[data-param-input]")) {
@@ -2855,10 +2897,42 @@ function generateParamPanel(): string {
 		          property,
 		          ...(looksLikeToken ? { token: raw } : { raw }),
 		          viewportWidth: viewportWidth(),
+		          ...(alsoSelected.length > 0 ? { alsoCaretIds: alsoSelected.map((s) => s.caretId) } : {}),
 		        },
 		      })
 		    })
 		  }
+		}
+
+		export function isParamPanelOpen(): boolean {
+		  return !!currentTarget && !!panel?.isConnected
+		}
+
+		/**
+		 * Grows the selection from a raw shift-click. react-grab swallows
+		 * modifier-clicks (its overlay never reports them as selections), so the
+		 * grab plugin catches them in the capture phase and hands them here. The
+		 * clicked element joins the open panel's page — same file by construction.
+		 */
+		export function extendParamSelection(element: Element) {
+		  if (!currentTarget) return
+		  const caretId = element.getAttribute("data-caret-id") || ""
+		  if (!caretId || caretId === currentTarget.caretId) return
+		  const previous = currentTarget
+		  if (!alsoSelected.some((s) => s.caretId === previous.caretId)) {
+		    alsoSelected.push({ caretId: previous.caretId, element: previous.element })
+		  }
+		  alsoSelected = alsoSelected.filter((s) => s.caretId !== caretId)
+		  currentTarget = { filePath: previous.filePath, caretId, lineNumber: previous.lineNumber, element }
+		  outline(element, true)
+		  for (const extra of alsoSelected) outline(extra.element, true)
+		  const host = ensurePanel()
+		  host.dataset.selectionCount = String(alsoSelected.length + 1)
+		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
+		  bridge.send({
+		    type: "param-resolve",
+		    payload: { filePath: currentTarget.filePath, caretId, viewportWidth: viewportWidth() },
+		  })
 		}
 
 		bridge.on("param-resolve-result", (payload: any) => {
@@ -2878,10 +2952,40 @@ function generateCaretGrabPlugin(): string {
 		import { bridge } from "./bridge"
 		import { ackEdit, editPillEngaged } from "./edit-pill"
 		import { attachAssetPicker } from "./asset-picker"
-		import { hideParamPanel, showParamPanel } from "./param-panel"
+		import { extendParamSelection, hideParamPanel, isParamPanelOpen, showParamPanel } from "./param-panel"
+
+		// react-grab never reports a modifier-click as a selection, so shift-click
+		// multi-select is the plugin's own gesture. Two subtleties: react-grab's
+		// overlay is what the event actually hits, so the design element must be
+		// resolved by POINT through the stack, not from e.target; and react-grab
+		// may stop the click entirely, so pointerdown is handled too (extending
+		// with the same element twice is a no-op, double-firing is safe).
+		function shiftPick(e: MouseEvent) {
+		  if (!e.shiftKey || !isParamPanelOpen()) return
+		  let target: Element | null = null
+		  for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+		    if (el.closest("[data-react-grab]") || el.closest("#caret-param-panel")) continue
+		    const hit = el.closest("[data-caret-id]")
+		    if (hit) { target = hit; break }
+		  }
+		  if (!target) return
+		  e.preventDefault()
+		  e.stopPropagation()
+		  extendParamSelection(target)
+		}
+		window.addEventListener("pointerdown", shiftPick, true)
+		window.addEventListener("click", shiftPick, true)
 
 		window.addEventListener("keydown", (e) => {
 		  if (e.key === "Escape") hideParamPanel()
+		  // The design layer's unified undo. Not while typing — contentEditable
+		  // and inputs keep their native undo.
+		  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+		    const active = document.activeElement as HTMLElement | null
+		    if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return
+		    e.preventDefault()
+		    bridge.send({ type: "design-undo", payload: {} })
+		  }
 		})
 
 		/**

@@ -80,6 +80,7 @@ canvas-layout.json
 .corrections-state.json
 .variants.json
 .checks-results.json
+.undo-journal.json
 pages/*--v*/
 assets/.posters/
 `

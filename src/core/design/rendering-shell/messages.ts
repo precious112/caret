@@ -29,6 +29,8 @@ export interface ParamEditPayload {
 	raw?: string
 	/** The canvas viewport, so the edit lands on the ACTIVE responsive variant. */
 	viewportWidth: number
+	/** Bulk edit: the rest of the multi-selection, same property, same value. */
+	alsoCaretIds?: string[]
 }
 
 export interface OpenFilePayload {
@@ -183,6 +185,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"flow-edge-delete": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.toPage),
 	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
 	"design-sync-now": () => true,
+	"design-undo": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
 	"param-resolve": (p) => isStr(p.filePath) && isStr(p.caretId) && isNum(p.viewportWidth),
@@ -212,6 +215,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "flow-edge-delete"; payload: FlowEdgeDeletePayload }
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
+	| { source: "caret-vite"; type: "design-undo"; payload: Record<string, never> }
 	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
 	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
 	| { source: "caret-vite"; type: "param-edit"; payload: ParamEditPayload }
@@ -235,6 +239,12 @@ export interface EditStatusPayload {
 }
 
 /** Host → canvas. */
+export interface UndoResultPayload {
+	undone: boolean
+	label: string
+	error: string
+}
+
 export interface ParamResolveResultPayload {
 	caretId: string
 	/** Serialized Params (the core type, structurally). */
@@ -244,6 +254,7 @@ export interface ParamResolveResultPayload {
 export type DesignOutboundMessage =
 	| { source: "caret-host"; type: "edit-result"; payload: EditResultPayload }
 	| { source: "caret-host"; type: "param-resolve-result"; payload: ParamResolveResultPayload }
+	| { source: "caret-host"; type: "undo-result"; payload: UndoResultPayload }
 	| { source: "caret-host"; type: "edit-status"; payload: EditStatusPayload }
 	| { source: "caret-host"; type: "precompute-result"; payload: PrecomputeResultPayload }
 

@@ -48,6 +48,8 @@ const IGNORED = [
 	// Caret's own scratch, rewritten on every interview step. Not design content,
 	// and waking the healer once per answered question is work for nothing.
 	"**/.caret/.interview.json",
+	// The undo journal: rewritten on every undoable boundary, never design content.
+	"**/.caret/.undo-journal.json",
 	// Correction-offer bookkeeping — observation, like the provenance log.
 	"**/.caret/.corrections-state.json",
 	// The generate-and-pick set's own state. The variant PAGES are healable

@@ -2168,6 +2168,194 @@ async function main(): Promise<void> {
 		return `panel named the binding ("token brand-500") and a committed padding spliced p-[24px] onto the subtitle`
 	})
 
+	await scenario("bv. a bulk edit hits every selected element, and Cmd+Z restores all of it as one step", async () => {
+		// Phase 8.7 end to end: subtitle selected, headline shift-added, ONE
+		// padding commit — both elements gain the class on disk — then the
+		// unified undo restores the whole batch as a single step, through git
+		// commit objects scoped to .caret/.
+		const caretDir = path.join(fixture, ".caret")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+		const before = await fs.readFile(pagePath, "utf-8")
+		assert(!before.includes("p-[32px]"), "the fixture already carries the class this scenario plants")
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				let pageFrame: any = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? null
+				if (!pageFrame) return { error: "no focused page frame (bt should have left home open)" }
+
+				// No helper-function consts in this body — esbuild's keepNames wraps
+				// them in a `__name` helper that does not exist in the main process.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+
+				// The headline got its caret-id from the precompute seeding pass.
+				const headlineId = await pageFrame.executeJavaScript(
+					`(() => { const el = document.querySelector('h1[data-caret-id]'); return el ? el.getAttribute('data-caret-id') : null })()`,
+				)
+				if (!headlineId) return { error: "the headline never got a seeded caret-id" }
+
+				// Select the subtitle, then shift-add the headline.
+				const subtitleRaw = await pageFrame.executeJavaScript(
+					`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				if (!subtitleRaw) return { error: "no subtitle" }
+				const subtitleAt = { x: Math.round(offset.x + subtitleRaw.x), y: Math.round(offset.y + subtitleRaw.y) }
+				let panelUp = false
+				let deadline = Date.now() + 30000
+				while (Date.now() < deadline && !panelUp) {
+					wc.sendInputEvent({ type: "mouseMove", x: subtitleAt.x, y: subtitleAt.y })
+					await new Promise((r) => setTimeout(r, 200))
+					wc.sendInputEvent({ type: "mouseDown", x: subtitleAt.x, y: subtitleAt.y, button: "left", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: subtitleAt.x, y: subtitleAt.y, button: "left", clickCount: 1 })
+					const rowDeadline = Date.now() + 4000
+					while (Date.now() < rowDeadline && !panelUp) {
+						panelUp = await pageFrame
+							.executeJavaScript(`!!document.querySelector('#caret-param-panel [data-param-row]')`)
+							.catch(() => false)
+						if (!panelUp) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!panelUp) return { error: "the panel never rendered rows for the subtitle" }
+
+				pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+				const headlineRaw = await pageFrame.executeJavaScript(
+					`(() => { const el = document.querySelector('h1[data-caret-id]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				if (!headlineRaw) return { error: "no headline point" }
+				const headlineAt = { x: Math.round(offset.x + headlineRaw.x), y: Math.round(offset.y + headlineRaw.y) }
+				// Both halves of the gesture: the module-level shift flag (synthetic
+				// keydown) AND a native shift-modified click for the capture path.
+				await pageFrame.executeJavaScript(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' })), true)`)
+				wc.sendInputEvent({ type: "mouseMove", x: headlineAt.x, y: headlineAt.y, modifiers: ["shift"] })
+				await new Promise((r) => setTimeout(r, 200))
+				wc.sendInputEvent({
+					type: "mouseDown",
+					x: headlineAt.x,
+					y: headlineAt.y,
+					button: "left",
+					clickCount: 1,
+					modifiers: ["shift"],
+				})
+				wc.sendInputEvent({
+					type: "mouseUp",
+					x: headlineAt.x,
+					y: headlineAt.y,
+					button: "left",
+					clickCount: 1,
+					modifiers: ["shift"],
+				})
+				await pageFrame.executeJavaScript(`(window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' })), true)`)
+
+				let announced = false
+				deadline = Date.now() + 15000
+				while (Date.now() < deadline && !announced) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
+					announced = await pageFrame
+						.executeJavaScript(
+							`document.querySelector('#caret-param-panel')?.textContent?.includes('2 elements selected') ?? false`,
+						)
+						.catch(() => false)
+					if (!announced) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!announced) {
+					const diag = await pageFrame
+						.executeJavaScript(
+							`(() => { const p = document.querySelector('#caret-param-panel'); return { count: p?.dataset?.selectionCount, text: p?.textContent?.slice(0, 100) } })()`,
+						)
+						.catch(() => null)
+					return { error: "the panel never announced the 2-element selection — diag: " + JSON.stringify(diag) }
+				}
+
+				// One commit for the batch.
+				let committed = false
+				deadline = Date.now() + 15000
+				while (Date.now() < deadline && !committed) {
+					committed = await pageFrame.executeJavaScript(
+						`(() => {
+							const input = document.querySelector('#caret-param-panel [data-param-input="padding"]')
+							if (!input || input.disabled) return false
+							input.focus()
+							input.value = '32px'
+							input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+							return true
+						})()`,
+					)
+					if (!committed) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!committed) return { error: "the padding row was missing or disabled" }
+
+				return { headlineId }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the bulk edit failed: ${(outcome as any).error}`)
+
+		await waitFor(
+			"both elements to gain p-[32px] on disk",
+			async () => {
+				const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				return (source.match(/p-\[32px\]/g) ?? []).length >= 2 ? true : null
+			},
+			20000,
+		)
+
+		// The unified undo, spoken from the page: one keystroke, the whole batch.
+		// The host's undo-result is recorded so a failure names its cause.
+		const undone = await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			if (!canvas) return false
+			const pageFrame = canvas.webContents.mainFrame.frames.find((f: any) => f.url.includes("mode=focused"))
+			if (!pageFrame) return false
+			await pageFrame.executeJavaScript(
+				`(window.__UNDO_RESULTS__ = [], window.addEventListener('message', (e) => { if (e.data?.type === 'undo-result') window.__UNDO_RESULTS__.push(e.data.payload) }), true)`,
+			)
+			await pageFrame.executeJavaScript(
+				`((document.activeElement)?.blur?.(), window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true })), true)`,
+			)
+			return true
+		})
+		assert(undone, "could not send the undo keystroke")
+
+		try {
+			await waitFor(
+				"the undo to restore the pre-bulk page",
+				async () => {
+					const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+					return source.includes("p-[32px]") ? null : true
+				},
+				20000,
+			)
+		} catch (err) {
+			const results = await app!.evaluate(async ({ BrowserWindow }) => {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				const pageFrame = canvas?.webContents.mainFrame.frames.find((f: any) => f.url.includes("mode=focused"))
+				return (await pageFrame?.executeJavaScript(`window.__UNDO_RESULTS__ ?? []`).catch(() => null)) ?? null
+			})
+			throw new Error(`${err} — undo-result payloads: ${JSON.stringify(results)}`)
+		}
+
+		return `one commit put p-[32px] on both elements; Ctrl+Z restored the batch as one step`
+	})
+
 	await scenario("bu. editing one .map() row's text writes that row's data item, and only it", async () => {
 		// Phase 8.6 end to end in the real app: a list page over a same-file data
 		// literal, the row's text edited inline, and the write landing in the
