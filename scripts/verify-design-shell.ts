@@ -83,12 +83,13 @@ const FIXTURE_PAGES = [
 	{ id: "dashboard", title: "Dashboard" },
 ]
 // FIXTURE_PAGES plus the pages seeded separately: "listing", "fragmented",
-// "renamed" (the folder/meta id mismatch of scenario `p`), and "catalog"
-// (the .map() list of scenario `x`). This arithmetic
+// "renamed" (the folder/meta id mismatch of scenario `p`), "catalog"
+// (the .map() list of scenario `x`), and "layouts" (scenario `z`'s six
+// resize-resolver cases). This arithmetic
 // breaking silently is exactly what happened when `renamed` was added — three
 // scenarios failed with "expected 6 frames, got 7" — so if you seed another
 // page below, this line is the other half of that change.
-const EXTRA_SEEDED_PAGES = 4
+const EXTRA_SEEDED_PAGES = 5
 const TOTAL_PAGES = FIXTURE_PAGES.length + EXTRA_SEEDED_PAGES
 
 // JSX fragments used to break the source-capture plugin (its old regex only
@@ -144,6 +145,37 @@ export default function Catalog() {
         </li>
       ))}
     </ul>
+  )
+}
+`
+
+// The six layout contexts the size resolver must classify — real DOM, real
+// computed styles, the medium the resolver actually runs in.
+const LAYOUTS_PAGE = `export default function Layouts() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <div data-testid="lay-declared" className="w-64 bg-zinc-100">declared</div>
+      <div className="max-w-[520px]">
+        <div>
+          <div>
+            <div data-testid="lay-chain" className="bg-zinc-100">chained auto</div>
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-row gap-3 w-[520px]">
+        <div data-testid="lay-flex" className="flex-1 bg-zinc-100">flex child</div>
+        <div className="flex-1">sibling</div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 w-[520px]">
+        <div data-testid="lay-grid" className="bg-zinc-100">grid item</div>
+        <div>b</div>
+        <div>c</div>
+      </div>
+      <div className="relative h-24">
+        <div data-testid="lay-abs" className="absolute inset-x-4 top-2 bg-zinc-100">absolute</div>
+      </div>
+      <div data-testid="lay-fit" className="w-fit bg-zinc-100">hugging width</div>
+    </div>
   )
 }
 `
@@ -210,6 +242,14 @@ async function buildFixture(): Promise<{ workspace: string; caretDir: string }> 
 	await fs.writeFile(
 		path.join(catalogDir, "meta.json"),
 		JSON.stringify({ id: "catalog", title: "Catalog", type: "page", states: [], tags: ["fixture"] }, null, 2),
+	)
+
+	const layoutsDir = path.join(caretDir, "pages", "layouts")
+	await fs.mkdir(layoutsDir, { recursive: true })
+	await fs.writeFile(path.join(layoutsDir, "index.tsx"), LAYOUTS_PAGE)
+	await fs.writeFile(
+		path.join(layoutsDir, "meta.json"),
+		JSON.stringify({ id: "layouts", title: "Layouts", type: "page", states: [], tags: ["fixture"] }, null, 2),
 	)
 
 	const renamedDir = path.join(caretDir, "pages", "renamed")
@@ -1570,6 +1610,78 @@ async function main() {
 				"the design-undo message",
 			)
 			return `2-element selection announced; one commit carried frag-copy + [frag-h1]; Ctrl+Z spoke design-undo`
+		} finally {
+			await page.close()
+		}
+	})
+
+	await scenario("z. the size resolver classifies six real layout contexts, both axes", async () => {
+		// The resolver's contract is judged in its own medium: a real browser's
+		// computed styles and layout algorithms, not a DOM stub. Six contexts ×
+		// the axis asymmetry (width:auto fills, height:auto hugs), plus the
+		// preview-channel rule (flex/grid preview through a clamp — measured:
+		// el.style.width does nothing on a flex-basis:0 child).
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=layouts&mode=focused`)
+			await page.waitForSelector('[data-testid="lay-declared"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(1500)
+
+			// No function-valued consts in an evaluate body — esbuild's keepNames
+			// wraps them in a __name helper that does not exist in the page.
+			const results = await page.evaluate(async () => {
+				const mod = await import("/lib/size-resolver.ts")
+				const out: Record<string, { kind: string; chain: number; preview: string }> = {}
+				for (const probe of [
+					["declaredW", "lay-declared", "width"],
+					["chainW", "lay-chain", "width"],
+					["chainH", "lay-chain", "height"],
+					["flexW", "lay-flex", "width"],
+					["flexH", "lay-flex", "height"],
+					["gridW", "lay-grid", "width"],
+					["gridH", "lay-grid", "height"],
+					["absW", "lay-abs", "width"],
+					["fitW", "lay-fit", "width"],
+				] as Array<[string, string, "width" | "height"]>) {
+					const el = document.querySelector(`[data-testid="${probe[1]}"]`)!
+					const ctx = mod.resolveSizeContext(el, probe[2])
+					out[probe[0]] = { kind: ctx.kind, chain: ctx.chain.length, preview: ctx.previewChannel }
+				}
+				return out as {
+					declaredW: { kind: string; chain: number; preview: string }
+					chainW: { kind: string; chain: number; preview: string }
+					chainH: { kind: string; chain: number; preview: string }
+					flexW: { kind: string; chain: number; preview: string }
+					flexH: { kind: string; chain: number; preview: string }
+					gridW: { kind: string; chain: number; preview: string }
+					gridH: { kind: string; chain: number; preview: string }
+					absW: { kind: string; chain: number; preview: string }
+					fitW: { kind: string; chain: number; preview: string }
+				}
+			})
+
+			const cases: Array<[string, { kind: string; chain: number; preview: string }, string, string?]> = [
+				["declared width", results.declaredW, "declared"],
+				["chained-auto width", results.chainW, "fill-chain"],
+				["chained-auto height", results.chainH, "hug"],
+				["flex child width", results.flexW, "flex-main", "minmax-clamp"],
+				["flex child height", results.flexH, "flex-cross", "size"],
+				["grid item width", results.gridW, "grid-track", "minmax-clamp"],
+				["grid item height", results.gridH, "grid-row", "minmax-clamp"],
+				["absolute width", results.absW, "containing-block"],
+				["w-fit width", results.fitW, "content"],
+			]
+			for (const [name, got, kind, preview] of cases) {
+				if (got.kind !== kind) throw new Error(`${name}: expected ${kind}, resolver said ${JSON.stringify(got)}`)
+				if (preview && got.preview !== preview) {
+					throw new Error(`${name}: expected preview channel ${preview}, got ${JSON.stringify(got)}`)
+				}
+			}
+			if (results.chainW.chain < 3) {
+				throw new Error(`the chained-auto case must walk the pass-throughs — chain was ${results.chainW.chain} long`)
+			}
+
+			return `six contexts classified correctly on both axes; fill chain walked ${results.chainW.chain} participants; flex/grid preview through the clamp`
 		} finally {
 			await page.close()
 		}

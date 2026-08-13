@@ -25,6 +25,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
 		fs.writeFile(path.join(libDir, "param-panel.ts"), generateParamPanel()),
+		fs.writeFile(path.join(libDir, "size-resolver.ts"), generateSizeResolver()),
 		fs.writeFile(path.join(libDir, "asset-picker.ts"), generateAssetPicker()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
 	])
@@ -2714,6 +2715,197 @@ function generateEditPill(): string {
 		  if (payload.success) resolveDone()
 		  else resolveFailed(payload.error)
 		})
+	`
+}
+
+function generateSizeResolver(): string {
+	return dedent`
+		/**
+		 * The layout-context resolver — Phase 10's foundation, in the browser
+		 * where the truth lives.
+		 *
+		 * A measured size is a FACT that says nothing about which declaration
+		 * produced it. Classification (flex item? grid item? block?) is one level
+		 * up; ATTRIBUTION is not — width:auto blocks forward the question to their
+		 * parent, arbitrarily deep, and position:absolute skips to the containing
+		 * block. So the resolver walks and returns the whole CHAIN of
+		 * participants, not one guessed target: the panel can say "this width is
+		 * decided by 3 things" and let the user choose.
+		 *
+		 * The axes are NOT symmetric: width:auto FILLS the parent (resolves
+		 * upward); height:auto HUGS the content (resolves downward). A flex row
+		 * child's height is the tallest sibling (align-items:stretch), its width
+		 * is a share. Measured, not reasoned — see CARET-V2-PLAN §5.
+		 */
+
+		export type Axis = "width" | "height"
+
+		export type SizeKind =
+		  | "declared"          // the element's own utility/inline style decides
+		  | "containing-block"  // position:absolute + inset — the CB decides
+		  | "grid-track"        // width of a grid item — the parent's columns
+		  | "grid-row"          // height of a grid item — the row (auto = tallest)
+		  | "flex-main"         // main-axis share (flex-grow/basis against siblings)
+		  | "flex-cross"        // cross-axis — stretch to tallest, or self height
+		  | "hug"               // height:auto in normal flow — content decides
+		  | "content"           // explicit hug on width (w-fit / w-max)
+		  | "fill-chain"        // width:auto fills upward to the first constrainer
+		  | "viewport-root"     // nothing declared all the way up — the viewport
+
+		export interface ChainLink {
+		  element: Element
+		  role: "self" | "pass-through" | "decider"
+		  note: string
+		}
+
+		export interface SizeContext {
+		  axis: Axis
+		  kind: SizeKind
+		  /** The element whose declaration (or track/algorithm) decides the size. */
+		  decider: Element
+		  chain: ChainLink[]
+		  /** The preview channel a drag must use in THIS context. el.style.width
+		   * does NOTHING on a flex-basis:0 child (measured), so flex and grid
+		   * preview through a min/max clamp — which is byte-identical geometry to
+		   * the basis/width commit and never shows a state the commit can't make. */
+		  previewChannel: "size" | "minmax-clamp"
+		}
+
+		/** The element's own axis declaration, read from utilities + inline style. */
+		function ownDeclaration(el: Element, axis: Axis): { fixed?: string; hug?: string } {
+		  const style = (el as HTMLElement).style
+		  const inline = axis === "width" ? style.width : style.height
+		  if (inline && inline !== "auto") return { fixed: \`inline \${axis}:\${inline}\` }
+		  const classes = (el.getAttribute("class") ?? "").split(/\\s+/)
+		  const prefix = axis === "width" ? "w-" : "h-"
+		  for (const cls of classes) {
+		    const base = cls.includes(":") ? cls.slice(cls.lastIndexOf(":") + 1) : cls
+		    if (!base.startsWith(prefix)) continue
+		    const suffix = base.slice(prefix.length)
+		    if (suffix === "auto") continue
+		    if (suffix === "fit" || suffix === "max" || suffix === "min") return { hug: base }
+		    if (suffix === "full" || suffix === "screen" || /^\\d/.test(suffix) || suffix.startsWith("[")) {
+		      return { fixed: base }
+		    }
+		  }
+		  if (axis === "width") {
+		    for (const cls of classes) {
+		      const base = cls.includes(":") ? cls.slice(cls.lastIndexOf(":") + 1) : cls
+		      if (base.startsWith("basis-") && base !== "basis-auto") return { fixed: base }
+		    }
+		  }
+		  return {}
+		}
+
+		/** display:contents parents don't lay anything out — skip to the grandparent. */
+		function layoutParent(el: Element): Element | null {
+		  let parent = el.parentElement
+		  while (parent && getComputedStyle(parent).display === "contents") parent = parent.parentElement
+		  return parent
+		}
+
+		/** The containing block for an absolutely positioned element. */
+		function containingBlockOf(el: Element): Element {
+		  let node = el.parentElement
+		  while (node) {
+		    const cs = getComputedStyle(node)
+		    if (
+		      cs.position !== "static" ||
+		      cs.transform !== "none" ||
+		      cs.filter !== "none" ||
+		      cs.contain.includes("layout") ||
+		      cs.contain.includes("paint")
+		    ) {
+		      return node
+		    }
+		    node = node.parentElement
+		  }
+		  return document.documentElement
+		}
+
+		/** Does this ancestor DECLARE a size on the axis (ending a fill chain)? */
+		function constrains(el: Element, axis: Axis): string | null {
+		  const own = ownDeclaration(el, axis)
+		  if (own.fixed) return own.fixed
+		  const classes = (el.getAttribute("class") ?? "").split(/\\s+/)
+		  if (axis === "width") {
+		    for (const cls of classes) {
+		      const base = cls.includes(":") ? cls.slice(cls.lastIndexOf(":") + 1) : cls
+		      if (base.startsWith("max-w-") && base !== "max-w-none") return base
+		    }
+		  }
+		  return null
+		}
+
+		function isMainAxis(container: Element, axis: Axis): boolean {
+		  const direction = getComputedStyle(container).flexDirection
+		  const horizontal = direction === "row" || direction === "row-reverse"
+		  return (axis === "width") === horizontal
+		}
+
+		export function resolveSizeContext(el: Element, axis: Axis): SizeContext {
+		  const chain: ChainLink[] = [{ element: el, role: "self", note: "the selected element" }]
+		  const own = ownDeclaration(el, axis)
+		  const cs = getComputedStyle(el)
+
+		  const done = (kind: SizeKind, decider: Element, note: string, previewChannel: "size" | "minmax-clamp" = "size"): SizeContext => {
+		    if (decider !== el) chain.push({ element: decider, role: "decider", note })
+		    else chain[0].note = note
+		    return { axis, kind, decider, chain, previewChannel }
+		  }
+
+		  if (own.fixed) return done("declared", el, own.fixed)
+		  if (cs.position === "absolute" || cs.position === "fixed") {
+		    return done("containing-block", containingBlockOf(el), "the containing block")
+		  }
+
+		  // Classification is one level; the parent's display decides the branch.
+		  const parent = layoutParent(el)
+		  if (parent) {
+		    const parentDisplay = getComputedStyle(parent).display
+		    if (parentDisplay === "grid" || parentDisplay === "inline-grid") {
+		      return axis === "width"
+		        ? done("grid-track", parent, "the parent's column tracks", "minmax-clamp")
+		        : done("grid-row", parent, "the row — auto rows size to the tallest item", "minmax-clamp")
+		    }
+		    if (parentDisplay === "flex" || parentDisplay === "inline-flex") {
+		      return isMainAxis(parent, axis)
+		        ? done("flex-main", parent, "a main-axis share against the siblings", "minmax-clamp")
+		        : done("flex-cross", parent, "the cross axis — stretch makes it the tallest sibling", "size")
+		    }
+		  }
+
+		  // THE ASYMMETRY: auto is HUG on height, FILL on width.
+		  if (axis === "height") return done("hug", el, "height:auto hugs the content")
+		  if (own.hug) return done("content", el, own.hug)
+
+		  // width:auto in flow — the question forwards upward until something
+		  // declares. Bounded by DOM depth; every visited ancestor joins the chain.
+		  let node: Element | null = el
+		  while (node) {
+		    const ancestor = layoutParent(node)
+		    if (!ancestor || ancestor === document.documentElement.parentElement) break
+		    const declared = constrains(ancestor, axis)
+		    if (declared) {
+		      chain.push({ element: ancestor, role: "decider", note: declared })
+		      return { axis, kind: "fill-chain", decider: ancestor, chain, previewChannel: "size" }
+		    }
+		    const ancestorDisplay = getComputedStyle(ancestor).display
+		    if (ancestorDisplay === "grid" || ancestorDisplay === "inline-grid") {
+		      chain.push({ element: ancestor, role: "decider", note: "the grid's column tracks" })
+		      return { axis, kind: "grid-track", decider: ancestor, chain, previewChannel: "minmax-clamp" }
+		    }
+		    if (ancestorDisplay === "flex" || ancestorDisplay === "inline-flex") {
+		      chain.push({ element: ancestor, role: "decider", note: "the flex container" })
+		      return { axis, kind: "flex-main", decider: ancestor, chain, previewChannel: "minmax-clamp" }
+		    }
+		    chain.push({ element: ancestor, role: "pass-through", note: "width:auto — decides nothing" })
+		    if (ancestor === document.documentElement || ancestor === document.body) break
+		    node = ancestor
+		  }
+		  const root = document.documentElement
+		  return { axis, kind: "viewport-root", decider: root, chain, previewChannel: "size" }
+		}
 	`
 }
 
