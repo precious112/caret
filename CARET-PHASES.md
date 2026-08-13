@@ -956,23 +956,44 @@ for collaboration and CI drift diffs.
 
 ---
 
-## [ ] Phase 10: Direct manipulation that earns its place
+## [x] Phase 10: Direct manipulation that earns its place — CERTIFIED 55/55 (free surface) 2026-08-14
 
 Deliberately minimal. This is what stops Caret feeling like a chat box with a preview — not
 what makes the output good.
 
-**Designed together before build** — resize is specified (CARET-V2-PLAN §5) but flagged for
-joint design; walk the feel checkpoints (video clips) with the user rather than building and
-merging solo.
+**The FEEL checkpoints are still open for the user** — the standing autonomous directive
+waived the pre-build design session, not the taste rating. Resize wants a hands-on review
+(does the drag feel right, is the height friction correct, do the refusals read as helpful
+rather than obstructive) before it can be called finished as an *experience*.
 
-- [ ] Resize: layout-context resolver walking a **chain** (classification is one level,
-      attribution is not), axis-aware (`width:auto` fills, `height:auto` hugs), preview channel
-      chosen from context, **neighbourhood verification**, settle protocol + epsilon
-- [ ] Explicit hug / fill / fixed modes rather than inferring intent from a drag
-- [ ] Encoding policy inferred from the repo's existing conventions
-- [ ] Layers panel mirroring the JSX tree
-- [ ] Canvas perf: virtualized iframes, 60fps at 200+ artboards
-- [ ] Keyboard map
+- [x] Resize: layout-context resolver returning a **chain** (`lib/size-resolver.ts` —
+      classification is one level up, attribution walks; `display:contents` skipped,
+      absolute → containing block), axis-aware (`width:auto` fills upward, `height:auto`
+      hugs; flex cross-axis is the tallest sibling), preview channel chosen from context
+      (flex/grid clamp — `el.style.width` is dead against `flex-basis:0`), **neighbourhood
+      verification** (sibling rects + overflow snapshotted pre-commit), settle protocol
+      (transitions suppressed, fonts ready, two settled frames) + 0.5px epsilon
+- [x] Explicit hug / fill / fixed modes per axis in the panel, rather than inferring intent
+      from a drag (Fill on a flex child writes `flex-1`, not `w-full`)
+- [x] Encoding policy from the repo's own pages (`param/encoding.ts`): explicit mode >
+      project convention > context default, cold-start default chosen to be propagated
+- [x] Layers panel (L) mirroring the live DOM tree; clicking a row is the canvas selection
+- [x] Canvas perf: virtualized artboards, **60fps at 209 artboards** (pan median 16.6ms,
+      p90 17.5ms; 0 live iframes at fit-zoom, 6 zoomed in)
+- [x] Keyboard map (?), listing only gestures that exist
+
+**Landed state:** unit 436; design-shell 29/29 (z: six layout contexts × both axes against
+real computed styles; aa: a real drag previewing through the clamp and committing once;
+bb: 209 artboards); verify:app CERTIFIED (free surface) 55/55.
+
+The canvas perf work was three measured findings in sequence, each hidden behind the last:
+`IntersectionObserver` reports every card as intersecting inside the transformed,
+overflow-hidden canvas (so the canvas computes liveness from geometry it owns); the canvas
+FITS everything on open, so 209 artboards sit at 4% zoom where every card is on screen at
+12px wide (so liveness needs a legibility floor, not just an on-screen test); and panning
+then mounted a fresh iframe — a whole page load — every frame (so the live set is computed
+from a settled transform, and the pan writes the DOM transform directly, committing to React
+state when the gesture stops — the same preview-then-commit split the resize gesture uses).
 
 **Explicitly deferred** — snapping and smart guides, gradient stop editing, motion timelines
 and easing editors, 3D and shader parameter exposure. All are precision tools for people who
