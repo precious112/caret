@@ -956,7 +956,7 @@ for collaboration and CI drift diffs.
 
 ---
 
-## [x] Phase 10: Direct manipulation that earns its place — CERTIFIED 55/55 (free surface) 2026-08-14
+## [x] Phase 10: Direct manipulation that earns its place — CERTIFIED 56/56 (free surface) 2026-08-14
 
 Deliberately minimal. This is what stops Caret feeling like a chat box with a preview — not
 what makes the output good.
@@ -982,9 +982,11 @@ rather than obstructive) before it can be called finished as an *experience*.
       p90 17.5ms; 0 live iframes at fit-zoom, 6 zoomed in)
 - [x] Keyboard map (?), listing only gestures that exist
 
-**Landed state:** unit 436; design-shell 29/29 (z: six layout contexts × both axes against
+**Landed state:** unit 446; design-shell 31/31 (z: six layout contexts × both axes against
 real computed styles; aa: a real drag previewing through the clamp and committing once;
-bb: 209 artboards); verify:app CERTIFIED (free surface) 55/55.
+bb: 209 artboards; cc: the verifier's three paths; dd: layers panel and keyboard map);
+verify:app CERTIFIED (free surface) 56/56, including bz — a real drag committing a resize
+through the host.
 
 The canvas perf work was three measured findings in sequence, each hidden behind the last:
 `IntersectionObserver` reports every card as intersecting inside the transformed,
