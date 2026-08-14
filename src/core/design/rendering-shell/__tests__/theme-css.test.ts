@@ -11,7 +11,7 @@
 import { strict as assert } from "assert"
 
 import type { FoundationTokens } from "../../types"
-import { foundationThemeCss } from "../theme-css"
+import { foundationFontsCss, foundationThemeCss } from "../theme-css"
 
 const TOKENS: FoundationTokens = {
 	vibe: { description: "", tags: [] },
@@ -53,8 +53,19 @@ describe("foundationThemeCss", () => {
 		const css = foundationThemeCss(TOKENS)
 		assert.ok(css.includes(`--font-sans: Archivo, Helvetica Neue;`))
 		assert.ok(css.includes(`--font-display: "Instrument Serif", Georgia;`), "a multi-word family must be quoted")
-		assert.ok(css.includes("fonts.googleapis.com/css2"), "the faces are named but never fetched")
-		assert.ok(css.includes("Instrument+Serif"))
+
+		const fonts = foundationFontsCss(TOKENS)
+		assert.ok(fonts.includes("fonts.googleapis.com/css2"), "the faces are named but never fetched")
+		assert.ok(fonts.includes("Instrument+Serif"))
+	})
+
+	it("keeps the webfont import out of the theme entirely", () => {
+		// The theme is inlined into global.css *after* Tailwind's preflight, so an
+		// `@import` living in it is thousands of lines deep in the bundled sheet and
+		// PostCSS drops it — the faces are declared and never fetched. It belongs in
+		// caret-fonts.css, which global.css imports first.
+		const css = foundationThemeCss(TOKENS)
+		assert.ok(!css.includes("@import"), "an @import here is silently discarded by the bundler")
 	})
 
 	it("falls back to the body face when no display face is set", () => {

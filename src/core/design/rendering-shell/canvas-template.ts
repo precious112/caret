@@ -3165,6 +3165,17 @@ function generateParamPanel(): string {
 		window.addEventListener("keydown", (e) => { if (e.key === "Shift") shiftHeld = true })
 		window.addEventListener("keyup", (e) => { if (e.key === "Shift") shiftHeld = false })
 		window.addEventListener("blur", () => { shiftHeld = false })
+		// The pointer event carries the REAL modifier state. Key events alone
+		// miss it whenever the keydown went somewhere else (another frame, a
+		// surface that stopped it), and then a genuine shift-click quietly
+		// replaces the selection instead of growing it.
+		//
+		// BOTH pointerdown and mousedown: not every input source produces
+		// pointer events (Electron's synthetic input notably does not), and
+		// react-grab decides its selection on mousedown — so a pointer-only
+		// reading is both incomplete and too late.
+		window.addEventListener("pointerdown", (e) => { shiftHeld = e.shiftKey }, true)
+		window.addEventListener("mousedown", (e) => { shiftHeld = e.shiftKey }, true)
 
 		function outline(el: Element, on: boolean) {
 		  ;(el as HTMLElement).style.outline = on ? "2px solid #7c6cf3" : ""
@@ -3344,9 +3355,11 @@ function generateParamPanel(): string {
 		  currentTarget = { filePath, caretId, lineNumber, element }
 		  outline(element, true)
 		  for (const extra of alsoSelected) outline(extra.element, true)
-		  ensurePanel().dataset.selectionCount = String(alsoSelected.length + 1)
-		  attachResizeHandles()
 		  const host = ensurePanel()
+		  host.dataset.selectionCount = String(alsoSelected.length + 1)
+		  // The panel's subject, known before its rows resolve.
+		  host.dataset.caretId = caretId
+		  attachResizeHandles()
 		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
 		  bridge.send({ type: "param-resolve", payload: { filePath, caretId, viewportWidth: viewportWidth() } })
 		}
@@ -3512,6 +3525,7 @@ function generateParamPanel(): string {
 		  for (const extra of alsoSelected) outline(extra.element, true)
 		  const host = ensurePanel()
 		  host.dataset.selectionCount = String(alsoSelected.length + 1)
+		  host.dataset.caretId = caretId
 		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
 		  bridge.send({
 		    type: "param-resolve",
@@ -3527,19 +3541,22 @@ function generateParamPanel(): string {
 		 * is not integer-safe. A verifier that cries wolf is worse than none. */
 
 		interface NeighbourSnapshot {
-		  siblings: Array<{ el: Element; left: number; top: number; width: number }>
+		  siblings: Array<{ el: Element; left: number; top: number; width: number; overlapped: boolean }>
 		  parentOverflowed: boolean
 		}
 		let pendingVerify: { caretId: string; axis: "width" | "height"; wantPx: number; snapshot: NeighbourSnapshot; chainNote: string } | null = null
 
 		function snapshotNeighbourhood(el: Element): NeighbourSnapshot {
 		  const parent = el.parentElement
+		  const own = el.getBoundingClientRect()
 		  const siblings = parent
 		    ? Array.from(parent.children)
 		        .filter((child) => child !== el)
 		        .map((child) => {
 		          const r = child.getBoundingClientRect()
-		          return { el: child, left: r.left, top: r.top, width: r.width }
+		          const overlapped =
+		            own.left < r.right - 1 && r.left < own.right - 1 && own.top < r.bottom - 1 && r.top < own.bottom - 1
+		          return { el: child, left: r.left, top: r.top, width: r.width, overlapped }
 		        })
 		    : []
 		  const parentOverflowed = parent ? parent.scrollWidth > parent.clientWidth + 1 : false
@@ -3548,6 +3565,7 @@ function generateParamPanel(): string {
 
 		function verifyToast(message: string, isWarn: boolean) {
 		  const el = document.createElement("div")
+		  el.dataset.caretVerifyToast = isWarn ? "warn" : "ok"
 		  el.textContent = message
 		  el.style.cssText =
 		    "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;padding:8px 16px;border-radius:8px;font:12.5px system-ui;color:#fff;box-shadow:0 2px 12px rgba(0,0,0,0.35);background:" +
@@ -3585,7 +3603,12 @@ function generateParamPanel(): string {
 		      return
 		    }
 
-		    // The node is right — now the neighbourhood.
+		    // The node is right — now the neighbourhood. REFLOW IS NOT DAMAGE:
+		    // growing a flex child necessarily moves the ones after it, and
+		    // flagging that would make the verifier cry wolf on every legitimate
+		    // resize, which is the haunted feeling this whole design exists to
+		    // prevent. Damage is: the container starts overflowing, a sibling is
+		    // squeezed out of shape, or boxes that were apart now overlap.
 		    const regressions: string[] = []
 		    const parent = el.parentElement
 		    if (parent && parent.scrollWidth > parent.clientWidth + 1 && !job.snapshot.parentOverflowed) {
@@ -3594,10 +3617,14 @@ function generateParamPanel(): string {
 		    for (const before of job.snapshot.siblings) {
 		      if (!before.el.isConnected) continue
 		      const now = before.el.getBoundingClientRect()
-		      const shift = Math.max(Math.abs(now.left - before.left), Math.abs(now.top - before.top))
 		      const shrink = before.width > 0 ? (before.width - now.width) / before.width : 0
-		      if (shift > 8) regressions.push(\`a sibling shifted \${Math.round(shift)}px\`)
-		      else if (shrink > 0.25) regressions.push(\`a sibling shrank \${Math.round(shrink * 100)}%\`)
+		      if (shrink > 0.25) {
+		        regressions.push(\`a sibling shrank \${Math.round(shrink * 100)}%\`)
+		        continue
+		      }
+		      const overlapsNow =
+		        rect.left < now.right - 1 && now.left < rect.right - 1 && rect.top < now.bottom - 1 && now.top < rect.bottom - 1
+		      if (overlapsNow && !before.overlapped) regressions.push("it now overlaps a sibling")
 		    }
 		    if (regressions.length > 0) {
 		      verifyToast(\`Resized to \${job.wantPx}px, but \${regressions[0]} — Cmd+Z undoes it.\`, true)
@@ -3640,11 +3667,26 @@ function generateCaretGrabPlugin(): string {
 		// with the same element twice is a no-op, double-firing is safe).
 		function shiftPick(e: MouseEvent) {
 		  if (!e.shiftKey || !isParamPanelOpen()) return
+		  // Hit-test the addressable elements by GEOMETRY rather than walking the
+		  // element stack: react-grab's overlay sits above the page and its shape
+		  // changes as it re-arms, so a stack walk silently stops finding the box
+		  // under the pointer. The deepest element containing the point wins.
 		  let target: Element | null = null
-		  for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
-		    if (el.closest("[data-react-grab]") || el.closest("#caret-param-panel")) continue
-		    const hit = el.closest("[data-caret-id]")
-		    if (hit) { target = hit; break }
+		  let bestDepth = -1
+		  for (const el of Array.from(document.querySelectorAll("[data-caret-id]"))) {
+		    if (el.closest("#caret-param-panel") || el.closest("#caret-layers-panel")) continue
+		    const r = el.getBoundingClientRect()
+		    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue
+		    let depth = 0
+		    let node = el.parentElement
+		    while (node) {
+		      depth++
+		      node = node.parentElement
+		    }
+		    if (depth > bestDepth) {
+		      bestDepth = depth
+		      target = el
+		    }
 		  }
 		  if (!target) return
 		  e.preventDefault()
@@ -3652,6 +3694,7 @@ function generateCaretGrabPlugin(): string {
 		  extendParamSelection(target)
 		}
 		window.addEventListener("pointerdown", shiftPick, true)
+		window.addEventListener("mousedown", shiftPick, true)
 		window.addEventListener("click", shiftPick, true)
 
 		window.addEventListener("keydown", (e) => {
@@ -4070,6 +4113,15 @@ function generateCaretGrabPlugin(): string {
 		            },
 		          })
 		          showParamPanel(element, source.filePath, source.lineNumber)
+		          // react-grab consumes its activation when a selection is handled,
+		          // so without re-arming it only the FIRST element of a session is
+		          // ever selectable: click one box, click another, nothing happens.
+		          // Re-armed on the next tick (activate() is idempotent).
+		          setTimeout(() => {
+		            try {
+		              ;(window as any).__REACT_GRAB__?.activate?.()
+		            } catch {}
+		          }, 0)
 		        } catch (err) {
 		          logError("onElementSelect error:", err)
 		        }

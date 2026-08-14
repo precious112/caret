@@ -167,7 +167,7 @@ const LAYOUTS_PAGE = `export default function Layouts() {
         <div className="flex-1">sibling</div>
       </div>
       <div className="grid grid-cols-3 gap-3 w-[520px]">
-        <div data-testid="lay-grid" className="bg-zinc-100">grid item</div>
+        <div data-testid="lay-grid" data-caret-id="lay-grid" className="bg-zinc-100">grid item</div>
         <div>b</div>
         <div>c</div>
       </div>
@@ -1379,6 +1379,11 @@ async function main() {
 			JSON.stringify({ id: "flawed", title: "Flawed", type: "page", states: [], tags: [] }),
 		)
 
+		// Let Vite notice the new page before the first navigation: the fixture
+		// now carries considerably more pages, and a goto that races the route
+		// module's invalidation renders an empty document.
+		await new Promise((resolve) => setTimeout(resolve, 1500))
+
 		const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 		const pageErrors: string[] = []
 		page.on("pageerror", (err) => pageErrors.push(String(err).slice(0, 200)))
@@ -1392,7 +1397,7 @@ async function main() {
 						await page.goto(`http://localhost:${port}/?page=flawed`).catch(() => {})
 						return await page.evaluate(() => !!document.querySelector("img")).catch(() => false)
 					},
-					45000,
+					75000,
 					"the flawed page to render",
 				)
 			} catch (err) {
@@ -1942,6 +1947,215 @@ async function main() {
 			}
 		} finally {
 			for (const dir of seeded) await fs.rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	await scenario("cc. the resize verifier confirms, names the constrainer, and never cries wolf", async () => {
+		// Phase 10.4's three paths, all in a real browser. The shell has no host,
+		// so the commit's write is emulated the way HMR would land it, and the
+		// host's edit-result is injected — everything else (snapshot at release,
+		// settle protocol, measurement, judgment) is the real code.
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=layouts&mode=focused`)
+			await page.waitForSelector('[data-testid="lay-flex"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2000)
+			await page.evaluate(() => {
+				;(window as any).__SEL__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "element-selected") (window as any).__SEL__.push(e.data.payload?.caretId ?? "?")
+				})
+			})
+
+			// A drag on the flex child, released. No host writes the file, so the
+			// element stays its original size: the verifier must say so AND name
+			// what actually decides the width, from the resolver's chain.
+			const dragBy = async (testId: string, dx: number) => {
+				// Selection is RETRIED, not assumed: the previous scenario tears down
+				// 200 pages, so this page can still be reloading under HMR and
+				// swallow a click. What the retry must NOT do is remove the
+				// handles between attempts — re-clicking an already-selected
+				// element emits no new selection, so the handles never come back
+				// and the loop destroys its own success. Instead, if a leftover
+				// handle covers the click point, aim slightly inside the element.
+				let target = { x: 0, y: 0, width: 0 }
+				let selected = ""
+				for (let attempt = 0; attempt < 6 && selected !== testId; attempt++) {
+					target = await page.evaluate((id) => {
+						const el = document.querySelector(`[data-testid="${id}"]`)
+						if (!el) return { x: 0, y: 0, width: 0 }
+						const r = el.getBoundingClientRect()
+						let x = r.x + r.width / 2
+						const y = r.y + r.height / 2
+						const under = document.elementFromPoint(x, y)
+						if (under?.closest("#caret-resize-handles")) x = r.x + Math.min(24, r.width / 4)
+						return { x, y, width: r.width }
+					}, testId)
+					if (target.width === 0) {
+						await page.waitForTimeout(300)
+						continue
+					}
+					await page.mouse.click(target.x, target.y)
+					const deadline = Date.now() + 4000
+					while (Date.now() < deadline && selected !== testId) {
+						selected = await page.evaluate(() =>
+							document.querySelector("#caret-resize-handles")
+								? ((document.querySelector("#caret-param-panel") as HTMLElement | null)?.dataset?.caretId ?? "")
+								: "",
+						)
+						if (selected !== testId) await page.waitForTimeout(200)
+					}
+				}
+				if (selected !== testId) {
+					const diag = await page.evaluate((point) => {
+						const under = document.elementFromPoint(point.x, point.y) as HTMLElement | null
+						return {
+							panel: !!document.querySelector("#caret-param-panel"),
+							panelId:
+								(document.querySelector("#caret-param-panel") as HTMLElement | null)?.dataset?.caretId ?? null,
+							handles: !!document.querySelector("#caret-resize-handles"),
+							grab: !!(window as any).__REACT_GRAB__,
+							selectedMsgs: (window as any).__SEL__?.length ?? -1,
+							under: under ? `${under.tagName.toLowerCase()}.${under.className}`.slice(0, 80) : "nothing",
+						}
+					}, target)
+					throw new Error(`meant to drag ${testId}, but ${selected || "nothing"} is selected — ${JSON.stringify(diag)}`)
+				}
+				const handle = await page.evaluate(() => {
+					const r = (
+						document.querySelector("#caret-resize-handles")!.children[0] as HTMLElement
+					).getBoundingClientRect()
+					return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+				})
+				await page.mouse.move(handle.x, handle.y)
+				await page.mouse.down()
+				await page.mouse.move(handle.x + dx, handle.y, { steps: 5 })
+				await page.mouse.up()
+				return target.width + dx
+			}
+			// Clear only the verifier's own toasts. An earlier version swept every
+			// position:fixed div and took the resize handles with it.
+			const clearToasts = async () =>
+				await page.evaluate(() => document.querySelectorAll("[data-caret-verify-toast]").forEach((n) => n.remove()))
+			const readToast = async (what: string) =>
+				await waitFor2(
+					async () =>
+						await page.evaluate(() => {
+							const nodes = Array.from(document.querySelectorAll("[data-caret-verify-toast]"))
+							return nodes.length ? (nodes[nodes.length - 1].textContent ?? "") : null
+						}),
+					10000,
+					what,
+				)
+
+			await clearToasts()
+			await dragBy("lay-flex", 60)
+			await page.evaluate(() => {
+				window.postMessage({ source: "caret-host", type: "edit-result", payload: { success: true } }, "*")
+			})
+			const mismatch = await readToast("the mismatch warning naming the constrainer")
+			if (!/not \d+px/.test(mismatch) || !/decided by/.test(mismatch)) {
+				throw new Error(`the unwritten commit did not report a mismatch with its cause: "${mismatch}"`)
+			}
+
+			// Now the clean path: land the size the way the host's write would,
+			// and confirm. The siblings SHIFT here (a flex row reflows), and that
+			// must NOT be reported — reflow is not damage.
+			await clearToasts()
+			const wanted = await dragBy("lay-flex", 60)
+			await page.evaluate((px) => {
+				const el = document.querySelector('[data-testid="lay-flex"]') as HTMLElement
+				el.style.minWidth = el.style.maxWidth = `${Math.round(px)}px`
+				window.postMessage({ source: "caret-host", type: "edit-result", payload: { success: true } }, "*")
+			}, wanted)
+			const clean = await readToast("the confirmation")
+			if (!clean.includes("✓")) throw new Error(`a landed resize was not confirmed cleanly: "${clean}"`)
+
+			// And real damage: an overlap the node check alone cannot see.
+			await clearToasts()
+			await page.evaluate(() => {
+				const flex = document.querySelector('[data-testid="lay-flex"]') as HTMLElement
+				flex.style.removeProperty("min-width")
+				flex.style.removeProperty("max-width")
+			})
+			const gridWanted = await dragBy("lay-grid", 40)
+			await page.evaluate((px) => {
+				const el = document.querySelector('[data-testid="lay-grid"]') as HTMLElement
+				el.style.minWidth = el.style.maxWidth = `${Math.round(px)}px`
+				el.style.position = "relative"
+				el.style.zIndex = "1"
+				window.postMessage({ source: "caret-host", type: "edit-result", payload: { success: true } }, "*")
+			}, gridWanted)
+			const damaged = await readToast("the neighbourhood warning")
+			if (!/overlaps|overflows|shrank/.test(damaged)) {
+				throw new Error(`a layout-damaging resize was reported as fine: "${damaged}"`)
+			}
+
+			return `mismatch named its constrainer; a landed resize confirmed with siblings reflowing (no false alarm); damage reported as "${damaged.slice(0, 60)}"`
+		} finally {
+			await page.close()
+		}
+	})
+
+	await scenario("dd. the layers panel selects an element, and the keyboard map is discoverable", async () => {
+		// Phase 10.6/10.8 driven for real: L opens the tree, a row click selects
+		// that element (the property panel follows), ? shows the map, Escape
+		// closes both.
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=layouts&mode=focused`)
+			await page.waitForSelector('[data-testid="lay-flex"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2000)
+
+			await page.keyboard.press("l")
+			await waitFor(
+				async () => await page.evaluate(() => !!document.querySelector("#caret-layers-panel")),
+				8000,
+				"the layers panel to open on L",
+			)
+			const rows = (await page.evaluate(
+				() => document.querySelectorAll("#caret-layers-panel [data-layer]").length,
+			)) as number
+			if (rows < 3) throw new Error(`the layers panel listed ${rows} elements, expected the page's addressable ones`)
+
+			await page.evaluate(() => {
+				;(window as any).__RESOLVES__ = []
+				window.addEventListener("message", (e) => {
+					if (e.data?.type === "param-resolve") (window as any).__RESOLVES__.push(e.data.payload.caretId)
+				})
+			})
+			await page.click('#caret-layers-panel [data-layer="lay-grid"]')
+			const selected = await waitFor2(
+				async () => await page.evaluate(() => (window as any).__RESOLVES__?.[0] ?? null),
+				8000,
+				"the row click to select that element",
+			)
+			if (selected !== "lay-grid") throw new Error(`clicking the row selected ${selected}`)
+
+			await page.keyboard.press("?")
+			await waitFor(
+				async () => await page.evaluate(() => !!document.getElementById("caret-shortcuts")),
+				8000,
+				"the keyboard map on ?",
+			)
+			const mapText = (await page.evaluate(() => document.getElementById("caret-shortcuts")?.textContent ?? "")) as string
+			for (const expected of ["Shift+Click", "undo", "layers"]) {
+				if (!mapText.includes(expected)) throw new Error(`the keyboard map does not mention "${expected}"`)
+			}
+
+			await page.keyboard.press("Escape")
+			await waitFor(
+				async () =>
+					await page.evaluate(
+						() => !document.getElementById("caret-shortcuts") && !document.querySelector("#caret-layers-panel"),
+					),
+				8000,
+				"Escape to close both surfaces",
+			)
+
+			return `L listed ${rows} elements, a row click selected lay-grid, ? showed the map, Escape closed both`
+		} finally {
+			await page.close()
 		}
 	})
 

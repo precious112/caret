@@ -291,7 +291,10 @@ async function callMcp(url: string, token: string | null, body: unknown): Promis
 			...(token ? { authorization: `Bearer ${token}` } : {}),
 		},
 		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(30_000),
+		// 90s, not 30: a screenshot call renders a whole page before replying.
+		// The point of the deadline is to stop an infinite hang, not to police
+		// how long legitimate work takes.
+		signal: AbortSignal.timeout(90_000),
 	})
 }
 
@@ -2228,73 +2231,93 @@ async function main(): Promise<void> {
 				)
 				if (!headlineId) return { error: "the headline never got a seeded caret-id" }
 
-				// Select the subtitle, then shift-add the headline.
-				const subtitleRaw = await pageFrame.executeJavaScript(
-					`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
-				)
-				if (!subtitleRaw) return { error: "no subtitle" }
-				const subtitleAt = { x: Math.round(offset.x + subtitleRaw.x), y: Math.round(offset.y + subtitleRaw.y) }
-				let panelUp = false
-				let deadline = Date.now() + 30000
-				while (Date.now() < deadline && !panelUp) {
-					wc.sendInputEvent({ type: "mouseMove", x: subtitleAt.x, y: subtitleAt.y })
-					await new Promise((r) => setTimeout(r, 200))
-					wc.sendInputEvent({ type: "mouseDown", x: subtitleAt.x, y: subtitleAt.y, button: "left", clickCount: 1 })
-					wc.sendInputEvent({ type: "mouseUp", x: subtitleAt.x, y: subtitleAt.y, button: "left", clickCount: 1 })
-					const rowDeadline = Date.now() + 4000
-					while (Date.now() < rowDeadline && !panelUp) {
-						panelUp = await pageFrame
-							.executeJavaScript(`!!document.querySelector('#caret-param-panel [data-param-row]')`)
-							.catch(() => false)
-						if (!panelUp) await new Promise((r) => setTimeout(r, 250))
-					}
-				}
-				if (!panelUp) return { error: "the panel never rendered rows for the subtitle" }
-
-				pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
-				const headlineRaw = await pageFrame.executeJavaScript(
-					`(() => { const el = document.querySelector('h1[data-caret-id]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
-				)
-				if (!headlineRaw) return { error: "no headline point" }
-				const headlineAt = { x: Math.round(offset.x + headlineRaw.x), y: Math.round(offset.y + headlineRaw.y) }
-				// Both halves of the gesture: the module-level shift flag (synthetic
-				// keydown) AND a native shift-modified click for the capture path.
-				await pageFrame.executeJavaScript(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' })), true)`)
-				wc.sendInputEvent({ type: "mouseMove", x: headlineAt.x, y: headlineAt.y, modifiers: ["shift"] })
-				await new Promise((r) => setTimeout(r, 200))
-				wc.sendInputEvent({
-					type: "mouseDown",
-					x: headlineAt.x,
-					y: headlineAt.y,
-					button: "left",
-					clickCount: 1,
-					modifiers: ["shift"],
-				})
-				wc.sendInputEvent({
-					type: "mouseUp",
-					x: headlineAt.x,
-					y: headlineAt.y,
-					button: "left",
-					clickCount: 1,
-					modifiers: ["shift"],
-				})
-				await pageFrame.executeJavaScript(`(window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' })), true)`)
-
+				// The WHOLE two-click sequence retries as a unit. Focusing a page
+				// runs the caret-id precompute, and an earlier scenario's commit
+				// can land an HMR update at any moment — either replaces the
+				// document, silently dropping the first selection, so the
+				// shift-click arrives in a fresh page with nothing to extend.
 				let announced = false
-				deadline = Date.now() + 15000
-				while (Date.now() < deadline && !announced) {
-					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
-					announced = await pageFrame
+				const lastHeadlinePoint = { x: 0, y: 0 }
+				for (let attempt = 0; attempt < 4 && !announced; attempt++) {
+					pageFrame =
+						wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused") && f.url.includes("page=home")) ??
+						pageFrame
+
+					const subtitleRaw = await pageFrame
 						.executeJavaScript(
-							`document.querySelector('#caret-param-panel')?.textContent?.includes('2 elements selected') ?? false`,
+							`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
 						)
-						.catch(() => false)
-					if (!announced) await new Promise((r) => setTimeout(r, 250))
+						.catch(() => null)
+					if (!subtitleRaw) {
+						await new Promise((r) => setTimeout(r, 1000))
+						continue
+					}
+					const at = { x: Math.round(offset.x + subtitleRaw.x), y: Math.round(offset.y + subtitleRaw.y) }
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 200))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 })
+
+					// The subtitle must actually BE the panel's subject before the
+					// shift-click; otherwise there is nothing to grow.
+					let onSubtitle = false
+					const subtitleDeadline = Date.now() + 8000
+					while (Date.now() < subtitleDeadline && !onSubtitle) {
+						onSubtitle = await pageFrame
+							.executeJavaScript(
+								`(document.querySelector('#caret-param-panel')?.dataset?.caretId === 'hero-subtitle')`,
+							)
+							.catch(() => false)
+						if (!onSubtitle) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!onSubtitle) continue
+
+					// The shift-click is dispatched INSIDE the page, not as OS input.
+					// Two reasons, both learned the hard way: the focused view's
+					// chrome overlays the top of the iframe, so a click there never
+					// reaches the page (measured — the point sat inside the target's
+					// rect and no handler saw it); and Electron's synthetic input
+					// emits no pointer events. Real-input shift-clicking is already
+					// certified against a real browser in the design shell (scenario
+					// y). What THIS scenario is for is the host round trip: one
+					// commit reaching every selected element, undone as one step.
+					const secondId = await pageFrame
+						.executeJavaScript(
+							`(() => {
+								const candidates = Array.from(document.querySelectorAll('[data-caret-id]'))
+									.filter((el) => el.getAttribute('data-caret-id') !== 'hero-subtitle')
+									.map((el) => ({ el, r: el.getBoundingClientRect() }))
+									.filter((c) => c.r.width > 0 && c.r.height > 0)
+								if (!candidates.length) return null
+								const pick = candidates[candidates.length - 1]
+								const options = {
+									bubbles: true,
+									cancelable: true,
+									shiftKey: true,
+									clientX: pick.r.x + pick.r.width / 2,
+									clientY: pick.r.y + pick.r.height / 2,
+								}
+								pick.el.dispatchEvent(new MouseEvent('mousedown', options))
+								pick.el.dispatchEvent(new MouseEvent('mouseup', options))
+								pick.el.dispatchEvent(new MouseEvent('click', options))
+								return pick.el.getAttribute('data-caret-id')
+							})()`,
+						)
+						.catch(() => null)
+					if (!secondId) continue
+
+					const announceDeadline = Date.now() + 8000
+					while (Date.now() < announceDeadline && !announced) {
+						announced = await pageFrame
+							.executeJavaScript(`(document.querySelector('#caret-param-panel')?.dataset?.selectionCount === '2')`)
+							.catch(() => false)
+						if (!announced) await new Promise((r) => setTimeout(r, 250))
+					}
 				}
 				if (!announced) {
 					const diag = await pageFrame
 						.executeJavaScript(
-							`(() => { const p = document.querySelector('#caret-param-panel'); return { count: p?.dataset?.selectionCount, text: p?.textContent?.slice(0, 100) } })()`,
+							`(() => { const p = document.querySelector('#caret-param-panel'); return { count: p?.dataset?.selectionCount ?? null, panelId: p?.dataset?.caretId ?? null } })()`,
 						)
 						.catch(() => null)
 					return { error: "the panel never announced the 2-element selection — diag: " + JSON.stringify(diag) }
@@ -2302,8 +2325,8 @@ async function main(): Promise<void> {
 
 				// One commit for the batch.
 				let committed = false
-				deadline = Date.now() + 15000
-				while (Date.now() < deadline && !committed) {
+				const commitDeadline = Date.now() + 15000
+				while (Date.now() < commitDeadline && !committed) {
 					committed = await pageFrame.executeJavaScript(
 						`(() => {
 							const input = document.querySelector('#caret-param-panel [data-param-input="padding"]')
@@ -2716,6 +2739,138 @@ export default function ListDemo() {
 		assert(notDriftedText.includes("not a page"), `a non-page did not refuse with its cause: ${notDriftedText.slice(0, 300)}`)
 
 		return `mapping recorded; clean → app-drift (file named) → conflict → restored to clean; non-page proposal refused with its cause`
+	})
+
+	await scenario("bz. a real drag in the app commits a resize to the page source", async () => {
+		// Phase 10's host round trip, which only this suite can cover: a drag on
+		// the real handles in the real window, released, landing as a class in
+		// the page file — and undoable as one step like every other gesture.
+		const caretDir = path.join(fixture, ".caret")
+		const pagePath = path.join(caretDir, "pages", "home", "index.tsx")
+		const before = await fs.readFile(pagePath, "utf-8")
+		assert(!/w-\[\d+px\]/.test(before), "the fixture page already carries a pixel width")
+
+		const outcome = await app!.evaluate(async ({ BrowserWindow }) => {
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				// Open Home from the grid rather than inheriting a focused page.
+				await wc.executeJavaScript(
+					`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
+				)
+				const findHome = `(() => {
+					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
+					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'Home') ?? null
+				})()`
+				let deadline = Date.now() + 60000
+				let ready = false
+				while (Date.now() < deadline && !ready) {
+					ready = await wc.executeJavaScript(`!!${findHome}`).catch(() => false)
+					if (!ready) await new Promise((r) => setTimeout(r, 500))
+				}
+				if (!ready) return { error: "the Home card never appeared" }
+				await wc.executeJavaScript(`(${findHome}).click(), true`)
+
+				let pageFrame: any = null
+				deadline = Date.now() + 30000
+				while (Date.now() < deadline && !pageFrame) {
+					pageFrame =
+						wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused") && f.url.includes("page=home")) ??
+						null
+					if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!pageFrame) return { error: "the focused Home page never became a frame" }
+
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+
+				// Select the subtitle, which the handles attach to.
+				const subtitleRaw = await pageFrame.executeJavaScript(
+					`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				if (!subtitleRaw) return { error: "no subtitle on the page" }
+				const at = { x: Math.round(offset.x + subtitleRaw.x), y: Math.round(offset.y + subtitleRaw.y) }
+
+				let handles = false
+				deadline = Date.now() + 30000
+				while (Date.now() < deadline && !handles) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("page=home")) ?? pageFrame
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 200))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					const handleDeadline = Date.now() + 4000
+					while (Date.now() < handleDeadline && !handles) {
+						handles = await pageFrame
+							.executeJavaScript(`!!document.querySelector('#caret-resize-handles')`)
+							.catch(() => false)
+						if (!handles) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!handles) {
+					const diag = await pageFrame
+						.executeJavaScript(
+							`(() => { const p = document.querySelector('#caret-param-panel'); return { panel: !!p, panelId: p?.dataset?.caretId ?? null, grab: !!window.__REACT_GRAB__, ids: document.querySelectorAll('[data-caret-id]').length } })()`,
+						)
+						.catch(() => null)
+					return { error: "the resize handles never appeared on selection — diag: " + JSON.stringify(diag) }
+				}
+
+				// Drag the right-edge handle with a real mouse.
+				const handleRaw = await pageFrame.executeJavaScript(
+					`(() => { const r = document.querySelector('#caret-resize-handles').children[0].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+				)
+				const from = { x: Math.round(offset.x + handleRaw.x), y: Math.round(offset.y + handleRaw.y) }
+				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
+				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
+				for (let step = 1; step <= 6; step++) {
+					wc.sendInputEvent({
+						type: "mouseMove",
+						x: from.x - Math.round((90 * step) / 6),
+						y: from.y,
+						button: "left",
+						buttons: 1,
+					})
+					await new Promise((r) => setTimeout(r, 40))
+				}
+				wc.sendInputEvent({ type: "mouseUp", x: from.x - 90, y: from.y, button: "left", clickCount: 1 })
+
+				return { ok: true }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+
+		assert(!("error" in outcome) || !outcome.error, `driving the resize failed: ${(outcome as any).error}`)
+
+		const landed = await waitFor(
+			"the resize to land in the page source",
+			async () => {
+				const source = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				const match = /w-\[(\d+)px\]/.exec(source)
+				return match ? match[0] : null
+			},
+			30_000,
+		)
+		const after = await fs.readFile(pagePath, "utf-8")
+		assert(
+			/data-caret-id="hero-subtitle"[^>]*w-\[\d+px\]/s.test(after) ||
+				/w-\[\d+px\][^>]*data-caret-id="hero-subtitle"/s.test(after),
+			"the width landed, but not on the element that was dragged",
+		)
+
+		return `a real drag committed ${landed} onto the subtitle through the host`
 	})
 
 	await scenario("bo. the same correction made twice raises an offer, and accepting it promotes the token", async () => {

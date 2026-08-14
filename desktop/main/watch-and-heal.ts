@@ -33,41 +33,77 @@ import { regenerateRulesFiles } from "./rules/generate"
  */
 const HEAL_DEBOUNCE_MS = 400
 
-/** Files Caret itself owns and regenerates. Healing them would be circular. */
-const IGNORED = [
-	"**/node_modules/**",
-	"**/.caret/lib/**",
-	"**/.caret/thumbnails/**",
-	"**/.caret/vite.log",
-	// Generated from foundation.json by Caret itself — healing it would loop:
-	// tokens change → theme regenerated → healer wakes → regenerates again.
-	"**/.caret/caret-theme.css",
-	"**/.caret/canvas-layout.json",
-	"**/.caret/.sync-pending.json",
-	// Mapping metadata Caret writes during sync — versioned, but not healable
-	// content, and waking the healer once per recorded mapping is noise.
-	"**/.caret/sync-manifest.json",
-	"**/.caret/.provenance.jsonl",
-	"**/.caret/.mcp.json",
-	// Caret's own scratch, rewritten on every interview step. Not design content,
-	// and waking the healer once per answered question is work for nothing.
-	"**/.caret/.interview.json",
-	// The undo journal: rewritten on every undoable boundary, never design content.
-	"**/.caret/.undo-journal.json",
-	// Correction-offer bookkeeping — observation, like the provenance log.
-	"**/.caret/.corrections-state.json",
-	// The generate-and-pick set's own state. The variant PAGES are healable
-	// pages and deliberately not ignored; the scratch is Caret's bookkeeping.
-	"**/.caret/.variants.json",
-	// The checker's latest results — derived observation, rewritten per run.
-	"**/.caret/.checks-results.json",
+/** Directory names, at any depth under `.caret/`, that hold nothing healable. */
+const IGNORED_DIR_SEGMENTS = new Set([
+	"node_modules",
 	// Poster frames Caret extracts from videos. Derived from the asset beside
 	// them, so they are neither design content nor something to index as assets
 	// in their own right — a poster with its own @tag would be a second name for
 	// the same decision.
-	"**/.caret/assets/.posters/**",
-	"**/*.tmp",
-]
+	".posters",
+])
+
+/**
+ * Top-level directories of `.caret/` that are Caret's own output.
+ *
+ * Only top-level: `lib` here is the generated canvas modules, but a user's
+ * `components/lib/Button.tsx` is a component like any other and must heal.
+ */
+const IGNORED_TOP_DIRS = new Set(["lib", "thumbnails"])
+
+/** Files Caret itself owns and regenerates. Healing them would be circular. */
+const IGNORED_FILES = new Set([
+	"vite.log",
+	// Generated from foundation.json by Caret itself — healing it would loop:
+	// tokens change → theme regenerated → healer wakes → regenerates again.
+	"caret-theme.css",
+	"caret-fonts.css",
+	"canvas-layout.json",
+	".sync-pending.json",
+	// Mapping metadata Caret writes during sync — versioned, but not healable
+	// content, and waking the healer once per recorded mapping is noise.
+	"sync-manifest.json",
+	".provenance.jsonl",
+	".mcp.json",
+	// Caret's own scratch, rewritten on every interview step. Not design content,
+	// and waking the healer once per answered question is work for nothing.
+	".interview.json",
+	// The undo journal: rewritten on every undoable boundary, never design content.
+	".undo-journal.json",
+	// Correction-offer bookkeeping — observation, like the provenance log.
+	".corrections-state.json",
+	// The generate-and-pick set's own state. The variant PAGES are healable
+	// pages and deliberately not ignored; the scratch is Caret's bookkeeping.
+	".variants.json",
+	// The checker's latest results — derived observation, rewritten per run.
+	".checks-results.json",
+])
+
+/**
+ * Whether the healer should stay asleep for a path.
+ *
+ * A predicate, not a glob list: **chokidar 4 dropped glob support in `ignored`**
+ * and compares a string entry literally, so the `"**\/node_modules/**"` this
+ * file used to pass matched nothing at all. Everything was watched —
+ * `.caret/node_modules` (1,400 files that Vite writes into as it optimises
+ * deps), and every file listed here that Caret regenerates. Reproduce in ten
+ * lines if you ever doubt it: watch a dir with the glob in `ignored` and touch
+ * `node_modules/.vite/deps/react.js`; the add event fires.
+ */
+export function isIgnoredPath(caretDir: string, target: string): boolean {
+	const rel = path.relative(caretDir, target)
+	// Outside the tree, or the root itself — nothing to say about it.
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false
+	if (rel.endsWith(".tmp")) return true
+
+	const parts = rel.split(path.sep)
+	if (IGNORED_TOP_DIRS.has(parts[0])) return true
+	// A directory event names the directory itself, so the last segment counts too.
+	if (parts.some((segment) => IGNORED_DIR_SEGMENTS.has(segment))) return true
+	// Caret's own files all sit at the top of `.caret/`; a page called
+	// `.variants.json` deeper in the tree is not one of them.
+	return parts.length === 1 && IGNORED_FILES.has(parts[0])
+}
 
 export interface WatchAndHealOptions {
 	projectPath: string
@@ -123,7 +159,7 @@ export class WatchAndHeal {
 		const caretDir = path.join(this.options.projectPath, ".caret")
 
 		this.watcher = chokidar.watch(caretDir, {
-			ignored: IGNORED,
+			ignored: (target: string) => isIgnoredPath(caretDir, target),
 			ignoreInitial: true,
 			awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
 			// Polling, deliberately: FSEvents drops events for files (and even the
@@ -136,6 +172,8 @@ export class WatchAndHeal {
 			interval: 1000,
 		})
 
+		this.watcher.on("error", (err) => Logger.warn(`[heal] watcher error: ${err}`))
+		this.watcher.on("ready", () => void this.healWhatWasAlreadyThere(caretDir))
 		this.watcher.on("add", (file) => this.schedule(file, "create"))
 		this.watcher.on("change", (file) => this.schedule(file, "write"))
 		// A new directory's files can be created before chokidar's watcher for
@@ -162,6 +200,75 @@ export class WatchAndHeal {
 		})
 
 		Logger.info(`[heal] watching ${caretDir}`)
+	}
+
+	/**
+	 * Heals everything that was already on disk when the watcher opened its eyes.
+	 *
+	 * `ignoreInitial: true` suppresses events for every file present at the
+	 * initial scan — and because that scan is asynchronous, "present" includes
+	 * files written *while it runs*. Nothing in that window ever produces an
+	 * event, so nothing in it is ever healed. The `addDir` catch-up below does
+	 * not help: the directory is in the initial scan too, so no `addDir` fires
+	 * either.
+	 *
+	 * That window is exactly when unhealed content is most likely to exist. A
+	 * project cloned from a teammate, updated by `git pull`, or written by an
+	 * agent while Caret was closed opens with pages that carry no caret-ids —
+	 * and every click on them resolves to nothing, which reads as "the editor
+	 * doesn't work" rather than "this page was never healed". Certification only
+	 * missed it because the scenario that writes an unhealed page ran minutes
+	 * after launch, long past the race; running it first fails every time.
+	 *
+	 * A sweep is safe to repeat: the codemod is idempotent, so a project that is
+	 * already healed is read and not written, produces no HMR and no provenance.
+	 */
+	private async healWhatWasAlreadyThere(caretDir: string): Promise<void> {
+		let healed = 0
+		let seen = 0
+		for (const file of await this.healableFilesUnder(caretDir)) {
+			seen++
+			try {
+				this.markSelfWrite(file)
+				const result = await precomputeAndApply(file)
+				if (result.modified) {
+					healed++
+					await recordEdit(this.options.projectPath, {
+						actor: "caret",
+						action: "heal",
+						file,
+						note: "healed at open — written while Caret was not watching",
+					})
+					this.options.onHealed?.(file)
+				} else {
+					this.selfWrites.delete(file)
+				}
+				// Whoever wrote the page, an import of a catalog component still has
+				// to become true — and a page pulled from git is the likeliest place
+				// for one that was never installed here.
+				this.options.onPageWritten?.(file)
+			} catch (err) {
+				this.selfWrites.delete(file)
+				Logger.debug(`[heal] could not heal ${file} at open: ${err}`)
+			}
+		}
+		Logger.info(`[heal] opening sweep: ${healed} of ${seen} page file(s) needed healing`)
+	}
+
+	/** Every healable file under `.caret/`, skipping what the watcher itself skips. */
+	private async healableFilesUnder(dir: string): Promise<string[]> {
+		const found: string[] = []
+		const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])
+		for (const entry of entries) {
+			const full = path.join(dir, entry.name)
+			if (isIgnoredPath(path.join(this.options.projectPath, ".caret"), full)) continue
+			if (entry.isDirectory()) {
+				found.push(...(await this.healableFilesUnder(full)))
+			} else if (entry.isFile() && isHealable(full)) {
+				found.push(path.resolve(full))
+			}
+		}
+		return found
 	}
 
 	async stop(): Promise<void> {
