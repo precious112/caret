@@ -166,7 +166,7 @@ function Describe({ initial, busy, onSubmit }: { initial: string; busy: boolean;
 						onSubmit(text)
 					}
 				}}
-				placeholder="A dashboard where support teams triage tickets all day. Dark, calm, nothing playful."
+				placeholder="A dashboard where support teams triage tickets all day. Dark, calm, serious."
 				ref={ref}
 				value={text}
 			/>

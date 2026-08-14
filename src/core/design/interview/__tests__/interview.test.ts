@@ -316,6 +316,27 @@ describe("the Presets tab (deterministic)", () => {
 		assert.deepEqual(tagsFromDescription("we condense reports"), [])
 	})
 
+	it("never reads a quality the user ruled out as one they asked for", () => {
+		// Matching is on the word, not the meaning, so a negated quality used to
+		// seed its own tag — the opposite of what was said, which is worse than
+		// reading nothing. The product's own placeholder demonstrated it.
+		assert.deepEqual(tagsFromDescription("Dark, calm, nothing playful."), ["calm", "dark"])
+		assert.ok(!tagsFromDescription("clean and modern, never playful").includes("playful"))
+		assert.ok(!tagsFromDescription("a serious tool, not a consumer toy").includes("consumer"))
+		assert.ok(!tagsFromDescription("warm and human, without the retro styling").includes("retro"))
+	})
+
+	it("keeps the qualities named before a negation later in the same sentence", () => {
+		// Clause-scoped, not whole-string: a late negation must not discard what
+		// came before it, or one careless phrase empties the whole narrowing.
+		assert.deepEqual(tagsFromDescription("Editorial and minimal, calm and considered rather than loud."), [
+			"calm",
+			"considered",
+			"editorial",
+			"minimal",
+		])
+	})
+
 	it("builds a complete foundation from chosen ids and refuses incomplete ones", () => {
 		const typeface = TYPEFACE_PAIRINGS[0]
 		const foundation = buildFoundation(DESCRIPTION, {
