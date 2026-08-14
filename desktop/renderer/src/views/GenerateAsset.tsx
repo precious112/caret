@@ -1,17 +1,25 @@
 /**
- * Generating an asset: answer two questions, look at things, point at one.
+ * Generating an asset: say what you want, answer what Caret still needs, pick one.
  *
- * **There is no prompt box on this surface and there is not going to be one.**
- * That is the whole design, and it is Phase 6.5's argument unchanged: a text
- * field asking someone to describe the image they want hands the taste problem
- * straight back to the person who does not have it, and the vocabulary they
- * reach for when cornered — cinematic, 8k, hyperdetailed — is precisely what
- * makes generated imagery legible as generated.
+ * **This screen used to have no way of saying what the thing was.** It asked two
+ * questions — what is it for, how loud should it be — narrowed a library of
+ * fourteen pre-written prompt blocks, and each block carried its own hardcoded
+ * subject. Six objects existed. Ask for a paperclip and a ceramic vase came
+ * back, because the subject was an array indexed by variant.
  *
- * So the user's whole contribution is: what is this for, how loud should it be,
- * which of these do you like, what should it be called. Every one of those is
- * answerable without design vocabulary, and pointing at a picture needs none at
- * all.
+ * The rule it was built to said the user is never handed a prompt box, and that
+ * rule overshot a correct argument. The argument is about **style**: nobody
+ * should be made to describe lighting, framing or mood to get an image, because
+ * that hands the taste problem straight back to the person who does not have it,
+ * and the words people reach for when cornered — cinematic, 8k, hyperdetailed —
+ * are precisely what makes generated imagery legible as generated.
+ *
+ * But *what object is it* was never a taste question. It is a content question,
+ * and the user is the only party who can answer it. Opening this screen means
+ * already having something in mind. So they say it, Caret asks only what it
+ * genuinely still needs, and every decision about how the thing looks is still
+ * composed from the project's foundation. The mark lane below already worked
+ * this way and its comment says so; the image lane simply never did.
  *
  * Everything shown here is rendered against **this project's own foundation**.
  * A picker showing stock previews would be arguing against the library's only
@@ -21,9 +29,11 @@ import { useCallback, useEffect, useState } from "react"
 
 import type {
 	AssetEntryWire,
+	AssetRequestWire,
+	ClarifyQuestionWire,
 	GeneratedVariantWire,
 	GenerateProgressWire,
-	GenerationQuestionWire,
+	GenerationKindWire,
 	MarkOutcomeWire,
 	Model3dOutcomeWire,
 	ProjectState,
@@ -33,62 +43,109 @@ import type {
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 
-type Stage = "questions" | "recipe" | "variant" | "name" | "mark" | "model3d"
+type Stage = "ask" | "clarify" | "recipe" | "variant" | "name" | "mark" | "model3d"
+
+/** The four things this screen makes. Picked, never guessed from prose. */
+const KINDS: Array<{ id: GenerationKindWire; label: string; hint: string }> = [
+	{ id: "image", label: "A photograph or image", hint: "For a hero, a card, or anywhere a picture goes." },
+	{ id: "texture", label: "A texture or pattern", hint: "Grain, a wash, a halftone. Free, instant, and tunable after." },
+	{ id: "mark", label: "A logo or mark", hint: "Drawn as vector, rendered, corrected against its own render." },
+	{ id: "object3d", label: "A 3D object", hint: "Built from an image, then optimized so it does not weigh the page down." },
+]
+
+/** Ratios the image lane composes for. */
+const IMAGE_ASPECTS = ["3:2", "16:9", "1:1", "4:5", "21:9", "9:16"]
 
 export function GenerateAsset({ project, onClose }: { project: ProjectState; onClose(saved: string | null): void }) {
-	const [questions, setQuestions] = useState<GenerationQuestionWire[]>([])
-	const [answers, setAnswers] = useState<Record<string, string>>({})
-	const [stage, setStage] = useState<Stage>("questions")
-	const [step, setStep] = useState(0)
+	const [stage, setStage] = useState<Stage>("ask")
+	const [kind, setKind] = useState<GenerationKindWire>("image")
+	const [text, setText] = useState("")
+	const [transparent, setTransparent] = useState(false)
+
+	const [questions, setQuestions] = useState<ClarifyQuestionWire[]>([])
+	const [replies, setReplies] = useState<Record<string, string>>({})
 
 	const [recipes, setRecipes] = useState<RecipeCardWire[]>([])
 	const [recipe, setRecipe] = useState<RecipeCardWire | null>(null)
-	const [aspect, setAspect] = useState<string>("")
+	const [aspect, setAspect] = useState<string>(IMAGE_ASPECTS[0])
 	const [variants, setVariants] = useState<GeneratedVariantWire[]>([])
 	const [chosen, setChosen] = useState<number | null>(null)
 	const [tag, setTag] = useState("")
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
-	useEffect(() => {
-		void invoke("generate:questions").then((result) => setQuestions(result ?? []))
-	}, [])
+	const request = useCallback(
+		(answers?: Record<string, string>): AssetRequestWire => ({
+			kind,
+			text: text.trim(),
+			...(kind === "image" && transparent ? { transparent: true } : {}),
+			...(answers && Object.keys(answers).length > 0 ? { answers } : {}),
+		}),
+		[kind, text, transparent],
+	)
 
-	const answer = useCallback(
-		async (questionId: string, choiceId: string) => {
-			const next = { ...answers, [questionId]: choiceId }
-			setAnswers(next)
-
-			// Marks and 3D are not variant lanes — one result, minutes of waiting —
-			// so they branch to their own flows and the volume question never asks.
-			if (questionId === "purpose" && (choiceId === "mark" || choiceId === "object3d")) {
-				setStage(choiceId === "mark" ? "mark" : "model3d")
-				return
-			}
-
-			if (step + 1 < questions.length) {
-				setStep(step + 1)
-				return
-			}
-
+	const runTakes = useCallback(
+		async (ratio: string, answers: Record<string, string>) => {
+			setAspect(ratio)
+			setChosen(null)
+			setVariants([])
 			setBusy(true)
+			setStage("variant")
 			try {
-				const cards = (await invoke("generate:recipes", project.path, next)) ?? []
-				setRecipes(cards)
-				setStage("recipe")
+				setVariants((await invoke("generate:takes", project.path, { ...request(answers) }, ratio)) ?? [])
 			} finally {
 				setBusy(false)
 			}
 		},
-		[answers, questions.length, project.path, step],
+		[project.path, request],
 	)
+
+	/**
+	 * What happens when the user has said their piece.
+	 *
+	 * Marks and 3D objects run their own lanes — one result, minutes of waiting,
+	 * their own progress to watch — so they branch here rather than pretending to
+	 * be a three-take pick. Textures have no subject to name, so they keep the
+	 * recipe cards, where sliders beat a sentence.
+	 */
+	const begin = useCallback(async () => {
+		if (!text.trim()) return
+		setError(null)
+
+		if (kind === "mark") return setStage("mark")
+		if (kind === "object3d") return setStage("model3d")
+
+		if (kind === "texture") {
+			setBusy(true)
+			try {
+				setRecipes((await invoke("generate:recipes", project.path, {}, "texture")) ?? [])
+				setStage("recipe")
+			} finally {
+				setBusy(false)
+			}
+			return
+		}
+
+		setBusy(true)
+		try {
+			const result = await invoke("generate:clarify", project.path, request())
+			if (result && !result.sufficient && result.questions.length > 0) {
+				setQuestions(result.questions)
+				setReplies({})
+				setStage("clarify")
+				setBusy(false)
+				return
+			}
+		} catch {
+			// A clarifier that cannot answer must not stop someone generating.
+		}
+		setBusy(false)
+		await runTakes(aspect, {})
+	}, [kind, text, project.path, request, runTakes, aspect])
 
 	const chooseRecipe = useCallback(
 		async (card: RecipeCardWire, withAspect?: string) => {
-			// An unavailable lane is shown, never picked. The card says what is
-			// missing; clicking through to an empty variant screen would not.
 			if (card.unavailable) return
-
 			const ratio = withAspect ?? card.aspects[0]
 			setRecipe(card)
 			setAspect(ratio)
@@ -97,28 +154,32 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			setBusy(true)
 			setStage("variant")
 			try {
-				setVariants((await invoke("generate:variants", project.path, card.id, answers, ratio, 8)) ?? [])
+				setVariants((await invoke("generate:variants", project.path, card.id, {}, ratio, 8)) ?? [])
 			} finally {
 				setBusy(false)
 			}
 		},
-		[answers, project.path],
+		[project.path],
 	)
 
 	const save = useCallback(async () => {
-		if (!recipe || chosen === null) return
+		if (chosen === null) return
 		setBusy(true)
 		setError(null)
 		try {
-			const result = await invoke("generate:accept", project.path, recipe.id, answers, aspect, chosen, tag)
+			const result =
+				kind === "texture" && recipe
+					? await invoke("generate:accept", project.path, recipe.id, {}, aspect, chosen, tag)
+					: await invoke("generate:acceptTake", project.path, request(replies), aspect, chosen, tag)
 			if (result?.ok) onClose(result.tag ?? tag)
 			else setError(result?.error ?? "Could not save that.")
 		} finally {
 			setBusy(false)
 		}
-	}, [recipe, chosen, project.path, answers, aspect, tag, onClose])
+	}, [chosen, kind, recipe, project.path, aspect, tag, request, replies, onClose])
 
-	const question = questions[step]
+	const aspects = kind === "texture" && recipe ? recipe.aspects : IMAGE_ASPECTS
+	const regenerate = () => (kind === "texture" && recipe ? chooseRecipe(recipe, aspect) : runTakes(aspect, replies))
 
 	return (
 		<div className="absolute inset-0 z-40 flex flex-col bg-shell-bg" data-testid="generate-asset">
@@ -126,36 +187,30 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 				<div>
 					<h1 className="text-lg font-semibold">Generate an asset</h1>
 					<p className="text-sm text-shell-muted">
-						{stage === "questions"
-							? "Two questions, then some things to look at."
-							: stage === "recipe"
-								? "Every one of these is built from your project's own colours."
-								: stage === "variant"
-									? "Point at the one you like."
-									: stage === "mark"
-										? "The model draws it, sees its own render, and corrects — three rounds."
-										: stage === "model3d"
-											? "Built from an image in your library, then optimized to a page-friendly weight."
-											: "Give it a name you would type."}
+						{stage === "ask"
+							? "Say what you want. Caret will ask if it needs anything more."
+							: stage === "clarify"
+								? "A couple of things that would make this better."
+								: stage === "recipe"
+									? "Every one of these is built from your project's own colours."
+									: stage === "variant"
+										? "Three takes of the same thing. Point at the one you like."
+										: stage === "mark"
+											? "The model draws it, sees its own render, and corrects — three rounds."
+											: stage === "model3d"
+												? "Built from an image in your library, then optimized to a page-friendly weight."
+												: "Give it a name you would type."}
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
-					{stage !== "questions" && (
+					{stage !== "ask" && (
 						<button
 							className="rounded-md border border-shell-border px-3 py-1.5 text-sm"
 							data-testid="generate-back"
 							onClick={() => {
 								if (stage === "name") setStage("variant")
-								else if (stage === "variant") setStage("recipe")
-								else if (stage === "mark" || stage === "model3d") {
-									// These branched straight off the purpose question, so Back
-									// returns there — not to a volume question never asked.
-									setStage("questions")
-									setStep(0)
-								} else {
-									setStage("questions")
-									setStep(Math.max(0, questions.length - 1))
-								}
+								else if (stage === "variant") setStage(kind === "texture" ? "recipe" : "ask")
+								else setStage("ask")
 							}}
 							type="button">
 							Back
@@ -171,36 +226,145 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			</header>
 
 			<div className="flex-1 overflow-y-auto px-8 py-8">
-				{stage === "questions" && question && (
-					<section className="mx-auto max-w-2xl" data-testid="generate-question">
-						<h2 className="text-xl font-semibold">{question.question}</h2>
-						<p className="mt-1 text-sm text-shell-muted">{question.why}</p>
-						<div className="mt-6 flex flex-col gap-2">
-							{question.choices.map((choice) => (
+				{stage === "ask" && (
+					<section className="mx-auto max-w-2xl" data-testid="generate-ask">
+						<h2 className="text-xl font-semibold">What are you making?</h2>
+						<div className="mt-4 grid grid-cols-2 gap-2">
+							{KINDS.map((option) => (
 								<button
-									className="rounded-lg border border-shell-border p-4 text-left hover:border-caret-accent disabled:opacity-50"
-									data-generate-choice={choice.id}
-									disabled={busy}
-									key={choice.id}
-									onClick={() => answer(question.id, choice.id)}
+									className={cn(
+										"rounded-lg border p-3 text-left",
+										kind === option.id
+											? "border-caret-accent"
+											: "border-shell-border hover:border-caret-accent",
+									)}
+									data-generate-kind={option.id}
+									key={option.id}
+									onClick={() => setKind(option.id)}
 									type="button">
-									<span className="block text-sm font-medium">{choice.label}</span>
-									<span className="mt-0.5 block text-xs text-shell-muted">{choice.hint}</span>
+									<span className="block text-sm font-medium">{option.label}</span>
+									<span className="mt-0.5 block text-xs text-shell-muted">{option.hint}</span>
 								</button>
 							))}
 						</div>
-						<p className="mt-6 text-xs text-shell-muted">
-							Question {step + 1} of {questions.length}
+
+						<label className="mt-8 block text-sm font-medium" htmlFor="generate-request">
+							{kind === "texture" ? "What is it for?" : "What is it?"}
+						</label>
+						<p className="mt-1 text-xs text-shell-muted">
+							In your own words. Say as much or as little as you like — Caret decides how it is lit, framed and
+							coloured from your foundation.
 						</p>
+						<textarea
+							className="mt-2 w-full resize-none rounded-md border border-shell-border bg-transparent px-3 py-2 text-sm outline-none focus:border-caret-accent"
+							data-testid="generate-request"
+							id="generate-request"
+							onChange={(event) => setText(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void begin()
+							}}
+							placeholder={
+								kind === "mark"
+									? "a broken ring of twelve dashes"
+									: kind === "object3d"
+										? "a ceramic mug with a simple silhouette"
+										: "a stainless steel ruler and a yellow pencil"
+							}
+							rows={3}
+							value={text}
+						/>
+
+						{kind === "image" && (
+							<label className="mt-4 flex items-center gap-2 text-sm">
+								<input
+									checked={transparent}
+									data-testid="generate-transparent"
+									onChange={(event) => setTransparent(event.target.checked)}
+									type="checkbox"
+								/>
+								<span>
+									No background
+									<span className="ml-2 text-xs text-shell-muted">
+										Cut out clean, so it sits on any surface.
+									</span>
+								</span>
+							</label>
+						)}
+
+						<button
+							className="mt-6 rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+							data-testid="generate-begin"
+							disabled={busy || !text.trim()}
+							onClick={begin}
+							type="button">
+							{busy ? "Thinking…" : "Continue"}
+						</button>
+					</section>
+				)}
+
+				{stage === "clarify" && (
+					<section className="mx-auto max-w-2xl" data-testid="generate-clarify">
+						<p className="text-sm text-shell-muted">
+							You asked for <span className="text-shell-fg">{text.trim()}</span>.
+						</p>
+						<div className="mt-6 flex flex-col gap-6">
+							{questions.map((question) => (
+								<div data-generate-clarify={question.id} key={question.id}>
+									<h3 className="text-base font-medium">{question.question}</h3>
+									<p className="mt-0.5 text-xs text-shell-muted">{question.why}</p>
+									<div className="mt-2 flex flex-wrap gap-2">
+										{question.suggestions.map((suggestion) => (
+											<button
+												className={cn(
+													"rounded-md border px-2 py-1 text-xs",
+													replies[question.id] === suggestion
+														? "border-caret-accent text-caret-accent"
+														: "border-shell-border",
+												)}
+												key={suggestion}
+												onClick={() => setReplies({ ...replies, [question.id]: suggestion })}
+												type="button">
+												{suggestion}
+											</button>
+										))}
+									</div>
+									{/* Suggestions are fast paths, never the whole answer. */}
+									<input
+										className="mt-2 w-full rounded-md border border-shell-border bg-transparent px-3 py-2 text-sm outline-none"
+										data-generate-clarify-input={question.id}
+										onChange={(event) => setReplies({ ...replies, [question.id]: event.target.value })}
+										placeholder="or say it yourself"
+										value={replies[question.id] ?? ""}
+									/>
+								</div>
+							))}
+						</div>
+						<div className="mt-8 flex items-center gap-3">
+							<button
+								className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+								data-testid="generate-clarify-done"
+								disabled={busy}
+								onClick={() => runTakes(aspect, replies)}
+								type="button">
+								Generate
+							</button>
+							{/* Answering is optional. Nothing here is a gate. */}
+							<button
+								className="text-xs text-shell-muted hover:text-shell-fg"
+								data-testid="generate-clarify-skip"
+								disabled={busy}
+								onClick={() => runTakes(aspect, {})}
+								type="button">
+								Skip — just make it
+							</button>
+						</div>
 					</section>
 				)}
 
 				{stage === "recipe" && (
 					<section className="mx-auto max-w-4xl" data-testid="generate-recipes">
 						{recipes.length === 0 ? (
-							<p className="text-sm text-shell-muted">
-								Nothing in the library fits that yet. Go back and try a different answer.
-							</p>
+							<p className="text-sm text-shell-muted">Nothing in the library fits that yet.</p>
 						) : (
 							<div className="grid grid-cols-2 gap-4">
 								{recipes.map((card) => (
@@ -218,11 +382,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 										{/*
 										 * On the project's surface, not the chrome's. Several
 										 * recipes are transparent by design, and against this
-										 * dark shell they showed nothing at all — the picker
-										 * offered four options and two of them looked like
-										 * empty cards. It is also the only honest preview:
-										 * what is being chosen is how this looks on *their*
-										 * page, not on Caret's.
+										 * dark shell they showed nothing at all.
 										 */}
 										<span className="block" style={{ backgroundColor: card.surface }}>
 											<img alt="" className="block w-full" src={card.specimen} />
@@ -240,17 +400,11 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 					</section>
 				)}
 
-				{stage === "variant" && recipe && (
+				{stage === "variant" && (
 					<section className="mx-auto max-w-4xl" data-testid="generate-variants">
 						<div className="mb-4 flex items-center gap-2">
 							<span className="text-xs text-shell-muted">Proportions</span>
-							{/*
-							 * A real control rather than a text field, and only the ratios
-							 * this recipe was composed for. Offering every ratio would let
-							 * someone ask a 21:9 divider for a square, which is not a
-							 * variation of the recipe — it is a different one nobody wrote.
-							 */}
-							{recipe.aspects.map((option) => (
+							{aspects.map((option) => (
 								<button
 									className={cn(
 										"rounded-md border px-2 py-1 text-xs",
@@ -259,7 +413,9 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 									data-generate-aspect={option}
 									disabled={busy}
 									key={option}
-									onClick={() => chooseRecipe(recipe, option)}
+									onClick={() =>
+										kind === "texture" && recipe ? chooseRecipe(recipe, option) : runTakes(option, replies)
+									}
 									type="button">
 									{option}
 								</button>
@@ -268,25 +424,19 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 
 						{busy && (
 							<p className="mb-3 text-xs text-shell-muted" data-testid="generate-working">
-								{recipe.lane === "raster"
-									? "Generating four photographs on your own key. About fifteen seconds each, running together."
-									: "Composing…"}
+								{kind === "texture"
+									? "Composing…"
+									: "Generating three takes on your own key. About fifteen seconds each, running together."}
 							</p>
 						)}
 
-						{/*
-						 * Fewer options means bigger ones. Eight cheap generator variants
-						 * read fine at four across; four photographs do not — at that size
-						 * you can see that they differ and not whether any is any good,
-						 * which is the only question this screen asks.
-						 */}
 						<div className={cn("grid gap-3", variants.length > 4 ? "grid-cols-4" : "grid-cols-2")}>
 							{variants.map((variant) =>
 								variant.error ? (
-									// The lane's own words, per variant. A content refusal on
-									// one framing says nothing about the other three, and
-									// collapsing them into one message would throw away good
-									// images to report a bad one.
+									// The lane's own words, per take. A content refusal on one
+									// framing says nothing about the other two, and collapsing
+									// them into one message would throw away good images to
+									// report a bad one.
 									<p
 										className="rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
 										data-generate-variant-error={variant.variant}
@@ -303,7 +453,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 										key={variant.variant}
 										onClick={() => {
 											setChosen(variant.variant)
-											setTag(suggest(recipe, answers))
+											setTag(suggestTag(text))
 											setStage("name")
 										}}
 										type="button">
@@ -319,14 +469,14 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							className="mt-4 text-xs text-shell-muted hover:text-shell-fg"
 							data-testid="generate-more"
 							disabled={busy}
-							onClick={() => chooseRecipe(recipe, aspect)}
+							onClick={regenerate}
 							type="button">
-							None of these — show me the recipe again
+							None of these — try again
 						</button>
 					</section>
 				)}
 
-				{stage === "name" && recipe && chosen !== null && (
+				{stage === "name" && chosen !== null && (
 					<section className="mx-auto max-w-lg" data-testid="generate-name">
 						<span
 							className="block overflow-hidden rounded-lg border border-shell-border"
@@ -363,11 +513,21 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 					</section>
 				)}
 
-				{stage === "mark" && <MarkFlow onClose={onClose} project={project} />}
+				{stage === "mark" && <MarkFlow onClose={onClose} project={project} subject={text.trim()} />}
 				{stage === "model3d" && <Model3dFlow onClose={onClose} project={project} />}
 			</div>
 		</div>
 	)
+}
+
+/** A tag from the user's own words, so the field opens with something usable. */
+function suggestTag(text: string): string {
+	const words = text
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, "")
+		.split(/\s+/)
+		.filter((word) => word && !["a", "an", "the", "of", "and", "with", "on"].includes(word))
+	return words.slice(0, 3).join("-") || "asset"
 }
 
 /**
@@ -383,8 +543,17 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
  * the model is shown it, so the user watches the correction happen instead of
  * a spinner claiming progress it cannot show.
  */
-function MarkFlow({ project, onClose }: { project: ProjectState; onClose(saved: string | null): void }) {
-	const [subject, setSubject] = useState("")
+function MarkFlow({
+	project,
+	onClose,
+	subject: initialSubject = "",
+}: {
+	project: ProjectState
+	onClose(saved: string | null): void
+	/** What the user already said on the ask screen. Asking again would be asking twice. */
+	subject?: string
+}) {
+	const [subject, setSubject] = useState(initialSubject)
 	const [busy, setBusy] = useState(false)
 	const [progress, setProgress] = useState("")
 	const [rounds, setRounds] = useState<Array<{ round: number; preview: string }>>([])
@@ -844,18 +1013,4 @@ function suggestMarkTag(subject: string): string {
 		.slice(0, 32)
 		.replace(/-+$/g, "")
 	return slug || "mark"
-}
-
-/**
- * The name the field opens with.
- *
- * Mirrors `proposeTag` in core rather than calling it — this is renderer code,
- * and the renderer importing main-process modules is a compile error by design.
- * The authority is still core: `accept` falls back to its version when the field
- * is empty, so the two can only disagree about a default nobody kept.
- */
-function suggest(recipe: RecipeCardWire, answers: Record<string, string>): string {
-	const purpose = answers.purpose
-	const prefix = purpose === "background" ? "hero" : purpose === "divider" ? "divider" : purpose === "overlay" ? "grain" : ""
-	return [prefix, recipe.id].filter(Boolean).join("-").slice(0, 40).replace(/-+$/, "")
 }

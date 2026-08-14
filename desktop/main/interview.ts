@@ -57,7 +57,23 @@ export interface PresentedCandidate {
 	baseSize: number
 }
 
-export type InterviewPrompt = QuestionPrompt | OptionsPrompt
+/**
+ * Takes to point at, for an asset the agent proposed in conversation.
+ *
+ * Its own kind rather than an `options` prompt: those carry typefaces and
+ * palettes because they present foundations. These are pictures, and the whole
+ * interaction is looking at three of them.
+ */
+export interface TakesPrompt extends InterviewPromptBase {
+	kind: "takes"
+	title: string
+	subtitle?: string
+	/** Data URLs. Nothing is on disk until one is picked. */
+	takes: Array<{ index: number; preview: string; error?: string }>
+	surface: string
+}
+
+export type InterviewPrompt = QuestionPrompt | OptionsPrompt | TakesPrompt
 
 interface Pending {
 	prompt: InterviewPrompt
@@ -69,7 +85,7 @@ const pending = new Map<string, Pending>()
 /** Sends a prompt to the chrome and resolves with whatever the user picks. */
 export function askUser(
 	send: (prompt: InterviewPrompt) => void,
-	prompt: Omit<QuestionPrompt, "id"> | Omit<OptionsPrompt, "id">,
+	prompt: Omit<QuestionPrompt, "id"> | Omit<OptionsPrompt, "id"> | Omit<TakesPrompt, "id">,
 ): Promise<string | null> {
 	const id = randomUUID()
 	const full = { ...prompt, id } as InterviewPrompt

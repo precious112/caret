@@ -44,6 +44,16 @@ export { foundationWords, keyWords, paletteWords } from "./raster/palette-words"
 export { RASTER_RECIPES } from "./raster/recipes"
 export { ALL_RECIPES, ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
 export {
+	type AssetRequest,
+	type ClarifyQuestion,
+	type ClarifyResult,
+	clarifyRequest,
+	composeAssetRequest,
+	type GenerationKind,
+	recipeForRequest,
+	SHARED_AVOID,
+} from "./request"
+export {
 	ASPECTS,
 	type AssetPurpose,
 	type AssetRecipe,

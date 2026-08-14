@@ -48,6 +48,19 @@ export function FoundationView({
 	// Caret's own flows, there is a tool call blocked on it.
 	useEffect(() => on("interview:prompt", () => setMode("agent")), [])
 
+	// And a prompt that arrived *before* this view existed still has to land.
+	// The event is what switches the surface here, so when the user was anywhere
+	// but Foundation this component mounts a tick too late and its listener above
+	// never fires — the agent then blocks forever on a question that was never
+	// shown. Certification missed it for months because the scenario that asks
+	// one always ran after a scenario that left this view already mounted; run it
+	// first and it fails every time.
+	useEffect(() => {
+		void invoke("interview:pending").then((waiting) => {
+			if (waiting) setMode("agent")
+		})
+	}, [])
+
 	// Re-running on an existing foundation: tokens are live bindings, so the
 	// reach of a change is a measurable number, not a vibe — measure it.
 	useEffect(() => {

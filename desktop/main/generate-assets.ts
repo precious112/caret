@@ -14,26 +14,34 @@
  * §4.6 asset pipeline so a generated asset is an asset like any other.
  */
 import {
+	type AssetRecipe,
+	type AssetRequest,
 	addGeneratedAsset,
+	type ClarifyResult,
+	clarifyRequest,
 	composeVariants,
 	defaultAspect,
 	derivePalette,
 	describeVariant,
+	FREE_LANES,
 	findAssetRecipe,
 	findGenerator,
 	GENERATION_QUESTIONS,
 	GeminiImages,
 	type GenerationAnswers,
+	getBackend,
 	lanesWithRaster,
 	NO_RASTER_REASON,
 	narrowForAnswers,
 	proposeTag,
 	readFoundationTokens,
+	recipeForRequest,
 	resolveRasterConfig,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
 import { keyOutPhotograph, postProcessPhotograph } from "./image-post"
+import { getPrefs } from "./prefs"
 import { getSecret } from "./secrets"
 
 /**
@@ -87,7 +95,7 @@ export function generationQuestions(): GenerationQuestionWire[] {
  * every card at one shared ratio would be tidier and would misrepresent half of
  * them — a section divider is 21:9 because that is what it is for.
  */
-export async function recipeCards(projectPath: string, answers: GenerationAnswers): Promise<RecipeCardWire[]> {
+export async function recipeCards(projectPath: string, answers: GenerationAnswers, kind?: string): Promise<RecipeCardWire[]> {
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
 
 	const palette = derivePalette(tokens)
@@ -97,7 +105,8 @@ export async function recipeCards(projectPath: string, answers: GenerationAnswer
 	// The catalogue is shown whole and the unavailable ones say why. Quietly
 	// offering fewer options than the library has teaches the user nothing about
 	// what exists or what it would take to have it.
-	return narrowForAnswers(answers, tokens, lanesWithRaster(true)).map((recipe) => {
+	const lanes = kind === "texture" ? FREE_LANES : lanesWithRaster(true)
+	return narrowForAnswers(answers, tokens, lanes).map((recipe) => {
 		const aspect = defaultAspect(recipe, answers)
 		const [specimen] = composeVariants({ recipe, tokens, aspect, answers, count: 1 })
 		const generator = specimen?.request.lane === "generator" ? findGenerator(specimen.request.generatorId) : undefined
@@ -176,7 +185,7 @@ export async function recipeVariants(
 	const palette = derivePalette(tokens)
 
 	if (recipe.lane === "raster") {
-		return generateRasterVariants(projectPath, recipe.id, answers, aspect, tokens, palette.surface)
+		return generateRasterVariants(projectPath, recipe, answers, aspect, tokens, palette.surface)
 	}
 
 	return composeVariants({ recipe, tokens, aspect, answers, count }).map((variant) => ({
@@ -199,15 +208,14 @@ export async function recipeVariants(
  */
 async function generateRasterVariants(
 	projectPath: string,
-	recipeId: string,
+	recipe: AssetRecipe,
 	answers: GenerationAnswers,
 	aspect: string,
 	tokens: Awaited<ReturnType<typeof readFoundationTokens>>,
 	surface: string,
 ): Promise<GeneratedVariantWire[]> {
 	const config = rasterConfig()
-	const recipe = findAssetRecipe(recipeId)
-	if (!recipe) return []
+	const recipeId = recipe.id
 	if (!config) {
 		return [{ variant: 0, preview: "", width: 0, height: 0, surface, error: NO_RASTER_REASON }]
 	}
@@ -462,4 +470,110 @@ export function suggestedTag(recipeId: string, answers: GenerationAnswers): stri
 function dataUrl(svg: string): string {
 	if (!svg) return ""
 	return `data:image/svg+xml;base64,${Buffer.from(svg, "utf-8").toString("base64")}`
+}
+
+/**
+ * Three takes of what the user actually asked for.
+ *
+ * The request wears a synthetic recipe so everything below this line is the
+ * code that was already here and already right — the concurrency pool that
+ * keeps the burst under the per-minute quota, chroma-key running before the
+ * pick so the picture is the finished cutout, the pending store, the round
+ * cost. What changed is only where the subject comes from.
+ */
+export async function requestTakes(projectPath: string, request: AssetRequest, aspect: string): Promise<GeneratedVariantWire[]> {
+	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+	const palette = derivePalette(tokens)
+
+	// A texture has no subject to name, so there is nothing for the composer to
+	// compose: it is the free deterministic lane, and what varies is parameters.
+	// Routing it through the raster lane would spend the user's credits on the
+	// one kind that was always meant to cost nothing.
+	if (request.kind === "texture") {
+		const recipe = textureRecipe(tokens)
+		if (!recipe) return []
+		return recipeVariants(projectPath, recipe.id, askedAnswers(request), aspect || recipe.aspects[0], 3)
+	}
+
+	const recipe = recipeForRequest(request)
+	const chosen = aspect || recipe.aspects[0]
+
+	if (recipe.lane !== "raster") {
+		// Marks run the authored render-compare loop, which has its own surface
+		// and its own progress. Nothing to compose into takes here.
+		return []
+	}
+	return generateRasterVariants(projectPath, recipe, askedAnswers(request), chosen, tokens, palette.surface)
+}
+
+/**
+ * The texture recipe a request lands on, chosen the same way every time.
+ *
+ * Deterministic because `accept` has to reach the same one: the take the user
+ * pointed at is reproduced from the recipe and the seed, so a different choice
+ * here would hand them a different picture than the one they picked.
+ */
+function textureRecipe(tokens: Awaited<ReturnType<typeof readFoundationTokens>>) {
+	return narrowForAnswers({}, tokens, FREE_LANES)[0]
+}
+
+/** What was asked, in the shape provenance records. Identical for takes and accept. */
+function askedAnswers(request: AssetRequest): GenerationAnswers {
+	return { asked: request.text.trim(), ...(request.answers ?? {}) }
+}
+
+/** Writes the take the user pointed at, with the request kept verbatim. */
+export async function acceptRequestTake(
+	projectPath: string,
+	request: AssetRequest,
+	aspect: string,
+	variant: number,
+	tag: string,
+): Promise<WriteResult & { tag?: string }> {
+	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+
+	if (request.kind === "texture") {
+		const texture = textureRecipe(tokens)
+		if (!texture) return { ok: false, error: "No texture recipe is available." }
+		return acceptVariant(projectPath, texture.id, askedAnswers(request), aspect || texture.aspects[0], variant, tag)
+	}
+
+	const recipe = recipeForRequest(request)
+	const chosen = aspect || recipe.aspects[0]
+	if (recipe.lane !== "raster") return { ok: false, error: "That kind is not accepted here." }
+
+	// The answers double as the provenance record of what was asked and what the
+	// user replied, and `asked` carries their opening words even when nothing was
+	// clarified — that sentence is the one thing only they could have supplied.
+	return acceptRasterVariant(projectPath, recipe, askedAnswers(request), chosen, variant, tag, tokens)
+}
+
+/**
+ * Whether the request needs anything more before it is worth spending on.
+ *
+ * Resolved here rather than in the renderer so the backend choice and the
+ * project's foundation come from the same place everything else reads them.
+ * Any failure means "generate with what we have" — clarification improves a
+ * request, it is not permission to make one.
+ */
+export async function clarifyAssetRequest(projectPath: string, request: AssetRequest): Promise<ClarifyResult> {
+	const prefs = getPrefs()
+	// No backend chosen yet is the common case on a fresh project, and it must
+	// not stop someone generating — they simply get no clarifying questions.
+	if (!prefs.backendId) return { sufficient: true, questions: [] }
+	let backend
+	try {
+		backend = getBackend(prefs.backendId)
+	} catch {
+		return { sufficient: true, questions: [] }
+	}
+
+	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+	return clarifyRequest({
+		backend,
+		workingDirectory: projectPath,
+		request,
+		tokens,
+		model: prefs.backendModel || undefined,
+	})
 }

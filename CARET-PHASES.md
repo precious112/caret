@@ -659,11 +659,23 @@ box again."* Engineering detail in [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.6.
 no texture, and stock imagery is its own kind of generic. Engineering detail in
 [CARET-V2-PLAN.md](./CARET-V2-PLAN.md) §4.7.
 
-**The rule, and it is Phase 6.5's rule unchanged:** the user is never handed a prompt box. They
-answer questions about what they want; **Caret** composes the prompt from a curated recipe
-library; the model returns N variants; the user points at one. A prompt box hands the taste
-problem straight back to the person who does not have it, and "cinematic, 8k, hyperdetailed" is
-precisely what makes generated imagery legible as generated.
+**The rule, corrected 2026-08-14.** It used to read "the user is never handed a prompt box",
+and that overshot a correct argument badly enough to ship a generator that could make six
+objects: the subject was a hardcoded array indexed by variant, so asking for a paperclip
+returned a ceramic vase. The correct argument is about **style** — nobody should be made to
+describe lighting, framing or mood, because that hands the taste problem back to the person who
+does not have it, and "cinematic, 8k, hyperdetailed" is precisely what makes generated imagery
+legible as generated. But *what the thing is* was never a taste question. It is a content
+question and the user is the only party who can answer it.
+
+**So: the user says what they want, Caret asks only what it genuinely still needs, and one
+prompt is composed from the request, the answers and the foundation.** Opening the generator
+means already having something in mind. Clarifying questions are generated against the actual
+request rather than drawn from a fixed list, carry their own *why*, offer suggestions without
+constraining the answer, and are skippable — they improve a request, they are not permission to
+make one. The user names the subject; Caret still owns how it is lit, framed and coloured, and
+the shared quality rules and the mechanical hard requirements (a cutout's flat key colour, a 3D
+source's single object) are never negotiable.
 
 - [x] Curated **asset recipe library** (`src/core/design/asset-library/`), same shape as the
       foundation library: id, name, "use when", kind, tags from the shared vocabulary,
@@ -738,8 +750,13 @@ precisely what makes generated imagery legible as generated.
       recipe, answers, cost, post-processing, and the resolved request verbatim.
 
 **Deliverable:** a developer who cannot take a photograph or draw an icon still ships a landing
-page whose imagery matches its own foundations — without ever writing a prompt, and without
-needing an API key for anything but photographs.
+page whose imagery matches its own foundations — by naming what they need in their own words,
+and without needing an API key for anything but photographs.
+
+**Reachable from the chat as a tool.** `generate_asset` lets the agent make what a design needs
+mid-conversation without navigating any surface: it proposes, the user approves (the paid lanes
+spend their own credits, so an agent must never decide that alone), three takes are generated,
+the user points at one, and the agent gets the `@tag` back to reference.
 
 ---
 

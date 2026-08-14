@@ -12,6 +12,7 @@ import * as path from "path"
 
 import {
 	ASSET_TYPES,
+	type AssetRequest,
 	assetsDirectory,
 	assetUrl,
 	type BackendId,
@@ -44,7 +45,16 @@ import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
 import { resolveNotification } from "./electron-host"
 import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
 import { acceptModel3d, discardModel3d, generateModel3d } from "./generate-3d"
-import { acceptVariant, discardPending, generationQuestions, recipeCards, recipeVariants } from "./generate-assets"
+import {
+	acceptRequestTake,
+	acceptVariant,
+	clarifyAssetRequest,
+	discardPending,
+	generationQuestions,
+	recipeCards,
+	recipeVariants,
+	requestTakes,
+} from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
@@ -336,6 +346,26 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("generate:questions", () => generationQuestions())
 
+	// The user says what they want; these three are that path. `clarify` decides
+	// whether anything more is needed, `takes` produces three of the thing they
+	// asked for, `accept` writes the one they pointed at.
+	ipcMain.handle("generate:clarify", (_event, projectPath: string, request: AssetRequest) =>
+		clarifyAssetRequest(projectPath, request),
+	)
+
+	ipcMain.handle("generate:takes", (_event, projectPath: string, request: AssetRequest, aspect: string) =>
+		requestTakes(projectPath, request, aspect),
+	)
+
+	ipcMain.handle(
+		"generate:acceptTake",
+		async (_event, projectPath: string, request: AssetRequest, aspect: string, variant: number, tag: string) => {
+			const result = await acceptRequestTake(projectPath, request, aspect, variant, tag)
+			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+			return result
+		},
+	)
+
 	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string) => {
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		const window = windows.get(projectPath)
@@ -401,8 +431,8 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		discardModel3d(projectPath)
 	})
 
-	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>) =>
-		recipeCards(projectPath, answers),
+	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>, kind?: string) =>
+		recipeCards(projectPath, answers, kind),
 	)
 
 	ipcMain.handle(

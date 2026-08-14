@@ -24,6 +24,7 @@ import {
 } from "../../../src/core/design"
 import { recordEdit } from "../../../src/core/design/provenance"
 import { Logger } from "../../../src/shared/services/Logger"
+import { acceptRequestTake, requestTakes } from "../generate-assets"
 import { askUser, type InterviewPrompt, type PresentedCandidate } from "../interview"
 import { regenerateRulesFiles } from "../rules/generate"
 import type { ToolContext, ToolDefinition, ToolResult } from "./tools"
@@ -172,6 +173,76 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				})
 			},
 		},
+		{
+			name: "generate_asset",
+			title: "Generate an asset the design needs",
+			description:
+				"Makes an image, texture, logo mark or 3D object and adds it to the project's assets, returning the @tag to reference it. Use this when the design you are discussing needs something the user does not have — say what it is in plain words, the way you would describe it to somebody. Caret asks the user to approve it first (images and 3D cost the user money on their own key), generates three takes, and lets them point at one. Everything about how it is lit, framed and coloured comes from the project's foundation, so describe the SUBJECT and not the styling.",
+			inputSchema: {
+				kind: z
+					.enum(["image", "texture", "mark", "object3d"])
+					.describe(
+						"image: a photograph. texture: grain, a wash, a pattern — free and local. mark: a logo. object3d: a 3D model.",
+					),
+				what: z.string().min(2).describe('What it is, in plain words: "a brushed steel paperclip"'),
+				why: z.string().describe("One line on what it is for, shown to the user when asking whether to make it"),
+				transparent: z.boolean().optional().describe("True when it must sit on any background with no box around it"),
+			},
+			async handler(
+				ctx: ToolContext,
+				args: { kind: "image" | "texture" | "mark" | "object3d"; what: string; why: string; transparent?: boolean },
+			) {
+				const request = {
+					kind: args.kind,
+					text: args.what,
+					...(args.transparent ? { transparent: true } : {}),
+				}
+
+				// Proposed, never assumed. The image and 3D lanes spend the user's own
+				// credits, and an agent deciding to spend them mid-conversation is the
+				// one thing this surface must not do.
+				const paid = args.kind === "image" || args.kind === "object3d"
+				const consent = await askUser(send, {
+					kind: "question",
+					question: `Generate ${args.what}?`,
+					hint: paid ? `${args.why} This one runs on your image key and costs you directly.` : args.why,
+					choices: ["Generate it", "Not now"],
+				})
+				if (consent !== "Generate it") {
+					return ok({ generated: false, note: "The user declined. Carry on without it, or suggest an alternative." })
+				}
+
+				const takes = await requestTakes(ctx.projectPath, request, "")
+				const usable = takes.filter((take) => !take.error)
+				if (usable.length === 0) {
+					const why = takes[0]?.error ?? "nothing came back"
+					return ok({ generated: false, note: `Generation did not produce anything: ${why}` })
+				}
+
+				const picked = await askUser(send, {
+					kind: "takes",
+					title: `Three takes of ${args.what}`,
+					subtitle: args.why,
+					takes: takes.map((take) => ({ index: take.variant, preview: take.preview, error: take.error })),
+					surface: usable[0].surface,
+				})
+				if (picked === null) {
+					return ok({ generated: false, note: "The user did not pick any of the takes." })
+				}
+
+				const tag = slugTag(args.what)
+				const saved = await acceptRequestTake(ctx.projectPath, request, "", Number(picked), tag)
+				if (!saved.ok) return fail(saved.error ?? "The chosen take could not be saved.")
+
+				await regenerateRulesFiles(ctx.projectPath).catch(() => {})
+				return ok({
+					generated: true,
+					tag: saved.tag ?? tag,
+					reference: `@${saved.tag ?? tag}`,
+					note: "Reference it by that tag in the page you write. It is in the asset index and the rules files now.",
+				})
+			},
+		},
 	]
 }
 
@@ -223,3 +294,15 @@ When the user picks one, call \`commit_foundation\` immediately with the returne
 candidateId. Then tell them, in one or two sentences, what they chose and the one
 restraint rule that comes with it, so they know what it means for everything you build
 next.`
+
+/** A tag from what the agent asked for, so the asset is named after itself. */
+function slugTag(what: string): string {
+	const slug = what
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, "")
+		.split(/\s+/)
+		.filter((word) => word && !["a", "an", "the", "of", "and", "with", "on"].includes(word))
+		.slice(0, 3)
+		.join("-")
+	return slug || "generated"
+}

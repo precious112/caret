@@ -99,6 +99,16 @@ export {
 	type ImageRequest,
 	type ImageResult,
 } from "./asset-library/raster/gemini"
+export {
+	type AssetRequest,
+	type ClarifyQuestion,
+	type ClarifyResult,
+	clarifyRequest,
+	composeAssetRequest,
+	type GenerationKind,
+	recipeForRequest,
+	SHARED_AVOID,
+} from "./asset-library/request"
 export { type BudgetedConversion, convertWithinBudget } from "./asset-library/tripo/budget"
 export {
 	NO_TRIPO_REASON,

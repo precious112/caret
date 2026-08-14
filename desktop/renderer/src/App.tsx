@@ -84,6 +84,22 @@ export function App() {
 		[],
 	)
 
+	// And a prompt that arrived before this listener existed still has to land.
+	// An agent can call a blocking tool the instant the MCP endpoint is up, which
+	// is earlier than the chrome finishes mounting — and a prompt lost in that
+	// window blocks the agent forever on a question nobody ever saw. Asking once
+	// on mount is the only thing that closes it, because the event that would
+	// have switched the surface is the same event that was missed.
+	useEffect(() => {
+		if (!project) return
+		void invoke("interview:pending").then((waiting) => {
+			if (waiting) {
+				markInterviewPending(true)
+				setSurface("foundation")
+			}
+		})
+	}, [project])
+
 	// A project with no foundation gets the wizard first. Generating pages before
 	// tokens exist means re-styling all of them later, which is the exact rework
 	// the design layer is supposed to prevent.

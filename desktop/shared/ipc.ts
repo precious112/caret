@@ -127,6 +127,17 @@ export type InterviewPromptWire =
 			step?: number
 			total?: number
 	  }
+	| {
+			/** Takes of an asset the agent proposed. Pictures to point at, nothing more. */
+			kind: "takes"
+			id: string
+			title: string
+			subtitle?: string
+			takes: Array<{ index: number; preview: string; error?: string }>
+			surface: string
+			step?: number
+			total?: number
+	  }
 
 /**
  * The **in-app** foundation interview, which Caret runs itself.
@@ -433,6 +444,33 @@ export interface AssetAddResult {
 	rejected: Array<{ file: string; reason: string }>
 }
 
+/** What the user is generating, chosen before they describe it. */
+export type GenerationKindWire = "image" | "texture" | "mark" | "object3d"
+
+/** What the user asked for, on its way to main. */
+export interface AssetRequestWire {
+	kind: GenerationKindWire
+	/** Their own words. Never rewritten on the way through. */
+	text: string
+	transparent?: boolean
+	answers?: Record<string, string>
+}
+
+/** One question Caret decided it needed to ask about this particular request. */
+export interface ClarifyQuestionWire {
+	id: string
+	question: string
+	/** What it changes about the result. A question without one is answered badly. */
+	why: string
+	/** Fast paths only — the answer is always free text if the user wants. */
+	suggestions: string[]
+}
+
+export interface ClarifyResultWire {
+	sufficient: boolean
+	questions: ClarifyQuestionWire[]
+}
+
 /** One question in the generation interview, mirrored for the renderer. */
 export interface GenerationQuestionWire {
 	id: string
@@ -617,7 +655,7 @@ export interface IpcRequests {
 	 * an integer's worth of work, which is why the picker can afford to be honest
 	 * and show the thing itself rather than a stock preview.
 	 */
-	"generate:recipes": (projectPath: string, answers: Record<string, string>) => RecipeCardWire[]
+	"generate:recipes": (projectPath: string, answers: Record<string, string>, kind?: string) => RecipeCardWire[]
 	/** N variants of one recipe. Still nothing on disk. */
 	"generate:variants": (
 		projectPath: string,
@@ -657,6 +695,27 @@ export interface IpcRequests {
 	"generate:taskModels": (task: "mark" | "model3d") => TaskModelWire[]
 	/** Per-task model override. Empty string clears back to the session model. */
 	"generate:setTaskModel": (task: "mark" | "model3d", model: string) => void
+
+	/**
+	 * Whether the request needs anything more before it is worth spending on.
+	 *
+	 * The user has already said what they want; this decides whether that is
+	 * enough. Questions come back tailored to what was asked, because the useful
+	 * question for a paperclip has nothing in common with the useful question for
+	 * a building. A backend that cannot answer means "generate anyway" — this
+	 * improves a request, it is not permission to make one.
+	 */
+	"generate:clarify": (projectPath: string, request: AssetRequestWire) => ClarifyResultWire
+	/** Three takes of the thing the user asked for. Same subject, different treatment. */
+	"generate:takes": (projectPath: string, request: AssetRequestWire, aspect: string) => GeneratedVariantWire[]
+	/** Commits the take the user pointed at, with their own words kept in provenance. */
+	"generate:acceptTake": (
+		projectPath: string,
+		request: AssetRequestWire,
+		aspect: string,
+		variant: number,
+		tag: string,
+	) => WriteResult & { tag?: string }
 
 	/** Commits the chosen variant as an ordinary asset, with its provenance. */
 	"generate:accept": (

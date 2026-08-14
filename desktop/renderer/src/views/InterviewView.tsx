@@ -80,6 +80,8 @@ export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswer
 
 				{prompt.kind === "question" ? (
 					<QuestionScreen onAnswer={respond} prompt={prompt} />
+				) : prompt.kind === "takes" ? (
+					<TakesScreen onPick={respond} prompt={prompt} />
 				) : (
 					<OptionsScreen onPick={respond} prompt={prompt} />
 				)}
@@ -91,6 +93,50 @@ export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswer
 					Skip this
 				</button>
 			</div>
+		</div>
+	)
+}
+
+/**
+ * Three takes of the thing the agent proposed, to point at.
+ *
+ * Same interaction as every other pick surface in Caret: look at the pictures,
+ * point at one. The agent is blocked on this call, so declining resolves it too
+ * rather than leaving the conversation hanging.
+ */
+function TakesScreen({
+	prompt,
+	onPick,
+}: {
+	prompt: Extract<InterviewPromptWire, { kind: "takes" }>
+	onPick(answer: string): void
+}) {
+	const usable = prompt.takes.filter((take) => !take.error)
+	return (
+		<div className="fade-in" data-testid="interview-takes">
+			<h1 className="text-xl font-medium">{prompt.title}</h1>
+			{prompt.subtitle && <p className="mt-1.5 text-shell-muted">{prompt.subtitle}</p>}
+
+			{usable.length === 0 ? (
+				<p className="mt-6 text-sm text-shell-muted" data-testid="interview-takes-empty">
+					{prompt.takes[0]?.error ?? "Nothing came back."}
+				</p>
+			) : (
+				<div className="mt-6 grid grid-cols-3 gap-3">
+					{usable.map((take) => (
+						<button
+							className="overflow-hidden rounded-lg border border-shell-border transition-colors hover:border-caret-accent"
+							data-interview-take={take.index}
+							key={take.index}
+							onClick={() => onPick(String(take.index))}
+							type="button">
+							<span className="block" style={{ backgroundColor: prompt.surface }}>
+								<img alt="" className="block w-full" src={take.preview} />
+							</span>
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	)
 }
