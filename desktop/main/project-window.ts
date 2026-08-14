@@ -33,6 +33,7 @@ import { CatalogService } from "./catalog-service"
 import { DesignChecksService } from "./design-checks"
 import { createElectronDesignHost } from "./electron-host"
 import { CaretMcpServer } from "./mcp/server"
+import { refreshMenu } from "./menu"
 import { migrateProject } from "./migrate"
 import { recordRecentProject } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
@@ -161,6 +162,9 @@ export class ProjectWindow {
 	/** Boots Vite, the MCP endpoint, the backend and the healer. Safe to call once. */
 	async start(): Promise<void> {
 		await recordRecentProject(this.projectPath)
+		// The menu's recents are a snapshot; without this the list a user reaches
+		// for to switch projects never learns about the one they just opened.
+		refreshMenu()
 
 		// Runs before anything reads `.caret/`, so a project written by the VS Code
 		// extension is in the current shape by the time the session starts.

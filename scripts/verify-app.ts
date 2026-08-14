@@ -685,6 +685,65 @@ async function main(): Promise<void> {
 		return `top bar rendered: ${barText?.trim().slice(0, 60)}`
 	})
 
+	await scenario("cb. a second project is reachable from inside the first", async () => {
+		// Being stuck in whatever project you opened first was the whole complaint,
+		// and there were two reasons for it: nothing in the window offered a way
+		// out, and the application menu's "Open Recent" was a snapshot taken at
+		// startup — on a fresh profile it read "No Recent Projects" forever, however
+		// many projects had been opened since.
+
+		// The affordance that did not exist: the window says which project it is,
+		// and that is the control.
+		const switcher = chrome.getByTestId("project-switcher")
+		await switcher.waitFor({ timeout: 30_000 })
+		assert((await switcher.innerText()).includes(path.basename(fixture)), "the top bar does not name the project you are in")
+		await switcher.click()
+		const menu = chrome.getByTestId("project-switcher-menu")
+		await menu.waitFor({ timeout: 15_000 })
+		assert((await menu.getByTestId("project-open-other").count()) === 1, "no way to open another project")
+		await chrome.keyboard.press("Escape")
+
+		// Opening a second project, the way the menu item does it. A bare directory
+		// is enough: the window is what is being tested, not the design layer.
+		const second = await fs.mkdtemp(path.join(os.tmpdir(), "caret-second-"))
+		const opened = await chrome.evaluate(
+			async (target) => Boolean(await (window as any).caret.invoke("project:open", target)),
+			second,
+		)
+		assert(opened, "opening a second project returned nothing")
+
+		const windowCount = await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
+		assert(windowCount >= 2, `a second project did not get its own window (${windowCount} open)`)
+
+		// And the menu can now see it. This is the frozen-snapshot bug: before the
+		// fix this submenu held one disabled "No Recent Projects" entry for the
+		// life of the process.
+		const recentLabels: string[] = await app!.evaluate(({ Menu }) => {
+			const file = Menu.getApplicationMenu()?.items.find((item: any) => item.label === "File")
+			const recent = (file as any)?.submenu?.items.find((item: any) => item.label === "Open Recent")
+			return ((recent as any)?.submenu?.items ?? []).map((item: any) => String(item.label))
+		})
+		assert(
+			!recentLabels.includes("No Recent Projects"),
+			`the recents menu is still the startup snapshot: ${JSON.stringify(recentLabels)}`,
+		)
+		assert(
+			recentLabels.some((label) => label.includes(path.basename(second))),
+			`the project just opened is not in the recents menu: ${JSON.stringify(recentLabels)}`,
+		)
+
+		// Closed again so its Vite server and MCP endpoint do not outlive the
+		// scenario and contend with everything after it.
+		await app!.evaluate(async ({ BrowserWindow }, target: string) => {
+			for (const win of BrowserWindow.getAllWindows()) {
+				if (win.getTitle().includes(target)) win.destroy()
+			}
+		}, path.basename(second))
+		await fs.rm(second, { recursive: true, force: true }).catch(() => {})
+
+		return `the top bar names the project and offers a way out; a second project opened in its own window and reached the recents menu (${recentLabels.length} entries)`
+	})
+
 	await scenario("o. the token editor renders and writes what you set", async () => {
 		// The wizard came across from the VS Code webview with its data layer
 		// rewired from gRPC to IPC. Nothing else in this suite would notice if it

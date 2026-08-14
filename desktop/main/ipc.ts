@@ -56,6 +56,7 @@ import {
 	requestTakes,
 } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
+import { refreshMenu } from "./menu"
 import { forgetRecentProject, getPrefs, setPref, setPrefs } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import { clearSecret, type SecretName, secretStatus, setSecret } from "./secrets"
@@ -98,6 +99,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("project:forgetRecent", async (_event, projectPath: string) => {
 		await forgetRecentProject(projectPath)
+		refreshMenu()
 	})
 
 	ipcMain.handle("project:state", async (_event, projectPath: string) => {

@@ -13,7 +13,24 @@ import type { WindowManager } from "./window-manager"
 
 const isMac = process.platform === "darwin"
 
+/**
+ * The manager the menu was built against, so it can be rebuilt without one.
+ *
+ * The recents submenu is a snapshot of `prefs.recentProjects` taken when the
+ * template is constructed, and the template was constructed exactly once at
+ * startup. On a fresh install that snapshot is empty, so "Open Recent" said
+ * "No Recent Projects" forever — no matter how many projects were opened — and
+ * the only in-app route to another project was a menu that could not see any.
+ */
+let built: WindowManager | null = null
+
+/** Rebuilds the menu so "Open Recent" reflects what is actually recent. */
+export function refreshMenu(): void {
+	if (built) buildMenu(built)
+}
+
 export function buildMenu(windows: WindowManager): void {
+	built = windows
 	const template: MenuItemConstructorOptions[] = [
 		...(isMac ? [{ role: "appMenu" as const }] : []),
 		{
