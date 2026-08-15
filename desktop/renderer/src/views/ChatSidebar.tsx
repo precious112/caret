@@ -21,11 +21,30 @@
  *    column. The gap between turns is what makes a transcript scannable.
  */
 
-import { AlertTriangle, ChevronDown, ChevronRight, History, Paperclip, Plus, Send, Square, Wrench, X } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import {
+	AlertTriangle,
+	AtSign,
+	ChevronDown,
+	ChevronRight,
+	History,
+	ImagePlus,
+	Paperclip,
+	Plus,
+	Send,
+	Square,
+	Wrench,
+	X,
+} from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ThinkingOrb } from "thinking-orbs"
 
-import type { AgentSessionWire, AgentStateWire, ProjectState, TranscriptEntryWire } from "../../../shared/ipc"
+import type {
+	AgentSessionWire,
+	AgentStateWire,
+	ComposerImage,
+	ProjectState,
+	TranscriptEntryWire,
+} from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 import { AssetMentionList, type AssetMentions, useAssetMentions } from "./AssetMentions"
@@ -42,6 +61,7 @@ interface ChatSidebarProps {
 export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSidebarProps) {
 	const [state, setState] = useState<AgentStateWire | null>(null)
 	const [draft, setDraft] = useState("")
+	const [attached, setAttached] = useState<ComposerImage[]>([])
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -72,13 +92,37 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 	const send = () => {
 		const text = draft.trim()
 		if (!text || streaming) return
+		const images = attached.map((image) => image.dataUrl)
 		setDraft("")
-		void invoke("agent:send", project.path, text)
+		setAttached([])
+		void invoke("agent:send", project.path, text, images.length > 0 ? images : undefined)
 	}
+
+	// Pasted and dropped files never touch main: the renderer already holds the
+	// bytes, and a round trip through a path would only be a chance to lose them.
+	const attachFiles = useCallback((files: File[]) => {
+		const images = files.filter((file) => file.type.startsWith("image/"))
+		if (images.length === 0) return
+		void Promise.all(
+			images.map(
+				(file) =>
+					new Promise<ComposerImage | null>((resolve) => {
+						const reader = new FileReader()
+						reader.onload = () =>
+							resolve(typeof reader.result === "string" ? { name: file.name || "pasted image", dataUrl: reader.result } : null)
+						reader.onerror = () => resolve(null)
+						reader.readAsDataURL(file)
+					}),
+			),
+		).then((read) => setAttached((current) => [...current, ...read.filter((image): image is ComposerImage => image !== null)]))
+	}, [])
 
 	const composer = {
 		draft,
 		setDraft,
+		attached,
+		setAttached,
+		attachFiles,
 		send,
 		streaming,
 		ready: state?.ready ?? false,
@@ -202,6 +246,9 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 interface ComposerProps {
 	draft: string
 	setDraft(value: string): void
+	attached: ComposerImage[]
+	setAttached: React.Dispatch<React.SetStateAction<ComposerImage[]>>
+	attachFiles(files: File[]): void
 	send(): void
 	streaming: boolean
 	ready: boolean
@@ -254,29 +301,39 @@ function Composer(props: ComposerProps) {
 	}, [props.draft, props.inputRef])
 
 	return (
-		<footer className="relative shrink-0 p-2.5">
+		<footer
+			className="relative shrink-0 p-2.5"
+			onDragOver={(event) => event.preventDefault()}
+			onDrop={(event) => {
+				if (event.dataTransfer.files.length === 0) return
+				event.preventDefault()
+				props.attachFiles(Array.from(event.dataTransfer.files))
+			}}>
 			<AssetMentionList mentions={props.mentions} />
 			<div className="rounded-xl border border-shell-border bg-shell-bg focus-within:border-white/20">
+				<AttachedImages attached={props.attached} setAttached={props.setAttached} />
 				<textarea
 					className="max-h-40 min-h-[46px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2.5 leading-relaxed outline-none placeholder:text-shell-muted"
 					data-testid="chat-input"
 					disabled={!props.ready}
 					onChange={(event) => props.setDraft(event.target.value)}
 					onKeyDown={onKeyDown}
+					// A screenshot in the clipboard is the commonest way anyone has an
+					// image to show; making them save it to disk first would be the only
+					// step in this flow that leaves the app.
+					onPaste={(event) => {
+						const files = Array.from(event.clipboardData.files)
+						if (files.length === 0) return
+						event.preventDefault()
+						props.attachFiles(files)
+					}}
 					placeholder={props.ready ? PLACEHOLDER : "No backend connected"}
 					ref={props.inputRef}
 					rows={1}
 					value={props.draft}
 				/>
 				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
-					{/*
-					 * Types the `@`, which is what opens the picker — the button and the
-					 * keystroke are the same act, so there is no second code path to keep
-					 * in agreement with the first.
-					 */}
-					<IconButton label="Reference an asset" onClick={props.onReferenceAsset}>
-						<Paperclip size={13} />
-					</IconButton>
+					<AttachMenu {...props} />
 					<Pill grow label={props.model} onClick={props.onOpenBackendSetup} />
 					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
 					<div className="flex-1" />
@@ -284,6 +341,124 @@ function Composer(props: ComposerProps) {
 				</div>
 			</div>
 		</footer>
+	)
+}
+
+/**
+ * The paperclip, which now covers two different acts.
+ *
+ * Tagging an asset puts a name in the message that the agent resolves to a file
+ * in the library and can *use in the page*. Attaching an image only lets the
+ * model look at it — a reference to imitate, a screenshot of something wrong.
+ * They were one button because the second did not exist; conflating them would
+ * mean either every reference photo becomes a permanent asset or every asset
+ * has to be described in words.
+ *
+ * `@` is untouched. Tagging still works by typing it, and this menu item does
+ * exactly what the button did before: types the `@` and lets the picker open.
+ */
+function AttachMenu(props: ComposerProps) {
+	const [open, setOpen] = useState(false)
+
+	// Any click that is not on the menu closes it. Registered while open only, so
+	// the common case costs nothing.
+	useEffect(() => {
+		if (!open) return
+		const close = () => setOpen(false)
+		window.addEventListener("pointerdown", close)
+		return () => window.removeEventListener("pointerdown", close)
+	}, [open])
+
+	const choose = (act: () => void) => () => {
+		setOpen(false)
+		act()
+	}
+
+	return (
+		<div className="relative" onPointerDown={(event) => event.stopPropagation()}>
+			<IconButton label="Attach" onClick={() => setOpen(!open)}>
+				<Paperclip size={13} />
+			</IconButton>
+			{open && (
+				<div
+					className="absolute bottom-8 left-0 z-20 w-44 overflow-hidden rounded-lg border border-shell-border bg-shell-panel py-1 shadow-lg"
+					data-testid="chat-attach-menu">
+					<AttachMenuItem
+						hint="Name a file from the library so the agent can put it in the page"
+						icon={<AtSign size={12} />}
+						label="Tag asset"
+						onClick={choose(props.onReferenceAsset)}
+						testId="chat-attach-asset"
+					/>
+					<AttachMenuItem
+						hint="Something for the model to look at, not added to the library"
+						icon={<ImagePlus size={12} />}
+						label="Upload image"
+						onClick={choose(() => {
+							void invoke("chat:pickImages").then((images) => {
+								if (images && images.length > 0) props.setAttached((current) => [...current, ...images])
+							})
+						})}
+						testId="chat-attach-image"
+					/>
+				</div>
+			)}
+		</div>
+	)
+}
+
+function AttachMenuItem({
+	hint,
+	icon,
+	label,
+	onClick,
+	testId,
+}: {
+	hint: string
+	icon: React.ReactNode
+	label: string
+	onClick(): void
+	testId: string
+}) {
+	return (
+		<button
+			className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-white/5"
+			data-testid={testId}
+			onClick={onClick}
+			type="button">
+			<span className="mt-0.5 text-shell-muted">{icon}</span>
+			<span className="min-w-0">
+				<span className="block text-[12px]">{label}</span>
+				<span className="block text-[10.5px] leading-snug text-shell-muted">{hint}</span>
+			</span>
+		</button>
+	)
+}
+
+/** Thumbnails above the text, so what is going with the message is never a guess. */
+function AttachedImages({
+	attached,
+	setAttached,
+}: {
+	attached: ComposerImage[]
+	setAttached: React.Dispatch<React.SetStateAction<ComposerImage[]>>
+}) {
+	if (attached.length === 0) return null
+	return (
+		<div className="flex flex-wrap gap-1.5 px-3 pt-2.5" data-testid="chat-attachments">
+			{attached.map((image, index) => (
+				<span className="group relative" key={`${image.name}-${index}`} title={image.name}>
+					<img alt={image.name} className="size-11 rounded-md border border-shell-border object-cover" src={image.dataUrl} />
+					<button
+						className="absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-shell-panel text-shell-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-shell-text"
+						onClick={() => setAttached((current) => current.filter((_, at) => at !== index))}
+						title={`Remove ${image.name}`}
+						type="button">
+						<X size={10} />
+					</button>
+				</span>
+			))}
+		</div>
 	)
 }
 

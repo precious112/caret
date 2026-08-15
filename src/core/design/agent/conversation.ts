@@ -318,7 +318,7 @@ export class AgentConversation {
 	 * that suits the name. The chat still shows what the user typed; only the
 	 * model sees the expansion.
 	 */
-	async sendMessage(text: string): Promise<RunOutcome> {
+	async sendMessage(text: string, images?: string[]): Promise<RunOutcome> {
 		const current = this.activity
 		const expansion = expandReferences(text, await readAssetIndex(this.deps.projectPath))
 		const prompt =
@@ -338,6 +338,7 @@ export class AgentConversation {
 			mode: current?.mode ?? "write",
 			prompt,
 			displayPrompt: prompt === text ? undefined : text,
+			...(images && images.length > 0 ? { images } : {}),
 			resumeSessionId: current?.sessionId,
 		})
 	}

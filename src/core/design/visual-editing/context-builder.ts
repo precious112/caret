@@ -54,8 +54,19 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 	const instruction = expansion.text
 
 	if (isOverlayEdit) {
+		// The crop is accurate — it is the painted region at the scroll position the
+		// user was looking at. What the agent lacks is a method for finding that
+		// region in the source, and left to itself it picks the wrong one: asked to
+		// retexture a notecard, one model searched for the *image*, found the same
+		// file used by two components, took the first hit and edited a section
+		// several screens above the one on screen. The words in a crop are unique
+		// where its graphics are not, so say to match on those.
 		sections.push(`The user painted a region on the design preview and provided a screenshot of what they see.`)
-		sections.push(`Look at the attached screenshot to understand what the user is referring to.`)
+		sections.push(
+			`The screenshot is a crop of this page at the scroll position the user was looking at. Locate that region in the source before you change anything. Anchor on the text visible in the crop — headings, labels, button text — and search for those exact words. That identifies the region unambiguously. If the crop carries no text, use the nearest text it does show and work outwards from there.`,
+			`Do not identify it by the graphic or by an image filename. The same image is often used by more than one component, and taking the first match edits a part of the page the user is not looking at.`,
+			`This page composes imported components. If the words you are looking for are not in the page source, they are in one of the components it imports — open that file and make the change there.`,
+		)
 		sections.push(`\nUser instruction: "${instruction}"`)
 	} else {
 		sections.push(`The user selected a SPECIFIC element in the design preview and requested an edit.`)
@@ -189,7 +200,11 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 		console.info("[design] No foundation tokens found — skipping token context")
 	}
 
-	sections.push(`\nApply the requested change to the source file. Write only the modified file using write_to_file.`)
+	// Naming a tool here was a mistake: `write_to_file` exists in neither backend,
+	// and the sessions show models spending turns hunting for it before improvising
+	// with whatever they do have. Say what to accomplish and let the backend's own
+	// toolset answer how.
+	sections.push(`\nApply the requested change by editing the file. Change nothing the instruction did not ask for.`)
 
 	return sections.join("\n")
 }

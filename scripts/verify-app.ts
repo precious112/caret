@@ -3747,6 +3747,56 @@ export default function CatalogDemo() {
 		return "picker opened in the chat composer, thumbnail decoded, click inserted the tag without sending"
 	})
 
+	await scenario("cd. the paperclip offers both acts, and an attached image never joins the library", async () => {
+		// Two different things behind one button: a tag names a file the agent can
+		// put *in* the page, an attachment is only something to look at. The risk
+		// worth covering is that adding the second quietly changed the first, since
+		// `@` is how every asset reference in this app gets written.
+		const input = chrome.getByTestId("chat-input")
+		await input.fill("")
+
+		await chrome.getByTestId("chat-sidebar").getByRole("button", { name: "Attach" }).click()
+		await chrome.getByTestId("chat-attach-menu").waitFor({ timeout: 10_000 })
+
+		await chrome.getByTestId("chat-attach-asset").click()
+		await waitFor("the @ to land in the draft", async () => ((await input.inputValue()).includes("@") ? true : null), 10_000)
+		await chrome.getByTestId("asset-mentions").waitFor({ timeout: 15_000 })
+		await input.fill("")
+
+		// "Upload image" opens a native dialog Playwright cannot drive, so the same
+		// state is reached the way most people will reach it anyway — by dropping.
+		await input.evaluate(async (element) => {
+			const canvas = document.createElement("canvas")
+			canvas.width = 8
+			canvas.height = 8
+			const context = canvas.getContext("2d")
+			if (!context) throw new Error("no 2d context")
+			context.fillStyle = "#ff0000"
+			context.fillRect(0, 0, 8, 8)
+			const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
+			if (!blob) throw new Error("the fixture image did not encode")
+
+			const transfer = new DataTransfer()
+			transfer.items.add(new File([blob], "reference.png", { type: "image/png" }))
+			element.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: transfer }))
+		})
+
+		const chips = chrome.getByTestId("chat-attachments")
+		await chips.waitFor({ timeout: 10_000 })
+		assert((await chips.locator("img").count()) === 1, "the dropped image did not appear above the composer")
+
+		// The distinction this whole control exists for: looking at an image must
+		// not file it. An attachment that landed in `.caret/assets` would be
+		// committed with the design and would need a tag nobody asked for.
+		const assets = await fs.readdir(path.join(fixture, ".caret", "assets")).catch(() => [] as string[])
+		assert(!assets.includes("reference.png"), "an attached image was written into the asset library")
+
+		await chips.getByRole("button", { name: "Remove reference.png" }).click()
+		assert((await chips.count()) === 0, "the attachment could not be taken off again")
+
+		return "the menu offers both, tagging still types @, a dropped image rides along without joining the library"
+	})
+
 	const inference = model ? scenario : (name: string, _run: () => Promise<string>) => void skip(name, NO_MODEL_REASON)
 
 	await inference("ee. an instruction typed in the chat rewrites the design source to exactly that", async () => {

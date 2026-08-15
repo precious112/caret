@@ -384,6 +384,19 @@ export interface FontOptionWire {
  * A structural mirror rather than the core type, like every other `*Wire` here,
  * so a renderer import of main-process code stays a compile error.
  */
+/**
+ * An image attached to one chat message, for the model to look at.
+ *
+ * Deliberately not an asset: it is never copied into `.caret/`, never tagged,
+ * and does not survive the turn. The library is for things the design is built
+ * from; this is for things the conversation is about.
+ */
+export interface ComposerImage {
+	name: string
+	/** `data:image/png;base64,…` — the only form the agent bridge accepts. */
+	dataUrl: string
+}
+
 export interface AssetEntryWire {
 	tag: string
 	file: string
@@ -735,7 +748,15 @@ export interface IpcRequests {
 
 	/** Everything the chat sidebar renders. Also pushed on the `agent:state` event. */
 	"agent:state": (projectPath: string) => AgentStateWire | null
-	"agent:send": (projectPath: string, text: string) => void
+	/**
+	 * `images` are data-URLs the model should look at but that are not part of the
+	 * design — a reference the user is describing, a screenshot of a bug. Anything
+	 * meant to end up *in* the page belongs in the asset library and is named with
+	 * `@` instead, which is a different act and stays a different control.
+	 */
+	"agent:send": (projectPath: string, text: string, images?: string[]) => void
+	/** Opens a picker and reads the choices; nothing reaches disk, they only get looked at. */
+	"chat:pickImages": () => ComposerImage[]
 	"agent:abort": (projectPath: string) => void
 	"agent:permission": (projectPath: string, requestId: string, decision: "allow" | "deny" | "allow-always") => void
 	"agent:approval": (projectPath: string, id: string, ok: boolean) => void

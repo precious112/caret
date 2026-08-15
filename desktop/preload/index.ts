@@ -68,6 +68,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"agent:clientConfigs": true,
 	"agent:state": true,
 	"agent:send": true,
+	"chat:pickImages": true,
 	"agent:abort": true,
 	"agent:permission": true,
 	"agent:approval": true,

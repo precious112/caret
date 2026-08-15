@@ -71,8 +71,24 @@ import {
 	startWizard,
 	wizardBack,
 } from "./token-wizard"
+import type { ComposerImage } from "../shared/ipc"
 import type { DesignInboundMessage } from "./types"
 import type { WindowManager } from "./window-manager"
+/**
+ * Image formats a vision model will actually read, mapped to their MIME types.
+ *
+ * A narrower list than `ASSET_TYPES` and for a different reason: that one says
+ * what Caret can store, this one says what a backend can look at. AVIF and SVG
+ * are storable and are not reliably readable, so they are absent here even
+ * though the library accepts both.
+ */
+const ATTACHABLE_IMAGES: Record<string, string> = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif": "image/gif",
+}
 
 export function registerIpcHandlers(windows: WindowManager): void {
 	// ── projects ──────────────────────────────────────────────────────────────
@@ -505,12 +521,46 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * for the whole turn and give it nothing the event stream has not already
 	 * delivered.
 	 */
-	ipcMain.handle("agent:send", (_event, projectPath: string, text: string) => {
+	ipcMain.handle("agent:send", (_event, projectPath: string, text: string, images?: string[]) => {
 		const agent = windows.get(projectPath)?.getAgent()
 		if (!agent) return
-		void agent.conversation.sendMessage(text).catch((err) => {
+		void agent.conversation.sendMessage(text, images).catch((err) => {
 			agent.conversation.note(err instanceof Error ? err.message : String(err))
 		})
+	})
+
+	/**
+	 * Images for the model to look at, read here rather than in the renderer so
+	 * the chat panel never needs a path or a file handle.
+	 *
+	 * Oversized ones are dropped rather than truncated: a data-URL that does not
+	 * decode is worse than an absent one, because the turn proceeds as though the
+	 * model saw something.
+	 */
+	ipcMain.handle("chat:pickImages", async () => {
+		const result = await dialog.showOpenDialog({
+			title: "Attach images",
+			properties: ["openFile", "multiSelections"],
+			filters: [{ name: "Images", extensions: Object.keys(ATTACHABLE_IMAGES).map((extension) => extension.slice(1)) }],
+		})
+		if (result.canceled) return []
+
+		const attached: ComposerImage[] = []
+		for (const file of result.filePaths) {
+			try {
+				const bytes = await fs.readFile(file)
+				if (bytes.length > LARGE_ASSET_BYTES) {
+					Logger.warn(`[chat] ${path.basename(file)} is too large to attach`)
+					continue
+				}
+				const mime = ATTACHABLE_IMAGES[path.extname(file).toLowerCase()]
+				if (!mime) continue
+				attached.push({ name: path.basename(file), dataUrl: `data:${mime};base64,${bytes.toString("base64")}` })
+			} catch (err) {
+				Logger.warn(`[chat] could not attach ${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`)
+			}
+		}
+		return attached
 	})
 
 	ipcMain.handle("agent:abort", async (_event, projectPath: string) => {
