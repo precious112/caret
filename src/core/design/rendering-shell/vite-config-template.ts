@@ -6,7 +6,7 @@ export async function generateViteConfig(caretDir: string): Promise<void> {
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
 import { resolve, join } from "path"
-import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "fs"
+import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, utimesSync } from "fs"
 
 // Directory-based routing plugin with page watching
 function caretRouterPlugin() {
@@ -100,6 +100,31 @@ function caretRouterPlugin() {
       }
       server.watcher.on("add", handleIndexFile)
       server.watcher.on("unlink", handleIndexFile)
+    },
+  }
+}
+
+// Tailwind's scan set is built when global.css transforms, and only files it
+// has already seen re-trigger that transform. A page CREATED after the server
+// started therefore renders with none of its new utility classes — measured
+// live: an agent-written page's \`p-8\` and \`left-[190px]\` produced no CSS at
+// all until some boot-time file happened to change. Touching the stylesheet
+// when a source file appears forces the re-transform, whose re-scan then
+// includes the newcomer; edits after that are tracked normally.
+function caretTailwindFreshPlugin() {
+  const cssPath = resolve(__dirname, "global.css")
+  const sourceDirs = ["pages", "components", "layouts", "lib"].map((d) => resolve(__dirname, d))
+  return {
+    name: "caret-tailwind-fresh",
+    configureServer(server) {
+      server.watcher.on("add", (p) => {
+        if (!p.endsWith(".tsx")) return
+        if (!sourceDirs.some((dir) => p.startsWith(dir))) return
+        try {
+          const now = new Date()
+          utimesSync(cssPath, now, now)
+        } catch {}
+      })
     },
   }
 }
@@ -518,7 +543,7 @@ function caretAssetsPlugin() {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTokensPlugin(), caretFlowsPlugin(), caretApiPlugin(), caretAssetsPlugin()],
+  plugins: [tailwindcss(), react(), caretSourceCapturePlugin(), caretRouterPlugin(), caretTailwindFreshPlugin(), caretTokensPlugin(), caretFlowsPlugin(), caretApiPlugin(), caretAssetsPlugin()],
   server: {
     host: "localhost",
     strictPort: false,
