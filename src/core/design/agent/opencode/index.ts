@@ -597,8 +597,9 @@ export class EventMapper {
 
 			if (finished && !this.toolFinished.has(tool.callID)) {
 				this.toolFinished.add(tool.callID)
-				const path = filePathOf(tool.tool, tool.state)
-				if (path && tool.state.status === "completed") yield { type: "file-changed", path }
+				if (tool.state.status === "completed") {
+					for (const path of filePathsOf(tool.tool, tool.state)) yield { type: "file-changed", path }
+				}
 				yield {
 					type: "tool-end",
 					callId: tool.callID,
@@ -632,6 +633,24 @@ function filePathOf(tool: string, state: OpencodeToolState): string | undefined 
 	const input = state.input ?? {}
 	const candidate = input.filePath ?? input.file_path ?? input.path ?? input.file
 	return typeof candidate === "string" ? candidate : undefined
+}
+
+/**
+ * Every file a completed tool call touched.
+ *
+ * `apply_patch` carries its paths inside the patch text, not in a filePath
+ * field — which made every apply_patch turn report `filesChanged: []`, and
+ * everything keyed on it (the design-checks enforcement loop, the overlay
+ * verify loop) silently skip exactly the turns where the model did real work.
+ */
+function filePathsOf(tool: string, state: OpencodeToolState): string[] {
+	if (tool === "apply_patch") {
+		const text = state.input?.patchText
+		if (typeof text !== "string") return []
+		return [...text.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1].trim())
+	}
+	const single = filePathOf(tool, state)
+	return single ? [single] : []
 }
 
 function describeTool(tool: string, state: OpencodeToolState): string {
