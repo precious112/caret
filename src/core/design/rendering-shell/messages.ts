@@ -122,11 +122,33 @@ export interface PromoteTokenPayload {
 	caretId?: string
 }
 
+/**
+ * One element under the painted region, measured by the canvas at submit time.
+ *
+ * `rect` is crop-local: origin at the painted rect's top-left, CSS pixels, so
+ * the numbers correspond 1:1 with pixels in the screenshot crop the model sees.
+ */
+export interface OverlayElementInfo {
+	caretId: string
+	/** Lowercase tag name (`img`, `div`, …). */
+	tag: string
+	rect: { x: number; y: number; width: number; height: number }
+	/** `<img>` only: the src attribute as authored. */
+	src?: string
+}
+
 export interface OverlayEditPayload {
 	instruction: string
 	screenshotDataUrl: string
 	regionBounds: { x: number; y: number; width: number; height: number }
 	filePath?: string
+	/**
+	 * Elements intersecting the painted region, largest overlap first. The
+	 * model does move/align arithmetic on these instead of eyeballing the crop.
+	 */
+	elements?: OverlayElementInfo[]
+	/** The canvas viewport, so post-edit verification renders at the same size. */
+	viewport?: { width: number; height: number }
 }
 
 export interface LogPayload {
@@ -173,6 +195,30 @@ export interface FlowEdgeUpdatePayload {
 const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
 
+const isRect = (v: unknown): boolean => {
+	if (!v || typeof v !== "object") return false
+	const r = v as Record<string, unknown>
+	return isNum(r.x) && isNum(r.y) && isNum(r.width) && isNum(r.height)
+}
+
+/** Absent is fine; present means every entry is well-formed and the list is small. */
+const isOverlayElements = (v: unknown): boolean => {
+	if (v === undefined) return true
+	if (!Array.isArray(v) || v.length > 24) return false
+	return v.every((e) => {
+		if (!e || typeof e !== "object") return false
+		const el = e as Record<string, unknown>
+		return isStr(el.caretId) && isStr(el.tag) && isRect(el.rect)
+	})
+}
+
+const isOverlayViewport = (v: unknown): boolean => {
+	if (v === undefined) return true
+	if (!v || typeof v !== "object") return false
+	const s = v as Record<string, unknown>
+	return isNum(s.width) && isNum(s.height)
+}
+
 /**
  * Required-field checks for payloads arriving from the preview iframe. The
  * iframe runs generated + user code, so payloads are untrusted input: a
@@ -188,7 +234,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 		isNum(p.lineNumber) &&
 		typeof p.newValue === "string",
 	"ai-edit-request": (p) => isStr(p.instruction) && isStr(p.filePath),
-	"overlay-edit": (p) => isStr(p.instruction),
+	"overlay-edit": (p) => isStr(p.instruction) && isOverlayElements(p.elements) && isOverlayViewport(p.viewport),
 	"edit-cancel": () => true,
 	"edit-permission": (p) =>
 		isStr(p.requestId) && (p.decision === "allow" || p.decision === "deny" || p.decision === "allow-always"),

@@ -101,6 +101,7 @@ export class BackendBridge implements AgentBridge {
 			images: task.images,
 			note: task.note,
 			unattended: task.unattended,
+			context: task.context,
 		})
 
 		if (!outcome.ok) {

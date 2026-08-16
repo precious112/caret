@@ -3704,6 +3704,319 @@ export default function CatalogDemo() {
 		return `bundled backend selected, chat enabled${model ? `, model ${model.id} (${model.source})` : ""}`
 	})
 
+	await scenario("ce. an overlay move edit gets measured geometry and lands centered, verified by re-measure", async () => {
+		// The spatial feedback loop end to end: two images, one askew; the overlay
+		// edit carries the rects the canvas measured (so the model can subtract
+		// instead of eyeball), the asset index carries where the clip's opaque
+		// pixels sit inside its transparent margins, and after the turn the
+		// verify loop re-renders, re-measures and resumes the session until the
+		// numbers agree. Needs the backend dd chose — like bu, this drives the
+		// real edit lane.
+		const caretDir = path.join(fixture, ".caret")
+
+		// Real PNGs, made where nativeImage lives. The clip's opaque pixels sit
+		// at (60,40) 100x200 inside a 200x300 frame — asymmetric margins, the
+		// exact shape that makes box-center alignment quietly wrong. Loops are
+		// inlined: a named helper const inside evaluate gets esbuild's __name
+		// wrapper, which does not exist on the Electron side.
+		const pngs = await app!.evaluate(async ({ nativeImage }) => {
+			const shirtData = Buffer.alloc(480 * 520 * 4)
+			for (let i = 0; i < shirtData.length; i += 4) {
+				shirtData[i] = 160
+				shirtData[i + 1] = 90
+				shirtData[i + 2] = 60
+				shirtData[i + 3] = 255
+			}
+			const clipData = Buffer.alloc(200 * 300 * 4)
+			for (let y = 0; y < 300; y++) {
+				for (let x = 0; x < 200; x++) {
+					const i = (y * 200 + x) * 4
+					const on = x >= 60 && x < 160 && y >= 40 && y < 240
+					clipData[i] = on ? 60 : 0
+					clipData[i + 1] = on ? 90 : 0
+					clipData[i + 2] = on ? 160 : 0
+					clipData[i + 3] = on ? 255 : 0
+				}
+			}
+			return {
+				shirt: nativeImage.createFromBitmap(shirtData, { width: 480, height: 520 }).toPNG().toString("base64"),
+				clip: nativeImage.createFromBitmap(clipData, { width: 200, height: 300 }).toPNG().toString("base64"),
+			}
+		})
+		const assetsDir = path.join(caretDir, "assets")
+		await fs.mkdir(assetsDir, { recursive: true })
+		await fs.writeFile(path.join(assetsDir, "verify-shirt.png"), Buffer.from(pngs.shirt, "base64"))
+		await fs.writeFile(path.join(assetsDir, "verify-clip.png"), Buffer.from(pngs.clip, "base64"))
+
+		// The watcher indexes the drop and the enrichment pass measures the
+		// opaque bound — the field the geometry prompt turns into "visual center".
+		const opaqueBox = await waitFor(
+			"the clip's opaque bound to be measured into the index",
+			async () => {
+				try {
+					const idx = JSON.parse(await fs.readFile(path.join(assetsDir, "index.json"), "utf-8"))
+					return idx?.assets?.find((a: any) => a.file === "verify-clip.png")?.opaqueBox ?? null
+				} catch {
+					return null
+				}
+			},
+			30000,
+		)
+		assert(
+			opaqueBox.x === 60 && opaqueBox.y === 40 && opaqueBox.width === 100 && opaqueBox.height === 200,
+			`the measured opaque bound is wrong: ${JSON.stringify(opaqueBox)}`,
+		)
+
+		const pageDir = path.join(caretDir, "pages", "align-demo")
+		await fs.mkdir(pageDir, { recursive: true })
+		const pagePath = path.join(pageDir, "index.tsx")
+		await fs.writeFile(
+			pagePath,
+			`export default function AlignDemo() {
+  return (
+    <div className="min-h-screen bg-white p-8">
+      <div data-caret-id="stage" style={{ position: "relative", width: 480, height: 520 }}>
+        <img data-caret-id="shirt" src="/caret-assets/verify-shirt.png" width={480} height={520} alt="a shirt" />
+        <img
+          data-caret-id="clip"
+          src="/caret-assets/verify-clip.png"
+          width={100}
+          height={150}
+          style={{ position: "absolute", left: 24, top: 40 }}
+          alt="a clothes clip"
+        />
+      </div>
+    </div>
+  )
+}
+`,
+		)
+		await fs.writeFile(
+			path.join(pageDir, "meta.json"),
+			JSON.stringify({ id: "align-demo", title: "Align Demo", type: "page", states: [], tags: [] }),
+		)
+
+		const driven = await app!.evaluate(async ({ BrowserWindow }) => {
+			let canvas: any = null
+			const viewDeadline = Date.now() + 60000
+			while (Date.now() < viewDeadline && !canvas) {
+				const win = BrowserWindow.getAllWindows()[0]
+				const views = (win?.contentView?.children ?? []) as any[]
+				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (!canvas) await new Promise((r) => setTimeout(r, 500))
+			}
+			if (!canvas) return { error: "the canvas view never mounted" }
+			const wc = canvas.webContents
+
+			try {
+				await wc.executeJavaScript(
+					`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
+				)
+				const findCard = `(() => {
+					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
+					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'Align Demo') ?? null
+				})()`
+				let cardReady = false
+				let deadline = Date.now() + 60000
+				while (Date.now() < deadline && !cardReady) {
+					cardReady = await wc.executeJavaScript(`!!${findCard}`).catch(() => false)
+					if (!cardReady) await new Promise((r) => setTimeout(r, 500))
+				}
+				if (!cardReady) return { error: "the Align Demo card never appeared on the canvas" }
+				await wc.executeJavaScript(`(${findCard}).click(), true`)
+
+				let pageFrame: any = null
+				deadline = Date.now() + 30000
+				while (Date.now() < deadline && !pageFrame) {
+					pageFrame =
+						wc.mainFrame.frames.find(
+							(f: any) => f.url.includes("mode=focused") && f.url.includes("page=align-demo"),
+						) ?? null
+					if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!pageFrame) return { error: "the focused align page never became a frame" }
+
+				// Both images decoded — geometry measured off half-loaded pixels lies.
+				deadline = Date.now() + 30000
+				let imagesReady = false
+				while (Date.now() < deadline && !imagesReady) {
+					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("page=align-demo")) ?? pageFrame
+					imagesReady = await pageFrame
+						.executeJavaScript(
+							`(() => {
+								const shirt = document.querySelector('[data-caret-id="shirt"]')
+								const clip = document.querySelector('[data-caret-id="clip"]')
+								return !!(shirt && clip && shirt.naturalWidth > 0 && clip.naturalWidth > 0)
+							})()`,
+						)
+						.catch(() => false)
+					if (!imagesReady) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!imagesReady) return { error: "the seeded images never decoded in the focused page" }
+
+				let overlayUp = false
+				for (let attempt = 0; attempt < 5 && !overlayUp; attempt++) {
+					await pageFrame
+						.executeJavaScript(
+							`(() => { const b = document.querySelector('.caret-focused-paint-btn'); if (b) b.click(); return !!b })()`,
+						)
+						.catch(() => false)
+					const attemptDeadline = Date.now() + 4000
+					while (Date.now() < attemptDeadline && !overlayUp) {
+						overlayUp = await pageFrame
+							.executeJavaScript(`!!document.querySelector('.caret-overlay')`)
+							.catch(() => false)
+						if (!overlayUp) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!overlayUp) return { error: "paint mode never engaged" }
+
+				// Paint a region over the stage. The drag uses the same fixed
+				// view-space coordinates the other overlay scenarios proved out —
+				// the focused iframe renders SCALED (1060px showing a 1440px
+				// viewport), so mapping in-page rects to mouse coordinates is a
+				// trap, and the painted region only needs to INTERSECT the images
+				// for them to be measured, not cover them.
+				const offset = await wc.executeJavaScript(
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+				)
+				const from = { x: Math.round(offset.x) + 60, y: Math.round(offset.y) + 60 }
+				const to = { x: from.x + 340, y: from.y + 320 }
+				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
+				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
+				for (let step = 1; step <= 6; step++) {
+					wc.sendInputEvent({
+						type: "mouseMove",
+						x: Math.round(from.x + ((to.x - from.x) * step) / 6),
+						y: Math.round(from.y + ((to.y - from.y) * step) / 6),
+						button: "left",
+						buttons: 1,
+					})
+					await new Promise((r) => setTimeout(r, 40))
+				}
+				wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 })
+
+				deadline = Date.now() + 20000
+				let box = false
+				while (Date.now() < deadline && !box) {
+					box = await pageFrame
+						.executeJavaScript(`!!document.querySelector('.caret-overlay-prompt input')`)
+						.catch(() => false)
+					if (!box) await new Promise((r) => setTimeout(r, 250))
+				}
+				if (!box) {
+					const state = await pageFrame
+						.executeJavaScript(`(() => ({
+							overlay: !!document.querySelector('.caret-overlay'),
+							rect: !!document.querySelector('.caret-overlay-rect'),
+							size: (() => { const r = document.querySelector('.caret-overlay-rect'); if (!r) return null; const b = r.getBoundingClientRect(); return Math.round(b.width) + 'x' + Math.round(b.height) })(),
+							dragged: ${JSON.stringify({ from, to })},
+						}))()`)
+						.catch((e: any) => ({ probeFailed: String(e) }))
+					return { error: `painting the stage did not open the instruction box: ${JSON.stringify(state)}` }
+				}
+
+				// Submit with Enter, the way a person does; handleSubmit measures the
+				// elements under the rect and sends the payload this scenario exists
+				// to certify.
+				await pageFrame.executeJavaScript(`(() => {
+					const input = document.querySelector('.caret-overlay-prompt input')
+					input.focus()
+					const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+					setter.call(input, 'center the clip horizontally on the shirt image')
+					input.dispatchEvent(new Event('input', { bubbles: true }))
+					input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+					return true
+				})()`)
+				return { ok: true }
+			} catch (err) {
+				return { error: err instanceof Error ? err.message : String(err) }
+			}
+		})
+		assert(!("error" in driven) || !driven.error, `driving the overlay edit failed: ${(driven as any).error}`)
+
+		// The model turn plus up to two verify rounds. Geometry is polled in the
+		// live frame rather than the source, because "centered" has many correct
+		// spellings (left, inset, transform, flex) and the pixels are the promise.
+		// The last probe is kept for the timeout diagnosis — a bare timeout here
+		// cost three runs before it said what it was actually seeing.
+		let lastProbe: unknown = "never probed"
+		const centered = await waitFor(
+			"the clip to land centered on the shirt",
+			async () => {
+				const measured = await app!.evaluate(async ({ BrowserWindow }) => {
+					const win = BrowserWindow.getAllWindows()[0]
+					const views = (win?.contentView?.children ?? []) as any[]
+					// The URL filter is load-bearing: the first live view is often the
+					// CHROME, whose frame tree never contains the page — a poll without
+					// it measures nothing forever and reads as a timeout.
+					const canvas = views.find(
+						(v) =>
+							v.webContents &&
+							!v.webContents.isDestroyed() &&
+							v.webContents.getURL().startsWith("http://localhost"),
+					)
+					if (!canvas) return { probeFailed: "no canvas view" }
+					const frame = canvas.webContents.mainFrame.frames.find((f: any) => f.url.includes("page=align-demo"))
+					if (!frame) return { probeFailed: "no align-demo frame" }
+					return frame
+						.executeJavaScript(
+							`(() => {
+								const shirt = document.querySelector('[data-caret-id="shirt"]')
+								const clip = document.querySelector('[data-caret-id="clip"]')
+								if (!shirt || !clip) return { probeFailed: "elements missing: shirt=" + !!shirt + " clip=" + !!clip }
+								const s = shirt.getBoundingClientRect()
+								const c = clip.getBoundingClientRect()
+								return {
+									shirtCx: s.x + s.width / 2,
+									clipCx: c.x + c.width / 2,
+									clipW: c.width,
+									clipClass: clip.getAttribute("class"),
+									clipStyle: clip.getAttribute("style"),
+									clipComputed: { position: getComputedStyle(clip).position, left: getComputedStyle(clip).left },
+								}
+							})()`,
+						)
+						.catch((e: any) => ({ probeFailed: String(e).slice(0, 120) }))
+				})
+				lastProbe = measured
+				if (!measured || (measured as any).probeFailed) return null
+				const m = measured as { shirtCx: number; clipCx: number; clipW: number }
+				// The clip's visual center sits right of its box center (margins 60
+				// left, 40 right at scale w/200) — accept either interpretation
+				// within 8px of the shirt's centerline.
+				const scale = m.clipW / 200
+				const visualShift = (110 - 100) * scale // opaque center 110 vs box center 100, intrinsic px
+				const boxDelta = Math.abs(m.clipCx - m.shirtCx)
+				const visualDelta = Math.abs(m.clipCx + visualShift - m.shirtCx)
+				return Math.min(boxDelta, visualDelta) <= 8 ? { boxDelta, visualDelta } : null
+			},
+			600_000,
+			async () => `last probe: ${JSON.stringify(lastProbe)}`,
+		)
+
+		// The overlay edit now snapshots an undo step before the agent touches
+		// anything — the gap that used to make Cmd+Z skip straight past it.
+		const journal = JSON.parse(await fs.readFile(path.join(caretDir, ".undo-journal.json"), "utf-8"))
+		assert(
+			journal.steps?.some((s: any) => typeof s.label === "string" && s.label.startsWith("overlay edit:")),
+			"no undo step was captured for the overlay edit",
+		)
+
+		// Leave the canvas on its grid for whoever runs next.
+		await app!.evaluate(async ({ BrowserWindow }) => {
+			const win = BrowserWindow.getAllWindows()[0]
+			const views = (win?.contentView?.children ?? []) as any[]
+			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+			await canvas?.webContents
+				.executeJavaScript(`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`)
+				.catch(() => {})
+		})
+
+		return `the clip centered within ${Math.round(Math.min(centered.boxDelta, centered.visualDelta))}px of the shirt's centerline, and the edit left an undo step`
+	})
+
 	await scenario("bf. @ picks an asset in the chat composer too", async () => {
 		// The composer is a different surface from the canvas — Caret's own window,
 		// not the generated shell — so nothing the canvas picker does carries over,

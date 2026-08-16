@@ -291,6 +291,7 @@ async function handleAiEdit(payload: AiEditRequestPayload, workspacePath: string
 
 async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: string): Promise<void> {
 	try {
+		await captureUndoStep(workspacePath, `overlay edit: ${payload.instruction.slice(0, 60)}`, "agent")
 		const resolvedFilePath = payload.filePath ? await resolveCaretPath(payload.filePath, workspacePath) : ""
 		const prompt = await buildVisualEditPrompt(
 			{
@@ -306,6 +307,7 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 				box: payload.regionBounds
 					? { width: Math.round(payload.regionBounds.width), height: Math.round(payload.regionBounds.height) }
 					: undefined,
+				elements: payload.elements,
 			},
 			workspacePath,
 		)
@@ -316,7 +318,17 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 				prompt,
 				displayPrompt: payload.instruction,
 				images,
-				context: { region: payload.regionBounds },
+				context: {
+					region: payload.regionBounds,
+					// Read back by OverlayVerifyService.afterTurn — the post-edit
+					// re-measure loop. Opaque to the conversation itself.
+					overlayVerify: {
+						filePath: resolvedFilePath,
+						caretIds: (payload.elements ?? []).map((e) => e.caretId),
+						instruction: payload.instruction,
+						viewport: payload.viewport ?? { width: 1440, height: 900 },
+					},
+				},
 			})
 		) {
 			void recordEdit(workspacePath, {

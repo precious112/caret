@@ -25,6 +25,7 @@ import { assetIndexPath, reindexAssets, writeThemeCss } from "../../src/core/des
 import { recordEdit } from "../../src/core/design/provenance"
 import { precomputeAndApply } from "../../src/core/design/visual-editing/post-generation-hook"
 import { Logger } from "../../src/shared/services/Logger"
+import { enrichOpaqueBoxesSoon } from "./asset-metrics"
 import { regenerateRulesFiles } from "./rules/generate"
 
 /**
@@ -415,6 +416,14 @@ export class WatchAndHeal {
 				)
 			}
 			this.options.onAssetsChanged?.()
+
+			// Measured-pixel metadata (opaqueBox) rides behind the reindex rather
+			// than inside it: decoding pixels is Electron work the pure core cannot
+			// do, and a decode failure must never fail the reindex. The write is
+			// marked as our own only when it is actually about to happen.
+			enrichOpaqueBoxesSoon(this.options.projectPath, () =>
+				this.markSelfWrite(path.resolve(assetIndexPath(this.options.projectPath))),
+			)
 		} catch (err) {
 			Logger.warn(`[heal] could not reindex assets: ${err}`)
 		}

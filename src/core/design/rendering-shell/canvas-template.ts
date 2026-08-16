@@ -1537,6 +1537,38 @@ function generateOverlayPainter(): string {
 		        bridge.send({ type: "log", payload: { level: "error", message: "[caret] Screenshot capture failed: " + (captureErr?.message || captureErr) } })
 		      }
 
+		      // Measure what is under the painted region. The model does move/align
+		      // arithmetic on these rects instead of eyeballing the crop — rects are
+		      // crop-local (origin at the painted rect) so they map 1:1 onto the
+		      // screenshot's pixels. Best-effort: a page that throws mid-measure
+		      // still sends a usable instruction.
+		      let elements: any[] = []
+		      try {
+		        const scope = (document.querySelector(".caret-focused-content") as HTMLElement) || document.documentElement
+		        const hits: Array<{ overlap: number; info: any }> = []
+		        scope.querySelectorAll("[data-caret-id]").forEach((el) => {
+		          const r = el.getBoundingClientRect()
+		          const ox = Math.max(0, Math.min(r.right, rect.x + rect.w) - Math.max(r.left, rect.x))
+		          const oy = Math.max(0, Math.min(r.bottom, rect.y + rect.h) - Math.max(r.top, rect.y))
+		          if (ox <= 0 || oy <= 0 || r.width <= 0 || r.height <= 0) return
+		          const info: any = {
+		            caretId: el.getAttribute("data-caret-id"),
+		            tag: el.tagName.toLowerCase(),
+		            rect: {
+		              x: Math.round(r.left - rect.x),
+		              y: Math.round(r.top - rect.y),
+		              width: Math.round(r.width),
+		              height: Math.round(r.height),
+		            },
+		          }
+		          const src = el.tagName === "IMG" ? el.getAttribute("src") : null
+		          if (src) info.src = src
+		          hits.push({ overlap: ox * oy, info })
+		        })
+		        hits.sort((a, b) => b.overlap - a.overlap)
+		        elements = hits.slice(0, 12).map((h) => h.info)
+		      } catch {}
+
 		      bridge.send({
 		        type: "overlay-edit",
 		        payload: {
@@ -1544,6 +1576,8 @@ function generateOverlayPainter(): string {
 		          screenshotDataUrl,
 		          regionBounds: { x: rect.x, y: rect.y, width: rect.w, height: rect.h },
 		          filePath: focusedPage?.filePath || "",
+		          elements,
+		          viewport: { width: window.innerWidth, height: window.innerHeight },
 		        },
 		      })
 		      // The pill takes over from here: instant ack, live narration, cancel.

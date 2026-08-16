@@ -35,6 +35,7 @@ import { createElectronDesignHost } from "./electron-host"
 import { CaretMcpServer } from "./mcp/server"
 import { refreshMenu } from "./menu"
 import { migrateProject } from "./migrate"
+import { OverlayVerifyService } from "./overlay-verify"
 import { recordRecentProject } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import type { DesignInboundMessage, DesignOutboundMessage, ProjectState, ScreenshotResult } from "./types"
@@ -63,6 +64,7 @@ export class ProjectWindow {
 	private canvas: WebContentsView | null = null
 	private agent: AgentService
 	private checks: DesignChecksService
+	private overlayVerify: OverlayVerifyService
 	private catalog: CatalogService
 	private session: DesignSession
 	private mcp: CaretMcpServer
@@ -106,6 +108,11 @@ export class ProjectWindow {
 			baseUrl: () => this.session.getUrl(),
 		})
 
+		this.overlayVerify = new OverlayVerifyService({
+			projectPath: this.projectPath,
+			baseUrl: () => this.session.getUrl(),
+		})
+
 		this.catalog = new CatalogService({
 			projectPath: this.projectPath,
 			// The lock is always-on context — a stale index would have the agent
@@ -124,8 +131,12 @@ export class ProjectWindow {
 			onEditStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "edit-status", payload: status }),
 			// The owned loop is what makes the checker ENFORCED rather than
 			// requested: every turn that wrote pages gets checked, and errors go
-			// straight back into the session that made them.
-			onTurnComplete: (conversation, outcome, request) => this.checks.afterTurn(conversation, outcome, request),
+			// straight back into the session that made them. The overlay verifier
+			// rides the same seam for overlay edits: re-measure, show the model.
+			onTurnComplete: (conversation, outcome, request) => {
+				this.checks.afterTurn(conversation, outcome, request)
+				this.overlayVerify.afterTurn(conversation, outcome, request)
+			},
 		})
 
 		this.session = new DesignSession({
@@ -197,6 +208,7 @@ export class ProjectWindow {
 		Logger.info(`[window] close() invoked for ${this.projectPath}`)
 		this.closed = true
 		this.checks.close()
+		this.overlayVerify.close()
 		await Promise.allSettled([this.session.stop(), this.mcp.stop(), this.healer.stop(), this.agent.close()])
 		unregisterProjectServices(this.projectPath)
 		if (!this.window.isDestroyed()) this.window.destroy()

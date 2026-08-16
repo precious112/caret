@@ -72,6 +72,10 @@ export class EditLaneBridge implements AgentBridge {
 				images: task.images,
 				note: task.note,
 				unattended: task.unattended,
+				// Forwarded untouched: the overlay verify loop reads it in
+				// onTurnComplete. Dropping it here silently disabled the loop for the
+				// exact lane every overlay edit runs on.
+				context: task.context,
 			})
 
 			if (this.cancelled) {

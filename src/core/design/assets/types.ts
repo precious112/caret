@@ -104,6 +104,15 @@ export interface AssetEntry {
 	/** Seconds. Video only. */
 	duration?: number
 	/**
+	 * Bounding box of the visibly opaque pixels (alpha ≥ 16), in intrinsic
+	 * pixels. Present only when it insets meaningfully from the full frame —
+	 * absence means the box center IS the visual center. A cutout PNG's frame
+	 * includes its transparent margins, so anything aligning by rendered rect
+	 * alone centers the margins, not the object. Cleared when the file's bytes
+	 * change, like `poster`.
+	 */
+	opaqueBox?: { x: number; y: number; width: number; height: number }
+	/**
 	 * File name of the extracted poster frame, inside `.caret/assets/.posters/`.
 	 *
 	 * For kinds that cannot be handed over as pixels directly. A derived file

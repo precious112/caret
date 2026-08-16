@@ -157,6 +157,9 @@ export async function reindexAssets(projectPath: string): Promise<ReindexResult>
 				// across a re-export would show the old frame for the new video, which
 				// reads as a caching bug rather than as stale data.
 				...(previous?.poster !== undefined && previous.hash === hash ? { poster: previous.poster } : {}),
+				// Same rule: the opaque-pixel bound describes the bytes. A re-export
+				// drops it and the enrichment pass measures the new bytes.
+				...(previous?.opaqueBox !== undefined && previous.hash === hash ? { opaqueBox: previous.opaqueBox } : {}),
 			}
 
 			assets.push(entry)
@@ -196,6 +199,42 @@ export async function retagAsset(
 		entry.tag = to
 		await writeAssetIndex(projectPath, index)
 		return { ok: true as const, index }
+	})
+}
+
+/**
+ * Records measured opaque-pixel bounds for a batch of files, one write.
+ *
+ * The measuring happens in desktop main (Electron decodes the pixels); the
+ * index mutation lives here so it shares the same lock and atomic write as
+ * every other index change. `null` records "measured, nothing to store" by
+ * clearing any stale bound; files absent from `boxes` are left untouched.
+ */
+export async function setOpaqueBoxes(
+	projectPath: string,
+	boxes: Map<string, { x: number; y: number; width: number; height: number } | null>,
+): Promise<void> {
+	if (boxes.size === 0) return
+	return runExclusive(assetIndexPath(projectPath), async () => {
+		const index = await readAssetIndex(projectPath)
+		let changed = false
+		for (const entry of index.assets) {
+			if (!boxes.has(entry.file)) continue
+			const box = boxes.get(entry.file) ?? undefined
+			const same =
+				(box === undefined && entry.opaqueBox === undefined) ||
+				(box !== undefined &&
+					entry.opaqueBox !== undefined &&
+					box.x === entry.opaqueBox.x &&
+					box.y === entry.opaqueBox.y &&
+					box.width === entry.opaqueBox.width &&
+					box.height === entry.opaqueBox.height)
+			if (same) continue
+			if (box === undefined) delete entry.opaqueBox
+			else entry.opaqueBox = box
+			changed = true
+		}
+		if (changed) await writeAssetIndex(projectPath, index)
 	})
 }
 

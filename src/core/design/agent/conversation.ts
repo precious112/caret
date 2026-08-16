@@ -114,6 +114,13 @@ export interface RunRequest {
 	 * instead — an invisible question is a deadlock, not a safeguard.
 	 */
 	unattended?: boolean
+	/**
+	 * Kind-specific structured context, carried through the turn untouched so
+	 * `onTurnComplete` subscribers can read what the task was about (the overlay
+	 * verify loop keys on this). Opaque here by design: the conversation never
+	 * reads it.
+	 */
+	context?: Record<string, unknown>
 }
 
 export interface RunOutcome {

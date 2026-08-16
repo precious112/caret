@@ -2,7 +2,8 @@ import * as fs from "fs/promises"
 import * as path from "path"
 
 import { describeInline, expandReferences, fitWarning, readAssetIndex } from "../assets"
-import type { AiEditRequestPayload } from "../rendering-shell/messages"
+import type { AssetEntry } from "../assets/types"
+import type { AiEditRequestPayload, OverlayElementInfo } from "../rendering-shell/messages"
 import { findJSXElementAtPosition, findJSXElementByCaretId, parseSource } from "./ast-editor"
 
 function extractElementSource(
@@ -28,6 +29,77 @@ function extractElementSource(
 	return result.join("\n")
 }
 
+type Rect = { x: number; y: number; width: number; height: number }
+
+function isUsableRect(rect: unknown): rect is Rect {
+	const r = rect as Partial<Rect> | null
+	return (
+		typeof r?.x === "number" &&
+		typeof r.y === "number" &&
+		typeof r.width === "number" &&
+		typeof r.height === "number" &&
+		[r.x, r.y, r.width, r.height].every(Number.isFinite) &&
+		r.width > 0 &&
+		r.height > 0
+	)
+}
+
+/**
+ * One line per measured element under the painted region, in the crop's own
+ * pixel coordinates. Numbers arrive from the preview iframe, so each is
+ * validated before being quoted to the model as fact (the `isUsableBox`
+ * posture below).
+ *
+ * Exported for the overlay verify loop, which renders the same lines for its
+ * post-edit re-measurements — the model reads one geometry format per edit.
+ */
+export function describeMeasuredElements(elements: OverlayElementInfo[], assets: AssetEntry[]): string[] {
+	const lines: string[] = []
+	let n = 0
+	for (const el of elements) {
+		if (typeof el.caretId !== "string" || !el.caretId) continue
+		if (!isUsableRect(el.rect)) continue
+		n += 1
+		const r = el.rect
+		const cx = Math.round(r.x + r.width / 2)
+		const cy = Math.round(r.y + r.height / 2)
+		const src = typeof el.src === "string" && el.src ? ` src="${el.src}"` : ""
+		lines.push(
+			`  ${n}. <${el.tag} data-caret-id="${el.caretId}">${src} — box ${r.width}x${r.height} at (${r.x},${r.y}), center (${cx},${cy})`,
+		)
+
+		// A cutout's rendered box includes its transparent margins; when the
+		// asset index measured where the opaque pixels sit, translate that into
+		// this element's rendered coordinates so alignment aims at the object,
+		// not the margins. Skipped when the rendered aspect deviates from the
+		// intrinsic one (object-fit would make the linear map wrong).
+		const visual = visualCenterLine(el, assets)
+		if (visual) lines.push(`     ${visual}`)
+	}
+	return lines
+}
+
+function visualCenterLine(el: OverlayElementInfo, assets: AssetEntry[]): string | null {
+	if (el.tag !== "img" || typeof el.src !== "string" || !el.src) return null
+	const file = el.src.split("/").pop() || ""
+	const entry = assets.find((a) => a.file === file)
+	if (!entry?.opaqueBox || !entry.width || !entry.height) return null
+	if (!isUsableRect(el.rect) || !isUsableRect(entry.opaqueBox)) return null
+
+	const renderedAspect = el.rect.width / el.rect.height
+	const intrinsicAspect = entry.width / entry.height
+	if (Math.abs(renderedAspect - intrinsicAspect) / intrinsicAspect > 0.05) return null
+
+	const scaleX = el.rect.width / entry.width
+	const scaleY = el.rect.height / entry.height
+	const ob = entry.opaqueBox
+	const w = Math.round(ob.width * scaleX)
+	const h = Math.round(ob.height * scaleY)
+	const vx = Math.round(el.rect.x + (ob.x + ob.width / 2) * scaleX)
+	const vy = Math.round(el.rect.y + (ob.y + ob.height / 2) * scaleY)
+	return `opaque pixels occupy ${w}x${h} within the box; visual center (${vx},${vy}) — the PNG has transparent margins, so center on the VISUAL center when aligning.`
+}
+
 function isUsableBox(box: unknown): box is { width: number; height: number } {
 	const candidate = box as { width?: unknown; height?: unknown }
 	return (
@@ -40,7 +112,10 @@ function isUsableBox(box: unknown): box is { width: number; height: number } {
 	)
 }
 
-export async function buildVisualEditPrompt(payload: AiEditRequestPayload, workspacePath: string): Promise<string> {
+export async function buildVisualEditPrompt(
+	payload: AiEditRequestPayload & { elements?: OverlayElementInfo[] },
+	workspacePath: string,
+): Promise<string> {
 	const sections: string[] = []
 
 	const isOverlayEdit = payload.lineNumber === 0 && !payload.caretId
@@ -50,7 +125,8 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 	// inline box, the painted overlay, and anything added later. An agent handed a
 	// bare `@hero-shot` does not error when it fails to resolve it; it invents an
 	// asset that suits the name and proceeds.
-	const expansion = expandReferences(payload.instruction, await readAssetIndex(workspacePath))
+	const assetIndex = await readAssetIndex(workspacePath)
+	const expansion = expandReferences(payload.instruction, assetIndex)
 	const instruction = expansion.text
 
 	if (isOverlayEdit) {
@@ -62,11 +138,29 @@ export async function buildVisualEditPrompt(payload: AiEditRequestPayload, works
 		// several screens above the one on screen. The words in a crop are unique
 		// where its graphics are not, so say to match on those.
 		sections.push(`The user painted a region on the design preview and provided a screenshot of what they see.`)
-		sections.push(
-			`The screenshot is a crop of this page at the scroll position the user was looking at. Locate that region in the source before you change anything. Anchor on the text visible in the crop — headings, labels, button text — and search for those exact words. That identifies the region unambiguously. If the crop carries no text, use the nearest text it does show and work outwards from there.`,
-			`Do not identify it by the graphic or by an image filename. The same image is often used by more than one component, and taking the first match edits a part of the page the user is not looking at.`,
-			`This page composes imported components. If the words you are looking for are not in the page source, they are in one of the components it imports — open that file and make the change there.`,
-		)
+		const measured = payload.elements?.length ? describeMeasuredElements(payload.elements, assetIndex.assets) : []
+		if (measured.length > 0) {
+			// Models see that a thing is off-center but cannot measure by how much
+			// from pixels alone — that is the "move it right… no, back a bit" loop.
+			// They are reliable at arithmetic, so hand them the rects the canvas
+			// measured and make the move a subtraction, not a guess.
+			sections.push(
+				`\nCaret measured the elements under the painted region. Coordinates are pixels within the attached crop (origin at the crop's top-left):`,
+				...measured,
+				`\nThe data-caret-id attributes appear verbatim in the page source — locate elements by them, never by image filename. To move or align elements, do the arithmetic with these numbers: compute the target position, derive the CSS change, and state the arithmetic in your reply. After your edit Caret will re-measure the same elements and show you the result.`,
+			)
+		}
+		if (measured.length > 0) {
+			sections.push(
+				`The screenshot is a crop of this page at the scroll position the user was looking at. If a data-caret-id above is not in the page source itself, it is inside a component the page imports — open that file and make the change there.`,
+			)
+		} else {
+			sections.push(
+				`The screenshot is a crop of this page at the scroll position the user was looking at. Locate that region in the source before you change anything. Anchor on the text visible in the crop — headings, labels, button text — and search for those exact words. That identifies the region unambiguously. If the crop carries no text, use the nearest text it does show and work outwards from there.`,
+				`Do not identify it by the graphic or by an image filename. The same image is often used by more than one component, and taking the first match edits a part of the page the user is not looking at.`,
+				`This page composes imported components. If the words you are looking for are not in the page source, they are in one of the components it imports — open that file and make the change there.`,
+			)
+		}
 		sections.push(`\nUser instruction: "${instruction}"`)
 	} else {
 		sections.push(`The user selected a SPECIFIC element in the design preview and requested an edit.`)
