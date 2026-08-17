@@ -6,7 +6,7 @@
  * A handler for a project that is not open returns null rather than falling back
  * to whichever one happens to be focused.
  */
-import { dialog, ipcMain } from "electron"
+import { dialog, ipcMain, shell } from "electron"
 import * as fs from "fs/promises"
 import * as path from "path"
 
@@ -90,6 +90,20 @@ const ATTACHABLE_IMAGES: Record<string, string> = {
 	".jpeg": "image/jpeg",
 	".webp": "image/webp",
 	".gif": "image/gif",
+}
+
+/**
+ * Which backend answers a question that is not about a running turn.
+ *
+ * Listing models and connecting accounts have to work *before* a backend is
+ * chosen: connecting an account is the natural first thing a new user does, and
+ * gating it behind "Use this" left the Accounts section empty on the screen
+ * whose whole purpose is filling it. Everything that spends inference still
+ * requires a deliberate choice — this is only for reading the catalogue and
+ * writing credentials, both of which belong to the bundled backend regardless.
+ */
+function catalogueBackend() {
+	return getBackend(getPrefs().backendId ?? "opencode")
 }
 
 export function registerIpcHandlers(windows: WindowManager): void {
@@ -638,12 +652,10 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * an id" rather than as an empty list that looks broken.
 	 */
 	ipcMain.handle("agent:models", async () => {
-		const id = getPrefs().backendId
-		if (!id) return []
 		try {
-			return (await getBackend(id).listModels?.()) ?? []
+			return (await catalogueBackend().listModels?.()) ?? []
 		} catch (err) {
-			Logger.warn(`[ipc] could not list ${id} models: ${err}`)
+			Logger.warn(`[ipc] could not list models: ${err}`)
 			return []
 		}
 	})
@@ -656,12 +668,10 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * look identical from a list that only shows what works.
 	 */
 	ipcMain.handle("agent:providerDoors", async () => {
-		const id = getPrefs().backendId
-		if (!id) return []
 		try {
-			return (await getBackend(id).listProviderDoors?.()) ?? []
+			return (await catalogueBackend().listProviderDoors?.()) ?? []
 		} catch (err) {
-			Logger.warn(`[ipc] could not list ${id} provider doors: ${err}`)
+			Logger.warn(`[ipc] could not list provider doors: ${err}`)
 			return []
 		}
 	})
@@ -681,6 +691,44 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		} catch (err) {
 			Logger.warn(`[ipc] could not probe ${model}: ${err}`)
 			return null
+		}
+	})
+
+	/**
+	 * Connects a provider: a key, or the start of the backend's own OAuth.
+	 *
+	 * The URL is opened here rather than handed to the renderer, because the
+	 * renderer must not be able to navigate anything anywhere — and because this
+	 * is the same `shell.openExternal` path every other outbound link uses.
+	 */
+	ipcMain.handle("agent:connectProvider", async (_event, providerId: string, methodId: string, key?: string) => {
+		try {
+			const challenge = (await catalogueBackend().connectProvider?.(providerId, methodId, key)) ?? null
+			if (challenge) await shell.openExternal(challenge.url)
+			return { ok: true as const, challenge }
+		} catch (err) {
+			// Shown to the user, so it says what the provider said rather than which
+			// endpoint refused.
+			return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+		}
+	})
+
+	ipcMain.handle("agent:completeOauth", async (_event, providerId: string, methodId: string, code: string) => {
+		try {
+			const ok = (await catalogueBackend().completeOauth?.(providerId, methodId, code)) ?? false
+			return { ok, error: ok ? undefined : "That code was not accepted." }
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) }
+		}
+	})
+
+	ipcMain.handle("agent:disconnectProvider", async (_event, providerId: string) => {
+		try {
+			await catalogueBackend().disconnectProvider?.(providerId)
+			return true
+		} catch (err) {
+			Logger.warn(`[ipc] could not disconnect ${providerId}: ${err}`)
+			return false
 		}
 	})
 

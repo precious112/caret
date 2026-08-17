@@ -104,11 +104,32 @@ export interface ProviderDoor {
 	id: string
 	name: string
 	/** In the backend's own words — it owns these flows, Caret only offers them. */
-	methods: Array<{ kind: "oauth" | "api-key"; label: string }>
+	methods: ProviderAuthMethod[]
 	/** True when this is a plan somebody may already be paying for. */
 	subscription: boolean
 	/** What connecting it would put within reach, for the row's one line. */
 	sample: string[]
+}
+
+export interface ProviderAuthMethod {
+	/** Opaque to the UI: hand it back to {@link CodingBackend.connectProvider}. */
+	id: string
+	kind: "oauth" | "api-key"
+	label: string
+}
+
+/**
+ * What the user has to do next to finish signing in.
+ *
+ * Returned by an OAuth start. Caret opens the URL and then either waits — the
+ * backend's own loopback listener finishes it — or asks for the code the page
+ * shows, which is what a headless flow needs.
+ */
+export interface OauthChallenge {
+	url: string
+	instructions?: string
+	/** True when the user must paste something back. False means: just wait. */
+	needsCode: boolean
 }
 
 export interface StartSessionOptions {
@@ -256,6 +277,23 @@ export interface CodingBackend {
 	 * the provider's own words when it refuses, or null when it answers.
 	 */
 	probeModel?(model: string, workingDirectory: string): Promise<string | null>
+	/**
+	 * Connects a provider, by key or by starting the backend's own OAuth.
+	 *
+	 * **Caret never implements a vendor's sign-in.** It asks the backend to run the
+	 * flow the backend already runs for its own users, and opens the URL it hands
+	 * back. That is the difference between offering someone a door and forging
+	 * their key: the credential is issued to the tool the vendor sanctioned, and
+	 * Caret does not see it.
+	 *
+	 * Resolves null when the provider is connected outright (a key), or with what
+	 * the user has to do next.
+	 */
+	connectProvider?(providerId: string, methodId: string, key?: string): Promise<OauthChallenge | null>
+	/** Finishes a flow that asked for a code. */
+	completeOauth?(providerId: string, methodId: string, code: string): Promise<boolean>
+	/** Forgets a credential. The provider stays offered; it just stops being connected. */
+	disconnectProvider?(providerId: string): Promise<void>
 	/** Sessions previously run in this project, newest first. */
 	listSessions?(workingDirectory: string): Promise<BackendSessionSummary[]>
 	/**

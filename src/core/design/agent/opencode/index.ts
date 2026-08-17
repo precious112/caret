@@ -21,6 +21,7 @@ import {
 	type BackendSessionSummary,
 	type CodingBackend,
 	type ModelGroup,
+	type OauthChallenge,
 	type PermissionDecision,
 	type ProviderDoor,
 	type SendInput,
@@ -373,14 +374,18 @@ export class OpencodeBackend implements CodingBackend {
 			const provider = catalogue.all.find((candidate) => candidate.id === id)
 			if (!provider) continue
 
-			const methods = (methodsByProvider[id] ?? []).map((method) => ({
+			// The id is the method's position in the server's own list, which is what
+			// its authorize endpoint takes. Opaque on the way out and on the way
+			// back, so the UI never learns what it means.
+			const methods = (methodsByProvider[id] ?? []).map((method, index) => ({
+				id: String(index),
 				kind: method.type === "oauth" ? ("oauth" as const) : ("api-key" as const),
 				label: method.label,
 			}))
 			// No published method does not mean no way in: these providers all take
 			// a key, and `env` is the server telling us which one.
 			if (methods.length === 0 && (provider.env?.length ?? 0) > 0) {
-				methods.push({ kind: "api-key", label: "Enter your key" })
+				methods.push({ id: "key", kind: "api-key", label: "Enter your key" })
 			}
 			if (methods.length === 0) continue
 
@@ -401,6 +406,80 @@ export class OpencodeBackend implements CodingBackend {
 		}
 
 		return doors
+	}
+
+	/**
+	 * Connects a provider — a key stored, or the server's own OAuth started.
+	 *
+	 * The key goes straight to the server rather than into Caret's own keychain,
+	 * and that is deliberate: it is the server that has to present it on every
+	 * request, so a copy in Caret would be a second place for a credential to
+	 * leak from and a second place for it to go stale.
+	 */
+	async connectProvider(providerId: string, methodId: string, key?: string): Promise<OauthChallenge | null> {
+		const server = await this.server()
+
+		if (key !== undefined) {
+			await request(server, `/auth/${providerId}`, { method: "PUT", body: { type: "api", key } })
+			await this.reloadCredentials()
+			return null
+		}
+
+		const started = await request<{ url: string; method?: string; instructions?: string }>(
+			server,
+			`/provider/${providerId}/oauth/authorize`,
+			{ method: "POST", body: { method: Number(methodId) || 0 } },
+		)
+
+		return {
+			url: started.url,
+			instructions: started.instructions,
+			// `auto` is the server saying it will finish this itself on its own
+			// loopback listener. Anything else wants the code off the page.
+			needsCode: started.method !== undefined && started.method !== "auto",
+		}
+	}
+
+	async completeOauth(providerId: string, methodId: string, code: string): Promise<boolean> {
+		const server = await this.server()
+		const ok = await request<boolean>(server, `/provider/${providerId}/oauth/callback`, {
+			method: "POST",
+			body: { method: Number(methodId) || 0, code },
+		})
+		await this.reloadCredentials()
+		return ok !== false
+	}
+
+	async disconnectProvider(providerId: string): Promise<void> {
+		const server = await this.server()
+		await request(server, `/auth/${providerId}`, { method: "DELETE" })
+		await this.reloadCredentials()
+	}
+
+	/**
+	 * Makes the server notice a credential that just changed.
+	 *
+	 * **Writing the credential is not enough, and this is the trap the feature
+	 * fell into first.** The server answers `/provider` and `/config/providers`
+	 * from a list it builds once, on the first request that needs it, and a later
+	 * `PUT /auth/:id` does not invalidate it — measured: connect a provider and it
+	 * is still absent three seconds later, still absent after a fresh fetch, and
+	 * present the moment the process restarts. So "Connect" would have appeared to
+	 * do nothing at all, and the only clue would have been that it worked
+	 * tomorrow.
+	 *
+	 * `POST /instance/dispose` is the invalidation. Sessions live in the server's
+	 * own database rather than in that instance, so history survives; a turn
+	 * streaming at this exact moment would not, which is a trade worth making for
+	 * an act nobody performs mid-conversation.
+	 */
+	private async reloadCredentials(): Promise<void> {
+		this.forgetCatalogue()
+		const server = await this.server()
+		await request(server, "/instance/dispose", { method: "POST" }).catch((err) => {
+			// Not fatal, but the user is about to think their sign-in failed.
+			Logger.warn(`[backend] credentials changed but the instance would not reload: ${err}`)
+		})
 	}
 
 	/**

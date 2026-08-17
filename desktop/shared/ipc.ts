@@ -382,10 +382,17 @@ export interface ModelGroupWire {
 export interface ProviderDoorWire {
 	id: string
 	name: string
-	methods: Array<{ kind: "oauth" | "api-key"; label: string }>
+	methods: Array<{ id: string; kind: "oauth" | "api-key"; label: string }>
 	subscription: boolean
 	/** A few of the models it would put within reach, newest first. */
 	sample: string[]
+}
+
+/** What is left to do after a sign-in starts. */
+export interface OauthChallengeWire {
+	url: string
+	instructions?: string
+	needsCode: boolean
 }
 
 export interface AgentSessionWire {
@@ -836,6 +843,17 @@ export interface IpcRequests {
 	 * turn.
 	 */
 	"agent:probeModel": (projectPath: string, model: string) => string | null
+	/**
+	 * Connects a provider. A key connects it outright; an OAuth method returns
+	 * what the user has to do next, and Caret opens the URL for them.
+	 */
+	"agent:connectProvider": (
+		providerId: string,
+		methodId: string,
+		key?: string,
+	) => { ok: true; challenge: OauthChallengeWire | null } | { ok: false; error: string }
+	"agent:completeOauth": (providerId: string, methodId: string, code: string) => { ok: boolean; error?: string }
+	"agent:disconnectProvider": (providerId: string) => boolean
 	"agent:sessions": (projectPath: string) => AgentSessionWire[]
 	"agent:replay": (projectPath: string, sessionId: string) => boolean
 

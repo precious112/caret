@@ -30,7 +30,7 @@ const TURN_DEADLINE_MS = 30 * 60_000
 const dispatcher = new Agent({ headersTimeout: TURN_DEADLINE_MS, bodyTimeout: TURN_DEADLINE_MS, keepAliveTimeout: 60_000 })
 
 export interface RequestOptions {
-	method?: "GET" | "POST" | "DELETE"
+	method?: "GET" | "POST" | "PUT" | "DELETE"
 	/** Appended as query parameters; `undefined` values are dropped. */
 	query?: Record<string, string | undefined>
 	body?: unknown
