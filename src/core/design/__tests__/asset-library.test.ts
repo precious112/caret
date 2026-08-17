@@ -110,24 +110,24 @@ describe("the product cutout recipe", () => {
 		variant.request.lane.should.equal("raster")
 		if (variant.request.lane !== "raster") return
 
-		// A blue-branded project keys on green, and the prompt names the exact hex
-		// the runner will key out — the model paints it because it was asked to,
-		// and it is removed because it is known.
-		variant.request.keyColor!.should.equal("#00b140")
-		variant.request.prompt.should.containEql("#00b140")
-		variant.request.prompt.should.containEql("chroma green")
+		// Plain white, which the runner floods away from the frame edge. Not a key
+		// colour: asked for a specific hex the model returns a flat background of
+		// its own choosing, and gating on the hex refused perfect pictures.
+		variant.request.prompt.should.containEql("white")
 		variant.request.transparent.should.be.true()
 		// The slop tells still compose in — a keyed recipe is not exempt.
 		variant.request.avoid.join(" ").should.containEql("cast shadow")
 	})
 
-	it("keys magenta when the project's own brand is green", () => {
+	it("asks for the same white whatever the project's own brand is", () => {
+		// The old mechanism swapped the key colour when the brand collided with it.
+		// Nothing collides with "no background", so the instruction is now the same
+		// for every project — one less thing for the model to get wrong.
 		const recipe = findAssetRecipe("product-cutout")!
 		const green = tokens({ brand: { seed: "#16a34a", scale: {} } })
 		const [variant] = composeVariants({ recipe, tokens: green, aspect: "1:1", count: 1 })
 		if (variant.request.lane !== "raster") return
-		variant.request.keyColor!.should.equal("#e800e8")
-		variant.request.prompt.should.containEql("chroma magenta")
+		variant.request.prompt.should.containEql("pure flat white")
 	})
 
 	it("is what the cutout purpose narrows to", () => {

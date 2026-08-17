@@ -723,13 +723,13 @@ source's single object) are never negotiable.
       model list. BYO Tripo key, same keychain rules as the Gemini key.
 - [x] **Transparency comes from the model, not a matting step.** Gemini returns transparent PNG
       for icon-style prompts; code generators and authored SVG have no background to remove.
-      For a genuine photographic cutout: the `product-cutout` recipe asks for the object on a
-      flat key colour Caret chose from the foundation (green unless the brand itself is green),
-      and the runner keys it out deterministically **before the variant is shown** — the user
-      picks the finished cutout, not a promise of one. The keyer measures the actual background
-      from the border rather than trusting the requested hex, unmixes edge contamination, and
-      **refuses with measured numbers** (background not flat, subject went with it, nothing
-      removed) instead of keeping a bad cutout. Alpha survives post-process: WebP carries it,
+      For a genuine photographic cutout: ask for a plain white background and remove it
+      **before the variant is shown** — the user picks the finished cutout, not a promise of
+      one. It **refuses with measured numbers** (the edge is not white, nothing was removed, the
+      subject went with the background) instead of keeping a bad one. *Corrected 2026-08-15:*
+      this asked for an exact hex and chroma-keyed it out until real generations showed the
+      model returns a flat background of its own choosing every time — 0% agreement with the
+      colour requested, 100% with itself — refusing perfect cutouts. Alpha survives post-process: WebP carries it,
       and the no-window fallback becomes PNG rather than JPEG. Pure and unit-tested in
       `chroma-key.ts`; the offering and a live keyed run are `verify:app` scenarios bh/bm.
 - [x] **BYO API key, OS keychain, never in `.caret/`.** This is the monetization boundary

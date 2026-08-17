@@ -1,9 +1,9 @@
 /**
  * Does this backend actually pass an image to the model?
  *
- *   npx tsx scripts/probe-vision.ts [claude|opencode|codex|kimi] [--model <id>]
+ *   npx tsx scripts/probe-vision.ts [opencode] [--model <id>]
  *
- * The question is not academic. The Claude adapter used to append
+ * The question is not academic. A removed Claude adapter used to append
  * `"(Caret attached 2 screenshot(s).)"` to the prompt and then discard them, so
  * every caller believed it had sent a picture and the model confidently
  * described one it had never seen. The overlay editor shipped on top of that.
@@ -74,7 +74,7 @@ function solidPng(width: number, height: number, [r, g, b]: [number, number, num
 }
 
 async function main(): Promise<void> {
-	const id = (process.argv[2] ?? "claude") as "claude" | "opencode" | "codex" | "kimi"
+	const id = (process.argv[2] ?? "opencode") as "opencode"
 	const modelIndex = process.argv.indexOf("--model")
 	const model = modelIndex > -1 ? process.argv[modelIndex + 1] : undefined
 

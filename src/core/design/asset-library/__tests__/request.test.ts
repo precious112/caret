@@ -88,8 +88,6 @@ describe("composeAssetRequest", () => {
 			// afterwards, so a prompt that omits it produces a cutout with no alpha.
 			const composed = raster(composeAssetRequest({ kind: "image", text: "a paperclip", transparent: true }, INPUT))
 			assert.ok(composed.transparent)
-			assert.ok(composed.keyColor, "no key colour was chosen")
-			assert.ok(composed.prompt.includes(composed.keyColor!), "the key colour is never named in the prompt")
 			assert.ok(/flat|uniform/i.test(composed.prompt), "the background is not required to be flat")
 			assert.ok(
 				composed.avoid.some((a) => /shadow/i.test(a)),
@@ -97,10 +95,32 @@ describe("composeAssetRequest", () => {
 			)
 		})
 
-		it("an opaque image is not forced onto a key colour", () => {
+		it("never sends a cutout an instruction that contradicts its own background", () => {
+			// Observed live: every take refused with "0% of the border is near
+			// #00b140". The prompt asked correctly for the flat green; the negative
+			// list told the model not to centre the subject and not to use colours
+			// outside the palette — which is exactly what a key colour is.
+			const composed = raster(composeAssetRequest({ kind: "image", text: "a paperclip", transparent: true }, INPUT))
+			for (const rule of composed.avoid) {
+				assert.ok(!/centred symmetrical/.test(rule), `a cutout was told: "${rule}", but it asks for a centred subject`)
+				assert.ok(!/outside the palette/.test(rule), `a cutout was told: "${rule}", but its background deliberately is`)
+			}
+		})
+
+		it("does not forbid text on subjects that legitimately carry it", () => {
+			// "a stainless steel ruler, 150mm, markings visible" is a request for
+			// lettering. Banning it outright fights the user's own words.
+			const composed = raster(composeAssetRequest({ kind: "image", text: "a ruler with markings" }, INPUT))
+			assert.ok(
+				!composed.avoid.some((rule) => /^lettering/.test(rule)),
+				"a blanket ban on lettering contradicts any subject with text on it",
+			)
+		})
+
+		it("an opaque image is not forced onto white", () => {
 			const composed = raster(composeAssetRequest({ kind: "image", text: "a quiet room with morning light" }, INPUT))
 			assert.equal(composed.transparent, false)
-			assert.equal(composed.keyColor, undefined)
+			assert.ok(!/pure flat white/i.test(composed.prompt), "an ordinary photograph was pushed onto a cutout background")
 		})
 
 		it("a 3D source image is required to hold exactly one object", () => {

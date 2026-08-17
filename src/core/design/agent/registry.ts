@@ -1,18 +1,17 @@
 /**
  * Which backends exist, and one instance of each.
  *
- * Instances are cached per process rather than per project: adapters own a
- * server process or a CLI handle, and a second project must not start a second
- * copy of either.
+ * There is one, and `backend.ts` records why the other three were removed. The
+ * registry survives the cull because the *number* of backends is not what it is
+ * for: instances are cached per process rather than per project, because an
+ * adapter owns a server process, and a second open project must not start a
+ * second copy of it.
  */
 import type { AvailabilityReport, BackendId, CodingBackend } from "./backend"
-import { ClaudeBackend } from "./claude"
-import { CodexBackend } from "./codex"
-import { KimiBackend } from "./kimi"
 import { OpencodeBackend } from "./opencode"
 
-/** Order is the order the setup screen offers them in: bundled first. */
-export const BACKEND_IDS: BackendId[] = ["opencode", "claude", "codex", "kimi"]
+/** The order the setup screen offers them in. */
+export const BACKEND_IDS: BackendId[] = ["opencode"]
 
 const instances = new Map<BackendId, CodingBackend>()
 
@@ -29,21 +28,15 @@ function construct(id: BackendId): CodingBackend {
 	switch (id) {
 		case "opencode":
 			return new OpencodeBackend()
-		case "claude":
-			return new ClaudeBackend()
-		case "codex":
-			return new CodexBackend()
-		case "kimi":
-			return new KimiBackend()
 	}
 }
 
 /**
  * Availability of every backend, for the setup screen.
  *
- * Probed in parallel and never allowed to throw: one adapter whose CLI misbehaves
- * must not blank the whole screen, so a failure becomes that row's own "not
- * ready" reason.
+ * Probed in parallel and never allowed to throw: an adapter whose server
+ * misbehaves must not blank the whole screen, so a failure becomes that row's
+ * own "not ready" reason.
  */
 export async function probeBackends(): Promise<AvailabilityReport[]> {
 	return Promise.all(
@@ -55,7 +48,6 @@ export async function probeBackends(): Promise<AvailabilityReport[]> {
 				return {
 					id,
 					displayName: backend.displayName,
-					permissionModel: backend.permissionModel,
 					providerName: backend.providerName,
 					installed: false,
 					authenticated: false,

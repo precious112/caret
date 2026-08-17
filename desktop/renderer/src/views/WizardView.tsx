@@ -754,14 +754,21 @@ function ScaleWidget({
 }) {
 	const steps = question.steps ?? []
 	const [index, setIndex] = useState(question.defaultStep ?? Math.floor(steps.length / 2))
+	const [custom, setCustom] = useState("")
 
 	useFonts(familiesOf(base))
 
 	useEffect(() => {
+		// Their own words win over the slider: a scale offers a handful of points
+		// on one axis, and the thing they actually want may not be on it.
+		if (custom.trim()) {
+			onPick({ answer: { value: custom.trim(), label: custom.trim(), wasOther: true } })
+			return
+		}
 		const step = steps[index]
 		if (step) onPick({ answer: { value: step.label, label: step.label } })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [index])
+	}, [index, custom])
 
 	const spec = { ...base, ...steps[index]?.spec }
 
@@ -781,17 +788,33 @@ function ScaleWidget({
 						<button
 							className={cn(
 								"h-8 flex-1 rounded-lg border text-[11.5px] transition-colors",
-								stepIndex === index
+								stepIndex === index && !custom.trim()
 									? "border-caret-accent bg-caret-accent/15 text-caret-accent"
 									: "border-shell-border text-shell-muted hover:bg-white/5",
 							)}
 							key={step.label}
-							onClick={() => setIndex(stepIndex)}
+							onClick={() => {
+								setCustom("")
+								setIndex(stepIndex)
+							}}
 							type="button">
 							{step.label}
 						</button>
 					))}
 				</div>
+
+				{question.other === "text" && (
+					<input
+						className={cn(
+							"mt-3 w-full rounded-lg border bg-shell-panel px-3 py-1.5 text-[12.5px] outline-none",
+							custom.trim() ? "border-caret-accent" : "border-shell-border focus:border-caret-accent/60",
+						)}
+						data-testid="wizard-scale-other"
+						onChange={(event) => setCustom(event.target.value)}
+						placeholder="Or say it in your own words…"
+						value={custom}
+					/>
+				)}
 			</div>
 		</div>
 	)

@@ -18,6 +18,30 @@ export interface Prefs {
 	editorCommand: string
 	/** The user's own Google Fonts API key, if they have one. */
 	googleFontsApiKey: string
+	/**
+	 * Google Cloud project for the raster lane's Vertex backend.
+	 *
+	 * The test-only switch §6.7 specifies, and deliberately absent from the UI:
+	 * the shipped path is a Gemini API key in the keychain. It lives in prefs
+	 * rather than only in the environment because a macOS app launched from
+	 * Finder or the dock inherits no shell environment at all — an env-only
+	 * switch can therefore only ever be reached by the certification harness,
+	 * which spawns Electron itself, and never by someone running the app.
+	 * Empty = not configured. Requires working `gcloud` ADC.
+	 */
+	vertexProject: string
+	/** Vertex region. Empty falls back to `global`. */
+	vertexLocation: string
+	/**
+	 * Opt out of the 214MB cutout model.
+	 *
+	 * The download is unconditional otherwise, and deliberately: gating it on
+	 * anything — a key being present, the feature being opened — starts it at the
+	 * moment somebody wants a cutout, which is the one moment it is in the way.
+	 * Someone on a metered connection gets a switch rather than a guess made for
+	 * them.
+	 */
+	skipCutoutModel: boolean
 	/** Whether `.caret/` is auto-committed after the design layer settles. */
 	autoCommitDesign: boolean
 	/** Windows the user had open, restored on next launch. */
@@ -25,8 +49,8 @@ export interface Prefs {
 	/** Set once the first-run onboarding has been completed. */
 	onboardingCompleted: boolean
 	/** Which coding backend Caret drives. Null until the user picks one. */
-	backendId: "opencode" | "claude" | "codex" | "kimi" | null
-	/** Model in the backend's own namespace, e.g. `anthropic/claude-sonnet-5`. Empty = its default. */
+	backendId: "opencode" | null
+	/** Model in the backend's own namespace, e.g. `opencode-go/gpt-5.6-luna`. Empty = its default. */
 	backendModel: string
 	/** How hard the model thinks. Empty = the backend's own default. */
 	backendEffort: "" | "minimal" | "low" | "medium" | "high" | "xhigh"
@@ -68,6 +92,9 @@ const DEFAULTS: Prefs = {
 	recentProjects: [],
 	editorCommand: "",
 	googleFontsApiKey: "",
+	vertexProject: "",
+	vertexLocation: "",
+	skipCutoutModel: false,
 	autoCommitDesign: true,
 	lastSession: [],
 	onboardingCompleted: false,
@@ -101,6 +128,27 @@ export function loadPrefs(): Prefs {
 	} catch {
 		cache = { ...DEFAULTS }
 	}
+	return retireRemovedBackends(cache)
+}
+
+/** Backends Caret used to drive. See `agent/backend.ts` for why they went. */
+const REMOVED_BACKENDS = new Set(["claude", "codex", "kimi"])
+
+/**
+ * Moves anyone who had chosen a removed backend onto the bundled one.
+ *
+ * **The model has to go with it.** Model ids live in a backend's own namespace,
+ * so a leftover `claude-sonnet-5` handed to OpenCode is not a wrong model, it is
+ * a model that does not exist — the first turn would fail with a provider error
+ * naming a string the user never typed. Clearing it lands them on the provider's
+ * own default, which always resolves, and the picker shows what they have.
+ *
+ * Effort survives: it is Caret's own vocabulary, not a backend's.
+ */
+function retireRemovedBackends(prefs: Prefs): Prefs {
+	if (!prefs.backendId || !REMOVED_BACKENDS.has(prefs.backendId)) return prefs
+	cache = { ...prefs, backendId: "opencode", backendModel: "" }
+	void persist()
 	return cache
 }
 

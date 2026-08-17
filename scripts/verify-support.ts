@@ -37,7 +37,7 @@ export interface VerifyModel {
 	source: "env" | "free"
 }
 
-const BACKEND_IDS = new Set<string>(["opencode", "claude", "codex", "kimi"])
+const BACKEND_IDS = new Set<string>(["opencode"])
 const EFFORTS = new Set<string>(["minimal", "low", "medium", "high", "xhigh"])
 
 /** Null means: no model this suite is allowed to use. Skip, do not fail. */
@@ -87,6 +87,31 @@ export async function resolveVerifyModel(): Promise<VerifyModel | null> {
 const PREFERRED_FREE_MODELS = ["opencode/ling-3.0-flash-free", "opencode/mimo-v2.5-free"]
 
 /**
+ * Providers whose zero cost means "subscription", not "free".
+ *
+ * **Zero cost is not the same as free to spend, and discovering that the hard
+ * way would mean spending somebody's subscription.** OpenCode's provider plugins
+ * deliberately report `cost: { input: 0, output: 0 }` for plans you have already
+ * paid for — a ChatGPT sign-in, Kimi For Coding, the Z.AI and Zhipu coding
+ * plans, Copilot — because there is no per-token price to report. Left to the
+ * cost check alone, an unattended run would pick one of those and burn a monthly
+ * quota, which is the exact accident rule 2 at the top of this file exists to
+ * prevent. Metered providers do not need listing here: their prices are non-zero,
+ * so the cost check already excludes them.
+ */
+const SUBSCRIPTION_PROVIDERS = new Set([
+	"openai",
+	"anthropic",
+	"github-copilot",
+	"gitlab",
+	"kimi-for-coding",
+	"zai-coding-plan",
+	"zhipuai-coding-plan",
+	"poe",
+	"xai",
+])
+
+/**
  * A zero-cost model the backend offers, or null.
  *
  * Preferred-then-discovered rather than pinned: a free tier's catalogue is
@@ -102,6 +127,12 @@ async function freeModel(): Promise<string | null> {
 
 	const free: string[] = []
 	for (const provider of providers.providers) {
+		if (SUBSCRIPTION_PROVIDERS.has(provider.id)) {
+			// Said out loud. A run that quietly skipped the models you are signed in
+			// to would look like the catalogue was empty.
+			console.log(`[verify] skipping ${provider.id} — its zero cost is a subscription you pay for, not a free tier`)
+			continue
+		}
 		for (const [id, model] of Object.entries(provider.models ?? {})) {
 			const cost = model.cost
 			if (cost && cost.input === 0 && cost.output === 0) free.push(`${provider.id}/${id}`)

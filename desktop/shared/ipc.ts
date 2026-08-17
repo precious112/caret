@@ -320,13 +320,11 @@ export type WizardStateWire =
  * Structural mirrors of the core types, like every other `*Wire` here, so a
  * renderer import of main-process code stays a compile error.
  */
-export type BackendIdWire = "opencode" | "claude" | "codex" | "kimi"
+export type BackendIdWire = "opencode"
 
 export interface BackendReportWire {
 	id: BackendIdWire
 	displayName: string
-	/** `sandbox` means Caret cannot ask before individual writes on this backend. */
-	permissionModel: "ask" | "sandbox"
 	/** Who serves this backend's models, for ids that do not say so themselves. */
 	providerName: string
 	installed: boolean
@@ -334,7 +332,6 @@ export interface BackendReportWire {
 	ready: boolean
 	detail: string
 	remedy?: { label: string; command?: string; url?: string }
-	untested?: boolean
 }
 
 export type TranscriptEntryWire =

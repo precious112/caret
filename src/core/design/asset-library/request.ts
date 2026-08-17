@@ -33,7 +33,6 @@
  */
 import type { CodingBackend } from "../agent/backend"
 import type { FoundationTokens } from "../types"
-import { chooseKeyColor } from "./raster/chroma-key"
 import { foundationWords } from "./raster/palette-words"
 import { SLOP_TELLS } from "./recipes"
 import type { AssetRecipe, GeneratorPalette, RecipeRequest } from "./types"
@@ -91,10 +90,23 @@ export const SHARED_AVOID: string[] = [
 	"a person looking at the camera",
 	"hands holding or touching the subject",
 	"visible screens, or an invented user interface on a device",
-	"lettering, watermarks or signage of any kind",
 	"hard shadows or dramatic theatrical lighting",
 	"props arranged for the camera — the tidy flat-lay look",
 	"duplicated objects, extra limbs, or geometry that does not resolve",
+]
+
+/**
+ * Shared rules a keyed cutout must NOT be sent.
+ *
+ * The cutout asks for exactly two things these forbid: a subject dead centre,
+ * and a background colour deliberately nowhere near the project's palette. Sent
+ * together, the request contradicts itself — and a model resolving that
+ * contradiction may drop the very background the keyer measures against, which
+ * shows up as "0% of the border is near #00b140" and every take refused.
+ */
+const CONTRADICTS_A_CUTOUT = [
+	"no centred symmetrical composition unless asked for",
+	"no gradient meshes in colours outside the palette",
 ]
 
 /** Extra constraints that survive the key, on top of `SHARED_AVOID`. */
@@ -102,7 +114,7 @@ const CUTOUT_AVOID = [
 	"any cast shadow or reflection under or behind the object",
 	"any second object, prop or hand",
 	"the object cropped by the frame edge",
-	"the key colour appearing anywhere on the object itself",
+	"any background other than the plain white it is asked for",
 ]
 
 const SINGLE_OBJECT_AVOID = [
@@ -180,17 +192,21 @@ export function composeAssetRequest(
 	// Everything else composes a photograph. A 3D object starts as one too: Tripo
 	// builds from a source image, so the difference is what the image must hold.
 	const singleObject = request.kind === "object3d"
-	const transparent = request.kind === "image" && request.transparent === true
-	const key = transparent ? chooseKeyColor(input.palette) : null
+	const cutout = request.kind === "image" && request.transparent === true
 
 	const sentences: string[] = [`${said}.`]
 	if (answers) sentences.push(answers)
 
-	if (key) {
+	if (cutout) {
+		// Pure white rather than a key colour. Asked for a specific hex the model
+		// returns a flat background of its own choosing — measured at 0% agreement
+		// with the colour requested and 100% with itself — and the cutout is then
+		// refused for a picture that was perfect. White is not a colour it has to
+		// match, so there is nothing to get wrong.
 		sentences.push(
-			`The whole subject is visible in frame, alone and centered.`,
-			`The background is a perfectly flat, uniform ${key.word} (${key.hex}) filling every edge of the frame.`,
-			"Soft even studio light from all sides. No shadow, no reflection, no vignette — the subject floats on the flat colour.",
+			"The whole subject is visible in frame, alone and centered.",
+			"The background is pure flat white (#ffffff) filling every edge of the frame, and nothing else is in the picture.",
+			"Soft even studio light from all sides. No shadow, no reflection, no vignette.",
 		)
 	} else if (singleObject) {
 		sentences.push(
@@ -203,17 +219,20 @@ export function composeAssetRequest(
 
 	// The foundation always speaks last, so a request that says nothing about
 	// colour still lands on the project's own palette rather than a default one.
-	// A keyed shot is the exception: its background is ours by arithmetic, and
-	// palette words there would tint the very colour being removed.
-	if (!key) sentences.push(foundationWords(input.palette))
+	// A cutout is the exception: its background is about to be removed, and
+	// palette words there would tint the very white the remover looks for.
+	if (!cutout) sentences.push(foundationWords(input.palette))
 
 	return {
 		lane: "raster",
 		prompt: sentences.filter(Boolean).join(" "),
-		avoid: [...SHARED_AVOID, ...(key ? CUTOUT_AVOID : []), ...(singleObject ? SINGLE_OBJECT_AVOID : [])],
+		avoid: [
+			...(cutout ? SHARED_AVOID.filter((rule) => !CONTRADICTS_A_CUTOUT.includes(rule)) : SHARED_AVOID),
+			...(cutout ? CUTOUT_AVOID : []),
+			...(singleObject ? SINGLE_OBJECT_AVOID : []),
+		],
 		aspect: input.aspect,
-		transparent: Boolean(key),
-		...(key ? { keyColor: key.hex } : {}),
+		transparent: cutout,
 	}
 }
 

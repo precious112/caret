@@ -24,7 +24,6 @@
  * legible in the provenance record rather than being woven into prose.
  */
 import type { AssetRecipe } from "../types"
-import { chooseKeyColor } from "./chroma-key"
 import { foundationWords, paletteWords } from "./palette-words"
 
 /** Where the headline goes, in words a model composes to. */
@@ -116,23 +115,18 @@ const PRODUCT_CUTOUT: AssetRecipe = {
 	],
 	pairsWith: { palettes: ["mono-accent", "warm-earth", "quiet-institutional", "deep-technical"] },
 	rationale:
-		"Keying only works because the background is ours: a flat colour named by hex, chosen to be nowhere near the project's palette, painted by the model because it was asked to and removed by arithmetic because it is known. A matting model would work on any photo and be wrong unpredictably; this works on exactly one kind of photo and fails loudly when the model ignores the instruction.",
-	realise: ({ palette, variant }) => {
-		const key = chooseKeyColor(palette)
-		return {
-			lane: "raster",
-			prompt: [
-				`A product photograph of ${objectOf(variant)}, alone, centered, the whole object visible in frame.`,
-				`The background is a perfectly flat, uniform ${key.word} (${key.hex}) filling every edge of the frame.`,
-				"Soft even studio light from all sides. No shadow, no reflection, no vignette — the object floats on the flat colour.",
-				paletteWords(palette),
-			].join(" "),
-			avoid: [],
-			aspect: "1:1",
-			transparent: true,
-			keyColor: key.hex,
-		}
-	},
+		"Plain white, flooded away from the frame edge. The earlier version named an exact hex for the model to paint and keyed that colour out; measured on real generations the model returns a flat background of its own choosing every time — 0% agreement with the colour requested, 100% with itself — so perfect cutouts were refused for failing a test of the instruction rather than of the picture. White is not a colour it has to match. Flooding from the edge rather than thresholding globally keeps white that belongs to the subject, because that white is not reachable from outside.",
+	realise: ({ variant }) => ({
+		lane: "raster",
+		prompt: [
+			`A product photograph of ${objectOf(variant)}, alone, centered, the whole object visible in frame.`,
+			"The background is pure flat white (#ffffff) filling every edge of the frame, and nothing else is in the picture.",
+			"Soft even studio light from all sides. No shadow, no reflection, no vignette.",
+		].join(" "),
+		avoid: [],
+		aspect: "1:1",
+		transparent: true,
+	}),
 }
 
 export const RASTER_RECIPES: AssetRecipe[] = [

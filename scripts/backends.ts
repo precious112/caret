@@ -25,11 +25,8 @@ async function main(): Promise<void> {
 
 	for (const report of await probeBackends()) {
 		const state = report.ready ? "ready" : report.installed ? "needs sign-in" : "not installed"
-		const flags = [report.permissionModel === "sandbox" ? "can't ask per file" : null, report.untested ? "untested" : null]
-			.filter(Boolean)
-			.join(", ")
 
-		console.log(`  ${report.displayName.padEnd(20)} ${state.padEnd(14)} ${flags ? `[${flags}] ` : ""}${report.detail}`)
+		console.log(`  ${report.displayName.padEnd(20)} ${state.padEnd(14)} ${report.detail}`)
 		if (report.remedy?.command) console.log(`  ${" ".repeat(20)} → ${report.remedy.label}: ${report.remedy.command}`)
 	}
 
@@ -44,9 +41,9 @@ async function main(): Promise<void> {
 
 	console.log(`\nBundled backend: ${binary}`)
 
-	// Every backend that can name its models, so "is my subscription detected"
-	// and "can Caret see the model I want" are answered in one place.
-	for (const id of ["opencode", "claude", "codex", "kimi"] as const) {
+	// The models the backend can name, so "is my subscription detected" and "can
+	// Caret see the model I want" are answered in one place.
+	for (const id of ["opencode"] as const) {
 		const groups = await getBackend(id)
 			.listModels?.()
 			.catch(() => [])

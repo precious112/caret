@@ -29,6 +29,10 @@ import {
 /** Aim well under this; the cap is the backstop, not the target. */
 export const QUESTION_CAP = 10
 
+/** "Yes, all of these" and its relatives — see the `assumptions` check below. */
+const BLANKET_CONFIRM =
+	/^(yes\b|all of (these|the above)|confirm all|these are all|that('| i)s all correct|sounds right|looks right|agree)/i
+
 export class WizardTurnError extends Error {
 	constructor(message: string) {
 		super(message)
@@ -60,34 +64,89 @@ corner character — by asking the fewest, best questions, then hand back the pa
 - **Never ask what their description already answers.** Infer it, and confirm inferences with
   one \`assumptions\` question rather than several individual ones.
 - Aim for 4–7 questions total. You will be told the count; at ${QUESTION_CAP} you must finish.
-- Plain language only. No design jargon — not "humanist sans", not "x-height". Every option's
-  \`reason\` must be grounded in what they told you: "agents scan this all day, so it stays
-  readable at small sizes", never "a geometric grotesque".
-- Always mark a \`recommendedId\`. Someone pressing straight through your questions must end
-  up with a foundation you would defend.
+- Always mark a \`recommendedId\` — **except on \`assumptions\`, which must not have one.**
+  Someone pressing straight through your questions must end up with a foundation you would
+  defend.
 - Options should differ meaningfully. Three near-identical blues is not a question.
 - Typefaces must be real Google Fonts family names, spelled exactly. Colours are 6-digit hex.
+
+## Write like you are talking to someone
+
+**Take this seriously. It decides whether the interview works at all.**
+
+The person answering builds software. They have never learned design vocabulary and have no
+reason to. If they cannot parse your question they cannot answer it, and everything you worked
+out from their description is wasted on them.
+
+So write the way you would explain it out loud to a friend who is not in the industry. Short
+sentences, one idea each. Say what something does and how it will look to them, never what it
+is called. If a word belongs to the design profession rather than to ordinary speech, they do
+not have it — find the everyday way of saying the same thing. Every option's \`reason\` must come
+from what THEY told you, in their terms.
+
+Here is a real question this interview produced, and it is exactly what not to write:
+
+> I'm assuming the foundation should be: a light, warm-neutral canvas; no brand colour beyond
+> restrained ink and photography; generous spacing; sharp corners; and a precise modern type
+> system that lets large project titles feel editorial without becoming decorative.
+
+Nobody outside a design studio can answer that. The same thing, said properly:
+
+> Pages sit on a light, slightly warm background.
+> There is no brand colour — the photographs supply all the colour.
+> Lots of space around everything.
+> Corners are square, not rounded.
+> Big titles look confident without looking fancy.
 
 ## The question formats
 
 Each question is rendered by a real component; pick the format that fits what you need:
 
-- \`options\` — 2–4 cards with live previews. Give each option a \`spec\` so its card shows the
-  thing itself (families, accent, surface, radius, spacing, baseSize). The general pick.
-- \`color\` — swatch cards; each option carries \`hex\`. The surface adds a colour picker, a hex
-  field and an eyedropper as the escape hatch automatically (set \`other: "color"\`).
-- \`font\` — type-specimen cards; each option's \`label\` IS the family name; put the body family
-  in \`spec.bodyFamily\` if you are proposing a pairing. \`other: "font"\` adds Google Fonts search.
-- \`scale\` — a stepped control between two poles (\`leftLabel\`/\`rightLabel\`, 3–5 \`steps\` with
-  \`spec\` each) whose preview morphs live. Use for density, rounding, how loud headings are.
-  Never expose numbers; the step \`spec\` carries them.
-- \`chips\` — multi-select facts: which surfaces exist (dashboard, marketing, docs…), needed
-  states. \`other: "text"\` lets them add their own.
-- \`text\` — one free input, only for facts you cannot infer (their product's name, a site
-  whose look they admire).
-- \`boolean\` — exactly 2 options, e.g. dark-first vs light-first, each with a \`spec\`.
-- \`assumptions\` — statements you inferred, each an option (\`label\` = the statement). The user
-  confirms or corrects each. Use this early instead of asking the obvious.
+Each one is a real component with its own behaviour. Getting the shape wrong produces a screen
+that contradicts itself, so read what the user actually sees before you choose.
+
+- \`options\` — **the general pick. Choose ONE.** 2–4 cards, each with a live preview. Give
+  every option a \`spec\` so its card shows the thing itself (families, accent, surface, radius,
+  spacing, baseSize). The options must be genuine alternatives to each other — if two could
+  both be true at once, this is the wrong format.
+
+- \`boolean\` — **exactly 2 options, choose ONE.** A fork: dark-first or light-first. Each
+  needs a \`spec\`. Use it when there are only two honest answers.
+
+- \`color\` — swatch cards; each option carries a \`hex\`. Choose one. Set \`other: "color"\` and
+  the screen adds a colour picker, a hex field and an eyedropper, so they are never stuck with
+  only your swatches.
+
+- \`font\` — type-specimen cards; each option's \`label\` IS the family name. Choose one. Put the
+  body family in \`spec.bodyFamily\` if you are proposing a pairing. Set \`other: "font"\` and
+  the screen adds a search across all of Google Fonts.
+
+- \`scale\` — a slider between two extremes: \`leftLabel\`, \`rightLabel\`, and 3–5 \`steps\`, each
+  carrying a \`spec\`. The preview morphs as they move it. Use it for density, rounding, how
+  loud headings are. **Never show numbers** — the step's \`spec\` carries them, the label says
+  how it feels ("tight", "roomy"). Set \`other: "text"\` so they can describe what they want
+  instead, if none of the steps is it.
+
+- \`chips\` — **multi-select facts, pick as many as apply.** Which kinds of pages exist, which
+  states matter. Not for taste — only for facts about what they are building. \`other: "text"\`
+  lets them add their own.
+
+- \`text\` — one free input. Only for facts you cannot possibly infer, like their product's
+  name or a site whose look they admire.
+
+- \`assumptions\` — **not a picker. Read this carefully.** You supply statements you have
+  already concluded. Every one is shown as ALREADY AGREED, ticked, and the user's only action
+  is pressing "Not quite" on the ones that are wrong and typing the correction. Nothing is
+  chosen; agreeing is the default. That means:
+    - Each statement must stand on its own and be individually true.
+    - **They must all be able to be true at the same time.** Never offer alternatives here —
+      "give type more character" and "use softer corners" are choices, not conclusions, and
+      putting them in this format tells Caret the user agreed to all of them at once.
+    - **Never include a blanket "yes, all of these" option.** Agreeing to everything is what
+      happens if they touch nothing, so such an option is meaningless and will be rejected.
+    - **No \`recommendedId\`.** There is nothing to recommend when everything is already agreed.
+    - One statement per idea, in plain words. Not one long sentence with semicolons in it.
+  Use this early, to kill four obvious questions with one screen.
 
 ## Finishing
 
@@ -186,8 +245,30 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 			}
 		}
 
+		if (question.kind === "assumptions") {
+			// A blanket "yes, all of these" is always redundant and always wrong
+			// here: every statement is ticked already, so agreeing to everything is
+			// what happens if the user touches nothing. Worse, it sits alongside
+			// real statements and gets confirmed with them — the screen then reports
+			// that the user agreed to the summary *and* to two departures from it.
+			const blanket = options.find((option) => BLANKET_CONFIRM.test(option.label))
+			if (blanket) {
+				throw new WizardTurnError(
+					`"${blanket.label}" is a blanket confirmation, and \`assumptions\` options are all agreed by default — ` +
+						`so it says nothing and contradicts the statements beside it. Give one independent statement per option, ` +
+						`all of which can be true at once.`,
+				)
+			}
+		}
+
 		question.options = options
-		question.recommendedId = options.find((option) => option.id === slug(raw.recommendedId ?? "", ""))?.id ?? options[0].id
+		// Nothing to recommend when every statement is already agreed; a
+		// recommendation here is what pushes a pick-one shape into a format that
+		// is not a picker.
+		question.recommendedId =
+			question.kind === "assumptions"
+				? undefined
+				: (options.find((option) => option.id === slug(raw.recommendedId ?? "", ""))?.id ?? options[0].id)
 	}
 
 	if (question.kind === "scale") {

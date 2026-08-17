@@ -110,61 +110,72 @@ async function main(): Promise<void> {
 	})
 
 	/**
-	 * The boundary, asserted in the form the backend actually offers.
+	 * The boundary: it asks, and a denial is obeyed.
 	 *
-	 * These are not two versions of one test — they are two different guarantees,
-	 * and treating them as interchangeable is how a real difference in what the
-	 * user is agreeing to ends up buried in a comment. A backend that asks must
-	 * obey the answer. A backend that cannot ask must at least be unable to write
-	 * when Caret says the session is read-only, which is what makes the sync plan
-	 * phase safe there.
+	 * This used to branch on a `permissionModel`, because two of the four adapters
+	 * could only be confined by a sandbox chosen before the turn and had no
+	 * callback to answer. Those adapters are gone and the branch went with them —
+	 * an unreachable arm in a certification suite is worse than no arm, because it
+	 * reads as coverage. Every backend that ships asks; if one ever cannot, this
+	 * scenario is where that difference has to become visible again.
 	 */
-	await inference("d. Caret's write boundary holds, in whichever form this backend supports", async () => {
+	await inference("d. Caret's write boundary holds — it asks, and a denial stands", async () => {
 		const target = path.join(workspace, "protected.txt")
 		await fs.writeFile(target, "untouched\n", "utf-8")
 		const instruction = `Replace the entire contents of protected.txt with exactly: changed`
 
-		if (backend.permissionModel === "ask") {
-			const session = await backend.startSession({
-				workingDirectory: workspace,
-				mode: "write",
-				model: MODEL,
-				effort: EFFORT,
-			})
-			const seen = await drain(session.send({ text: instruction }), (event) =>
-				event.type === "permission" ? session.respondToPermission(event.requestId, "deny") : undefined,
-			)
-			await session.close()
+		const session = await backend.startSession({
+			workingDirectory: workspace,
+			mode: "write",
+			model: MODEL,
+			effort: EFFORT,
+		})
+		const seen = await drain(session.send({ text: instruction }), (event) =>
+			event.type === "permission" ? session.respondToPermission(event.requestId, "deny") : undefined,
+		)
+		await session.close()
 
-			const contents = (await fs.readFile(target, "utf-8")).trim()
-			assert(contents === "untouched", `a denied edit still landed: ${JSON.stringify(contents)}`)
-			assert(
-				seen.some((event) => event.type === "permission"),
-				"the backend never asked — Caret's boundary was never consulted",
-			)
-			return "asked, denied, file unchanged"
-		}
+		const contents = (await fs.readFile(target, "utf-8")).trim()
+		assert(contents === "untouched", `a denied edit still landed: ${JSON.stringify(contents)}`)
+		assert(
+			seen.some((event) => event.type === "permission"),
+			"the backend never asked — Caret's boundary was never consulted",
+		)
+		return "asked, denied, file unchanged"
+	})
 
-		// No callback to answer. The guarantee here is the read-only session, and it
-		// is the one the sync plan phase depends on.
+	/**
+	 * A read-only session cannot write. Separate from the denial above, because it
+	 * is a different promise: the sync plan phase depends on this one holding even
+	 * when nobody is watching to say no.
+	 */
+	await inference("d2. a read-only session cannot write, with no denial needed", async () => {
+		const target = path.join(workspace, "plan-only.txt")
+		await fs.writeFile(target, "untouched\n", "utf-8")
+
 		const session = await backend.startSession({
 			workingDirectory: workspace,
 			mode: "read-only",
 			model: MODEL,
 			effort: EFFORT,
 		})
-		await drain(session.send({ text: instruction }), () => undefined)
+		// Anything it asks for is allowed, so a refusal to write is the *session*
+		// holding rather than Caret quietly saying no on its behalf.
+		const seen = await drain(
+			session.send({ text: "Replace the contents of plan-only.txt with exactly: changed" }),
+			(event) => (event.type === "permission" ? session.respondToPermission(event.requestId, "allow") : undefined),
+		)
 		await session.close()
 
 		const contents = (await fs.readFile(target, "utf-8")).trim()
 		assert(contents === "untouched", `a read-only session wrote to the workspace: ${JSON.stringify(contents)}`)
-		return "no per-action callback here; a read-only session could not write"
+		return `read-only held with every request allowed; events: ${summarise(seen)}`
 	})
 
 	await inference("e. sessions are listable for the history panel", async () => {
-		// Optional on the seam, and genuinely absent on some backends — Codex
-		// persists threads under `~/.codex/sessions` with no listing API. Absent is
-		// a different thing from broken, so it says which.
+		// Optional on the seam, because a backend can genuinely have no listing API
+		// — one removed adapter persisted threads to disk with no way to enumerate
+		// them. Absent is a different thing from broken, so it says which.
 		if (!backend.listSessions) return `${backend.displayName} has no session listing — the history panel is empty there`
 		const sessions = await backend.listSessions(workspace)
 		assert(sessions.length >= 2, `expected the sessions just run, got ${sessions.length}`)

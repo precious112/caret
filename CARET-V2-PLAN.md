@@ -1051,9 +1051,19 @@ given Caret's proxy-aware `fetch` per the network rules.
 ### Transparency
 
 From the model, not from a matting step: Gemini returns transparent PNG for icon-style prompts,
-and lanes 2–4 have no background to remove. For a genuine photographic cutout, chroma-key
-against a flat background Caret chose at generation time — deterministic, no model download, no
-licence, and reliable precisely because the background is ours.
+and lanes 2–4 have no background to remove. For a genuine photographic cutout, ask for a plain
+white background and remove it — deterministic, no model download, no licence.
+
+**Corrected 2026-08-15.** This originally asked the model to paint an exact hex and chroma-keyed
+that colour out, "reliable precisely because the background is ours". It is not ours: told to
+paint `#00b140` the model returns a perfectly flat background of its own choosing, measured on
+real generations at 0% agreement with the colour requested and 100% agreement with itself. Every
+take was refused for failing a test of the instruction rather than of the picture. White needs no
+agreement — it is not a colour the model has to match. Measured on the same subject, the
+background came back at 253 and the brightest steel on the object reached 222, which no threshold
+has trouble with. Enclosed white is cut too: on a paperclip or a ring the holes are background,
+and preserving them left the loops filled in. The disaster case still fails loudly — a white
+subject on white cuts ~99% of the frame and is refused.
 
 ### Keys and the monetization boundary
 

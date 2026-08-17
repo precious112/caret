@@ -106,14 +106,17 @@ export type RecipeRequest =
 			/** Negative constraints — the documented slop tells, composed in. */
 			avoid: string[]
 			aspect: string
-			transparent: boolean
 			/**
-			 * When set, the background is Caret's own chroma key — painted by the
-			 * model because the prompt asked for exactly this hex, and removed
-			 * deterministically before anyone sees a variant. §4.7's transparency
-			 * rule: the cutout comes from a background we chose, not a matting model.
+			 * The subject is to be cut out.
+			 *
+			 * The model is asked for a plain white background and the runner floods
+			 * it away from the frame edge before any variant is shown, so what the
+			 * user picks is the finished cutout rather than a promise of one. There
+			 * is no key colour: asked for a specific hex the model returns a flat
+			 * background of its own choosing, and gating on the hex threw away
+			 * perfect pictures.
 			 */
-			keyColor?: string
+			transparent: boolean
 	  }
 	| { lane: "iconset"; setId: string; weight?: string }
 	| { lane: "authored"; brief: string; avoid: string[] }

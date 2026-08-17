@@ -27,6 +27,15 @@ export interface RasterSources {
 	apiKey?: string
 	/** Usually `process.env`; injectable so this stays testable. */
 	env?: Record<string, string | undefined>
+	/**
+	 * Vertex project from prefs, for the test-only backend.
+	 *
+	 * Read ahead of the environment because a desktop app launched from Finder
+	 * has no shell environment to read: env alone made this switch reachable
+	 * only from a harness that spawns the process itself.
+	 */
+	vertexProject?: string
+	vertexLocation?: string
 }
 
 /**
@@ -42,14 +51,15 @@ export function resolveRasterConfig(sources: RasterSources = {}): GeminiConfig |
 	const apiKey = sources.apiKey?.trim() || env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim()
 	if (apiKey) return { backend: "api-key", apiKey, model: "flash-image" }
 
-	// `CARET_VERTEX_PROJECT` first so this can be pointed somewhere without
-	// disturbing whatever `gcloud` is set to for everything else on the machine.
-	const project = env.CARET_VERTEX_PROJECT?.trim() || env.GOOGLE_CLOUD_PROJECT?.trim()
+	// Prefs first, then `CARET_VERTEX_PROJECT`, so this can be pointed somewhere
+	// without disturbing whatever `gcloud` is set to for everything else on the
+	// machine.
+	const project = sources.vertexProject?.trim() || env.CARET_VERTEX_PROJECT?.trim() || env.GOOGLE_CLOUD_PROJECT?.trim()
 	if (project) {
 		return {
 			backend: "vertex",
 			project,
-			location: env.GOOGLE_CLOUD_LOCATION?.trim() || "global",
+			location: sources.vertexLocation?.trim() || env.GOOGLE_CLOUD_LOCATION?.trim() || "global",
 			model: "flash-image",
 		}
 	}

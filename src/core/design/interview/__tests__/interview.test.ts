@@ -311,6 +311,59 @@ describe("the Presets tab (deterministic)", () => {
 		)
 	})
 
+	it("refuses a blanket confirmation among assumptions", () => {
+		// The screen ticks every statement already, so "Yes, all of these" says
+		// nothing — and sitting beside real statements it gets confirmed with them,
+		// reporting that the user agreed to a direction and to two departures from
+		// it at the same time. Observed in a real run.
+		assert.throws(
+			() =>
+				validateQuestion(
+					{
+						id: "q1",
+						kind: "assumptions",
+						question: "Confirm these.",
+						options: [
+							{ id: "a", label: "Yes, all of these" },
+							{ id: "b", label: "Give type more character" },
+						],
+					} as never,
+					[],
+				),
+			/blanket confirmation/,
+		)
+	})
+
+	it("recommends nothing on assumptions, and something on every other kind", () => {
+		// A recommendation is meaningless when everything is agreed already, and
+		// asking for one is what pushes a pick-one shape into a format that is not
+		// a picker.
+		const assumptions = validateQuestion(
+			{
+				id: "q1",
+				kind: "assumptions",
+				question: "Confirm these.",
+				options: [{ id: "a", label: "Pages sit on a light background" }],
+			} as never,
+			[],
+		)
+		assert.equal(assumptions.recommendedId, undefined)
+
+		const options = validateQuestion(
+			{
+				id: "q2",
+				kind: "options",
+				question: "Which one?",
+				options: [
+					{ id: "a", label: "Calm" },
+					{ id: "b", label: "Loud" },
+				],
+			} as never,
+			[],
+		)
+		assert.ok(options.recommendedId, "a pick-one question lost its recommendation")
+	})
+
 	it("finds the library's vocabulary in prose without matching inside words", () => {
 		assert.ok(tagsFromDescription(DESCRIPTION).includes("dashboard"))
 		assert.deepEqual(tagsFromDescription("we condense reports"), [])

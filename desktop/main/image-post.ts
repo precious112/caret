@@ -30,7 +30,7 @@
  */
 import { BrowserWindow, nativeImage } from "electron"
 
-import { keyOutBackground } from "../../src/core/design"
+import { removeFlatBackground } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 
 export interface PostProcessed {
@@ -52,13 +52,13 @@ export interface PostProcessed {
  * alpha. A refusal is the keyer's own sentence — it names measured numbers, and
  * the caller shows it on the variant that earned it.
  */
-export function keyOutPhotograph(input: Buffer, keyColor: string): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
+export function cutOutPhotograph(input: Buffer): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
 	const image = nativeImage.createFromBuffer(input)
 	const { width, height } = image.getSize()
 	if (!width || !height) return { ok: false, reason: "The generated image could not be decoded for keying." }
 
 	const bitmap = image.toBitmap()
-	const keyed = keyOutBackground({ data: bitmap, width, height, order: "bgra" }, keyColor)
+	const keyed = removeFlatBackground({ data: bitmap, width, height, order: "bgra" })
 	if (!keyed.ok) return keyed
 
 	for (let i = 0; i < bitmap.length; i += 4) {

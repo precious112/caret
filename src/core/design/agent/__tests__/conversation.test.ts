@@ -20,7 +20,6 @@ function stubBackend(events: BackendEvent[], onAbort?: () => void): CodingBacken
 		id: "opencode",
 		displayName: "Stub",
 		providerName: "Stub",
-		permissionModel: "ask",
 		async availability() {
 			return { ready: true, installed: true, detail: "" }
 		},

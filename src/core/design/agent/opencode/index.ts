@@ -76,14 +76,12 @@ const FILE_TOOLS = new Set(["edit", "write", "patch", "multiedit"])
 export class OpencodeBackend implements CodingBackend {
 	readonly id = "opencode" as const
 	readonly providerName = "OpenCode"
-	readonly permissionModel = "ask" as const
 	readonly displayName = "OpenCode (bundled)"
 
 	async availability(): Promise<AvailabilityReport> {
 		const base = {
 			id: this.id,
 			displayName: this.displayName,
-			permissionModel: this.permissionModel,
 			providerName: this.providerName,
 		} as const
 

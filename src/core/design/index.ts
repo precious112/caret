@@ -9,7 +9,6 @@ export {
 	type ModelGroup,
 	type ModelOption,
 	NoBackendError,
-	type PermissionModel,
 	type ReasoningEffort,
 	type SessionMode,
 	StructuredOutputError,
@@ -80,16 +79,12 @@ export {
 	SLOP_TELLS,
 	tagsFromFoundation,
 } from "./asset-library"
-export {
-	CHROMA_GREEN,
-	CHROMA_MAGENTA,
-	chooseKeyColor,
-	type KeyableImage,
-	type KeyColor,
-	type KeyOutResult,
-	keyOutBackground,
-} from "./asset-library/raster/chroma-key"
 export { NO_RASTER_REASON, type RasterSources, resolveRasterConfig } from "./asset-library/raster/config"
+export {
+	type KeyableImage,
+	type KeyOutResult,
+	removeFlatBackground,
+} from "./asset-library/raster/cutout"
 export {
 	composePrompt,
 	type GeminiBackend,

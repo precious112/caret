@@ -299,6 +299,39 @@ async function callMcp(url: string, token: string | null, body: unknown): Promis
 }
 
 /**
+ * What a tool actually said, out of an MCP reply.
+ *
+ * Assertions here search the raw body, which is fine — but a *failure message*
+ * built from it prints SSE framing and nothing else, because `event: message`
+ * is the first four hundred characters of every streamed reply. One run's whole
+ * diagnosis was the string "event: message". This digs the tool's own text out
+ * so a refusal reports its reason.
+ */
+function mcpSaid(body: string): string {
+	const payloads = body.includes("data:")
+		? body
+				.split("\n")
+				.filter((line) => line.startsWith("data:"))
+				.map((line) => line.slice(5).trim())
+		: [body]
+
+	const said: string[] = []
+	for (const payload of payloads) {
+		try {
+			const parsed = JSON.parse(payload)
+			const content = parsed?.result?.content
+			if (Array.isArray(content)) {
+				for (const part of content) if (typeof part?.text === "string") said.push(part.text)
+			}
+			if (parsed?.error?.message) said.push(String(parsed.error.message))
+		} catch {
+			// Not JSON — a keep-alive or a framing line. Nothing to report.
+		}
+	}
+	return said.length > 0 ? said.join(" | ").replace(/\s+/g, " ").slice(0, 500) : body.replace(/\s+/g, " ").slice(0, 300)
+}
+
+/**
  * MCP requires the client to confirm initialization before the server will
  * answer anything else. Skipping it makes every later call look like the server
  * is missing tools it actually has.
@@ -1758,18 +1791,18 @@ async function main(): Promise<void> {
 		})
 	}
 
-	// The keyed cutout, driven for real. Same gating as bi and for the same
+	// The cutout, driven for real. Same gating as bi and for the same
 	// reason: a mocked pass would certify the plumbing and say nothing about
 	// whether a model actually paints the key flat enough to remove.
 	if (!PAID) {
-		skipPaid("bm. a cutout is generated on a key Caret chose, and lands with alpha")
+		skipPaid("bm. a cutout is generated on plain white, and lands with alpha")
 	} else if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
 		skip(
-			"bm. a cutout is generated on a key Caret chose, and lands with alpha",
+			"bm. a cutout is generated on plain white, and lands with alpha",
 			"no Gemini or Vertex credentials in this environment",
 		)
 	} else {
-		await scenario("bm. a cutout is generated on a key Caret chose, and lands with alpha", async () => {
+		await scenario("bm. a cutout is generated on plain white, and lands with alpha", async () => {
 			// A clean pass through bi leaves the surface on canvas; a failed one
 			// leaves it on assets, possibly with the generate panel still open. The
 			// top-bar button is a *toggle*, so clicking it blindly would close the
@@ -1807,13 +1840,13 @@ async function main(): Promise<void> {
 			await variants.waitFor({ timeout: 20_000 })
 			await variants.locator("[data-generate-variant] img").first().waitFor({ timeout: 240_000 })
 
-			// The keying happened *before* the pick: what is on screen is the
-			// finished cutout as PNG-with-alpha, not the green original.
+			// The cut happened *before* the pick: what is on screen is the finished
+			// cutout as PNG-with-alpha, not the original on its white background.
 			const previewSrc = await variants
 				.locator("[data-generate-variant] img")
 				.first()
 				.evaluate((img: HTMLImageElement) => img.src.slice(0, 24))
-			assert(previewSrc.startsWith("data:image/png"), `the preview is ${previewSrc}, not the keyed png`)
+			assert(previewSrc.startsWith("data:image/png"), `the preview is ${previewSrc}, not the cut-out png`)
 
 			const keyFailures = await variants.locator("[data-generate-variant-error]").count()
 			const usable = await variants.locator("[data-generate-variant]").count()
@@ -1844,9 +1877,15 @@ async function main(): Promise<void> {
 			)
 			assert(Boolean(entry), "the cutout is not in the index")
 
-			// The prompt named the exact key Caret chose — that is the whole
-			// mechanism, and it belongs in the record of what the money bought.
-			assert(/chroma (green|magenta)/.test(String(entry?.origin?.resolved ?? "")), "the key is not in the resolved prompt")
+			// The prompt asked for the plain white the runner floods away — that is
+			// the whole mechanism, and it belongs in the record of what the money
+			// bought. Not a key colour: asked for an exact hex the model returns a
+			// flat background of its own choosing, measured at 0% agreement with the
+			// colour requested, and perfect cutouts were refused for it.
+			assert(
+				/white/i.test(String(entry?.origin?.resolved ?? "")),
+				"the background instruction is not in the resolved prompt",
+			)
 			// And it was a paperclip that was asked for, not whatever a recipe
 			// happened to name. This is the assertion the old suite could not make.
 			assert(
@@ -1865,7 +1904,7 @@ async function main(): Promise<void> {
 			assert(hasAlpha, `the stored cutout (${entry?.mime}) carries no alpha channel`)
 
 			await chrome.getByTestId("assets-view").getByText("Done").click()
-			return `asked for "${WANTED_CUTOUT}" — ${usable} keyed cutout(s) (${keyFailures} refused or unkeyable), saved as @cutout-object, ${entry?.mime} with alpha, cost recorded`
+			return `asked for "${WANTED_CUTOUT}" — ${usable} cutout(s) (${keyFailures} refused), saved as @cutout-object, ${entry?.mime} with alpha, cost recorded`
 		})
 	}
 
@@ -4163,16 +4202,21 @@ export default function CatalogDemo() {
 		const toolEntry = await waitFor(
 			"the chat transcript to show a caret tool call",
 			async () => {
-				const state = await chrome.evaluate(async (target) => (window as any).caret.invoke("agent:state", target), fixture)
+				const state = await chrome.evaluate(
+					async (target) => (window as any).caret.invoke("agent:state", target),
+					fixture,
+				)
 				const entries = state?.transcript?.entries ?? []
 				const tool = entries.find(
-					(entry: { kind: string; name?: string }) => entry.kind === "tool" && (entry.name ?? "").includes("get_project"),
+					(entry: { kind: string; name?: string }) =>
+						entry.kind === "tool" && (entry.name ?? "").includes("get_project"),
 				)
 				if (tool) return tool
 				// TOOLLESS in an assistant reply means the bridge did not deliver —
 				// fail fast with the honest cause instead of waiting out the clock.
 				const gaveUp = entries.some(
-					(entry: { kind: string; text?: string }) => entry.kind === "assistant" && (entry.text ?? "").includes("TOOLLESS"),
+					(entry: { kind: string; text?: string }) =>
+						entry.kind === "assistant" && (entry.text ?? "").includes("TOOLLESS"),
 				)
 				if (gaveUp) throw new Error("the agent says it has no get_project tool — the bridge did not deliver")
 				return null
@@ -4218,7 +4262,11 @@ export default function CatalogDemo() {
 			method: "tools/call",
 			params: {
 				name: "present_asset_options",
-				arguments: { question: "Which one for the hero?", tags: ["pick-a", "pick-b"], why: "The plan needs a hero image." },
+				arguments: {
+					question: "Which one for the hero?",
+					tags: ["pick-a", "pick-b"],
+					why: "The plan needs a hero image.",
+				},
 			},
 		}).then(async (response) => mcpSaid(await response.text()))
 
@@ -4820,11 +4868,16 @@ export default function CatalogDemo() {
 		const chosen = ready[0]
 		const chosenSource = await fs.readFile(path.join(caretDir, "pages", chosen.id, "index.tsx"), "utf-8")
 
+		// On failure this reports what the compare surface actually shows. The
+		// scratch file saying "ready" and the button never rendering are two
+		// different faults — the take failing, or the canvas never hearing that it
+		// landed — and "never became clickable" cannot tell them apart. Two runs
+		// were spent learning nothing because of that.
 		const picked = await app!.evaluate(async ({ BrowserWindow }, useTestId: string) => {
 			const win = BrowserWindow.getAllWindows()[0]
 			const views = (win?.contentView?.children ?? []) as any[]
 			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-			if (!canvas) return false
+			if (!canvas) return { ok: false, diag: "no canvas view" }
 			const deadline = Date.now() + 20000
 			while (Date.now() < deadline) {
 				const clicked = await canvas.webContents
@@ -4832,12 +4885,33 @@ export default function CatalogDemo() {
 						`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
 					)
 					.catch(() => false)
-				if (clicked) return true
+				if (clicked) return { ok: true, diag: "" }
 				await new Promise((r) => setTimeout(r, 300))
 			}
-			return false
+			const diag = await canvas.webContents
+				.executeJavaScript(
+					`(() => {
+						const compare = document.querySelector('[data-testid="variant-compare"]')
+						const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
+							id: c.getAttribute('data-testid'),
+							hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
+							label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
+						}))
+						return JSON.stringify({ compareUp: !!compare, cards })
+					})()`,
+				)
+				.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
+			return { ok: false, diag: String(diag) }
 		}, `variant-use-${chosen.id}`)
-		assert(picked, `the "Use this one" button for ${chosen.id} never became clickable`)
+		if (!picked.ok) {
+			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
+			assert(
+				false,
+				`the "Use this one" button for ${chosen.id} never became clickable.\n` +
+					`      compare surface: ${picked.diag}\n` +
+					`      .variants.json: ${onDisk.replace(/\s+/g, " ").slice(0, 400)}`,
+			)
+		}
 
 		await waitFor(
 			"the winner to replace the page and the takes to clean up",
@@ -4883,7 +4957,7 @@ export default function CatalogDemo() {
 		const startText = await start.text()
 		assert(
 			startText.includes("proposalId") && !startText.includes('"isError":true'),
-			`the proposal did not start: ${startText.slice(0, 400)}`,
+			`the proposal did not start: ${mcpSaid(startText)}`,
 		)
 
 		// The take streams in behind the compare surface; wait for it to be ready.
@@ -4913,11 +4987,14 @@ export default function CatalogDemo() {
 		}
 
 		// The compare overlay is on the canvas; accept the App's version by click.
+		// Same diagnosis as bq: the scratch reading "ready" while no button renders
+		// is the canvas not hearing about it, which is a different fault from the
+		// take failing, and the bare boolean could name neither.
 		const picked = await app!.evaluate(async ({ BrowserWindow }) => {
 			const win = BrowserWindow.getAllWindows()[0]
 			const views = (win?.contentView?.children ?? []) as any[]
 			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-			if (!canvas) return false
+			if (!canvas) return { ok: false, diag: "no canvas view" }
 			const wc = canvas.webContents
 			const deadline = Date.now() + 30000
 			while (Date.now() < deadline) {
@@ -4931,12 +5008,33 @@ export default function CatalogDemo() {
 						})()`,
 					)
 					.catch(() => false)
-				if (clicked) return true
+				if (clicked) return { ok: true, diag: "" }
 				await new Promise((r) => setTimeout(r, 300))
 			}
-			return false
+			const diag = await wc
+				.executeJavaScript(
+					`(() => {
+						const compare = document.querySelector('[data-testid="variant-compare"]')
+						const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
+							id: c.getAttribute('data-testid'),
+							hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
+							label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
+						}))
+						return JSON.stringify({ compareUp: !!compare, cards })
+					})()`,
+				)
+				.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
+			return { ok: false, diag: String(diag) }
 		})
-		assert(picked, "the App's-version take never became acceptable on the compare surface")
+		if (!picked.ok) {
+			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
+			assert(
+				false,
+				`the App's-version take never became acceptable on the compare surface.\n` +
+					`      compare surface: ${picked.diag}\n` +
+					`      .variants.json: ${onDisk.replace(/\s+/g, " ").slice(0, 400)}`,
+			)
+		}
 
 		// The deterministic contract of an accept: the take applies and cleans up,
 		// and the mapping refreshes. What the model WROTE into the proposal is the

@@ -40,7 +40,7 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { GeneratedVariantWire, GenerationQuestionWire, RecipeCardWire, WriteResult } from "../shared/ipc"
-import { keyOutPhotograph, postProcessPhotograph } from "./image-post"
+import { cutOutPhotograph, postProcessPhotograph } from "./image-post"
 import { getPrefs } from "./prefs"
 import { getSecret } from "./secrets"
 
@@ -53,7 +53,12 @@ import { getSecret } from "./secrets"
  * alternative is a settings field that appears to do nothing.
  */
 function rasterConfig() {
-	return resolveRasterConfig({ apiKey: getSecret("geminiApiKey") })
+	const prefs = getPrefs()
+	return resolveRasterConfig({
+		apiKey: getSecret("geminiApiKey"),
+		vertexProject: prefs.vertexProject,
+		vertexLocation: prefs.vertexLocation,
+	})
 }
 
 /** How many options the picker shows. Free here, so the number is a taste call. */
@@ -258,8 +263,8 @@ async function generateRasterVariants(
 		// on their own merits.
 		let bytes = result.bytes
 		let mime = result.mime
-		if (request.keyColor) {
-			const keyed = keyOutPhotograph(result.bytes, request.keyColor)
+		if (request.transparent) {
+			const keyed = cutOutPhotograph(result.bytes)
 			if (!keyed.ok) {
 				Logger.warn(`[generate] raster variant ${variant.variant} failed keying: ${keyed.reason}`)
 				return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: keyed.reason }
@@ -410,7 +415,7 @@ async function acceptRasterVariant(
 	// Only now, on the one the user actually chose. Post-processing every variant
 	// would spend the work on three pictures nobody keeps. (Keying already
 	// happened before the pick — the alpha in the held bytes is the point.)
-	const keyed = composed.request.lane === "raster" && Boolean(composed.request.keyColor)
+	const keyed = composed.request.lane === "raster" && composed.request.transparent
 	const processed = await postProcessPhotograph(held.bytes, composed.width, composed.height, { preserveAlpha: keyed })
 	Logger.info(
 		`[generate] ${recipe.id} → ${processed.width}x${processed.height} ${processed.mime}, ` +

@@ -113,8 +113,8 @@ async function turn(session: BackendSession, input: { text: string; images?: str
 }
 
 async function main(): Promise<void> {
-	const backend = await getBackend("claude")
-	if (!backend) throw new Error("no claude backend")
+	const backend = await getBackend("opencode")
+	if (!backend) throw new Error("no bundled backend")
 
 	const availability = await backend.availability()
 	console.log(`backend  ${backend.displayName} — ${availability.detail}`)

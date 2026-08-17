@@ -32,6 +32,7 @@ import { AgentService } from "./agent-service"
 import { CatalogService } from "./catalog-service"
 import { DesignChecksService } from "./design-checks"
 import { createElectronDesignHost } from "./electron-host"
+import { ensureMatteModel } from "./matte"
 import { CaretMcpServer } from "./mcp/server"
 import { refreshMenu } from "./menu"
 import { migrateProject } from "./migrate"
@@ -176,6 +177,13 @@ export class ProjectWindow {
 		// The menu's recents are a snapshot; without this the list a user reaches
 		// for to switch projects never learns about the one they just opened.
 		refreshMenu()
+
+		// Deliberately not awaited, and deliberately not gated on anything. This
+		// is a 214MB background fetch that wants the whole of someone's first
+		// session to finish in; waiting for a key, or for the asset generator to
+		// be opened, would start it exactly when it is in the way. Single-flight,
+		// so several windows opening at once fetch it once.
+		void ensureMatteModel()
 
 		// Runs before anything reads `.caret/`, so a project written by the VS Code
 		// extension is in the current shape by the time the session starts.

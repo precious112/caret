@@ -14,7 +14,25 @@
  * refuses with {@link NoBackendError}, which names the fix.
  */
 
-export type BackendId = "opencode" | "claude" | "codex" | "kimi"
+/**
+ * One backend, and the seam is still worth having.
+ *
+ * Caret shipped adapters for the Claude, Codex and Kimi CLIs and has now removed
+ * all three, because wrapping a vendor's own agent loop was the wrong place to
+ * spend: each one arrived with a different permission story, a different
+ * structured-output dialect, its own way of dropping images, and its own
+ * approval gate in front of Caret's tools — four rewrites of work OpenCode had
+ * already done. What the user actually wanted from those adapters was their
+ * *subscriptions*, and the bundled backend reaches those directly as providers:
+ * ChatGPT Plus/Pro/Go, Kimi For Coding, the Z.AI and Zhipu coding plans, Copilot.
+ * Anthropic is the exception and cannot be fixed here — it prohibits
+ * subscription use outside its own tools, so Claude arrives by API key.
+ *
+ * The interface stays because it is what keeps the design core host-free and
+ * testable, and because Caret hosting its own inference would arrive through it.
+ * A union of one is honest; a second member has to earn its keep.
+ */
+export type BackendId = "opencode"
 
 /** What a session is allowed to do. Enforced by Caret, not by backend config. */
 export type SessionMode = "read-only" | "write"
@@ -28,21 +46,6 @@ export type SessionMode = "read-only" | "write"
  * the concept ignore it — see each adapter.
  */
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh"
-
-/**
- * How a backend can be held to Caret's permission rules.
- *
- * - `ask` — it raises a request per action and obeys the answer, so Caret decides
- *   every write individually and the per-project "ask before app writes" toggle
- *   means what it says.
- * - `sandbox` — it has no such callback. The boundary is a mode chosen before the
- *   turn starts: a plan genuinely cannot write, but inside a write session Caret
- *   cannot intercept individual files.
- *
- * This is a real difference in what the user is agreeing to, so it is on the
- * interface and shown in the UI rather than left in a comment.
- */
-export type PermissionModel = "ask" | "sandbox"
 
 /**
  * A model, and who serves it.
@@ -158,15 +161,9 @@ export interface AvailabilityReport {
 	ready: boolean
 	/** One line the user reads. Never a stack trace. */
 	detail: string
-	permissionModel: PermissionModel
 	providerName: string
 	/** What to do about it, when it is not ready. */
 	remedy?: { label: string; command?: string; url?: string }
-	/**
-	 * Written to spec but never exercised against a live subscription. Shown as
-	 * such rather than presented as equally proven.
-	 */
-	untested?: boolean
 }
 
 export interface CodingBackend {
@@ -174,10 +171,21 @@ export interface CodingBackend {
 	readonly displayName: string
 	/**
 	 * Who serves this backend's models when their ids do not say so themselves.
-	 * OpenCode's ids are already `provider/model`; Claude's are bare.
+	 * OpenCode's ids are already `provider/model`.
 	 */
 	readonly providerName: string
-	readonly permissionModel: PermissionModel
+	/**
+	 * **Every backend here raises a permission request per action and obeys the
+	 * answer.** That is not a detail, it is what makes the per-project "ask before
+	 * app writes" toggle mean what it says, and what makes a read-only plan phase
+	 * a guarantee rather than a hope.
+	 *
+	 * Caret used to carry a `permissionModel` field because two removed adapters
+	 * could only be confined by a sandbox chosen before the turn, and the UI had
+	 * to admit it could not ask per file. Any future backend like that has to
+	 * bring that honesty surface back with it — silently accepting one would turn
+	 * a promise the UI makes into a lie.
+	 */
 	availability(): Promise<AvailabilityReport>
 	startSession(options: StartSessionOptions): Promise<BackendSession>
 	/** One-shot, JSON-schema-constrained. Carries the interview and recipe narrowing. */
@@ -185,9 +193,8 @@ export interface CodingBackend {
 	/**
 	 * Models this backend can reach, grouped by provider.
 	 *
-	 * Optional because not every backend can answer it — Codex has no
-	 * enumeration API at all — and a made-up list is worse than none. Absent
-	 * means the UI asks the user to type an id.
+	 * Optional, and a made-up list is worse than none: absent means the UI asks
+	 * the user to type an id rather than showing models that may not exist.
 	 */
 	listModels?(): Promise<ModelGroup[]>
 	/** Sessions previously run in this project, newest first. */

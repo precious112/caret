@@ -97,8 +97,8 @@ async function main(): Promise<void> {
 	console.log(`\ndraft: ${Math.round(draft.value.bytes.length / 1024)}KB`)
 
 	// 3. The decision, on the real backend.
-	const backend = await getBackend("claude")
-	if (!backend) throw new Error("no claude backend")
+	const backend = await getBackend("opencode")
+	if (!backend) throw new Error("no bundled backend")
 	console.log("asking the model how far to optimize…")
 	const decision = await decideOptimization({
 		backend,

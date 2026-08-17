@@ -23,10 +23,8 @@ import { cn } from "../lib/utils"
 
 /** One line per backend about how it is paid for. Routes, not prices. */
 const BILLING_NOTE: Record<string, string> = {
-	opencode: "Bring your own API key, an OpenCode subscription, or OpenCode credits.",
-	claude: "Signing in here draws Claude's separate Agent SDK credit pool — not your usual Claude Code limits.",
-	codex: "Uses your Codex CLI sign-in, or a key in CODEX_API_KEY.",
-	kimi: "Uses your Kimi CLI sign-in.",
+	opencode:
+		"Connect a subscription you already pay for — ChatGPT, Kimi For Coding, a GLM coding plan, Copilot — or bring an API key. OpenCode's own Go and Zen plans work too.",
 }
 
 export function BackendPanel({ project, onClose }: { project: ProjectState; onClose(): void }) {
@@ -337,22 +335,6 @@ function BackendRow({ backend, selected, onChoose }: { backend: BackendReportWir
 					<span className="text-[11px] text-amber-300">{backend.installed ? "needs sign-in" : "not installed"}</span>
 				)}
 
-				{backend.permissionModel === "sandbox" && (
-					<span
-						className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300"
-						title="This backend has no per-action permission callback. Caret confines it with a sandbox instead, so a plan genuinely cannot write — but inside a write session Caret cannot ask you about individual files.">
-						can't ask per file
-					</span>
-				)}
-
-				{backend.untested && (
-					<span
-						className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-shell-muted"
-						title="Written to spec, but never run against a live subscription.">
-						untested
-					</span>
-				)}
-
 				<div className="flex-1" />
 
 				{selected ? (
@@ -390,13 +372,6 @@ function BackendRow({ backend, selected, onChoose }: { backend: BackendReportWir
 						</a>
 					)}
 				</div>
-			)}
-
-			{backend.permissionModel === "sandbox" && (
-				<p className="mt-2 text-[11.5px] leading-relaxed text-amber-200/80">
-					Caret can't approve this backend's writes one at a time — it has no way to ask. A plan still can't touch your
-					app, but during an apply the "ask before app changes" setting has no effect here.
-				</p>
 			)}
 
 			<p className="mt-2 text-[11.5px] leading-relaxed text-shell-muted">{BILLING_NOTE[backend.id]}</p>
