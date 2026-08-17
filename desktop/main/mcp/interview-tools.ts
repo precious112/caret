@@ -217,6 +217,53 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					return ok({ generated: false, note: "The user declined. Carry on without it, or suggest an alternative." })
 				}
 
+				if (args.kind === "object3d") {
+					// The 3D lane starts from a SOURCE IMAGE in the asset library, and
+					// this tool has no way to name one yet. An honest road beats the
+					// dead-end this kind used to hit ("Generation did not produce
+					// anything") after the user had already consented.
+					return ok({
+						generated: false,
+						note: "3D objects are built from an image already in the asset library, which this tool cannot pick yet. Generate or ask for the source image first, then have the user run Assets → Generate → A 3D object from it.",
+					})
+				}
+
+				if (args.kind === "mark") {
+					// One authored result from the render-compare loop, not three takes —
+					// the same shape the shader branch below uses.
+					const { authorMark, holdMark, acceptMark } = await import("../authored-marks")
+					const { readFoundationTokens } = await import("../../../src/core/design")
+					const { taskModel } = await import("../task-models")
+					const tokens = await readFoundationTokens(ctx.projectPath).catch(() => null)
+					const result = await authorMark({
+						projectPath: ctx.projectPath,
+						brief: args.what,
+						tokens,
+						modelOverride: taskModel("mark") || undefined,
+					})
+					if (!result.ok) return ok({ generated: false, note: `Generation did not produce anything: ${result.reason}` })
+
+					holdMark(ctx.projectPath, { svg: result.svg, subject: args.what, rounds: result.rounds, model: result.model })
+					const kept = await askUser(send, {
+						kind: "takes",
+						title: `The mark, after ${result.rounds} round(s)`,
+						subtitle: `${args.why} Pick it to keep it.`,
+						takes: [{ index: 0, preview: `data:image/png;base64,${result.previewPng.toString("base64")}` }],
+						surface: "#ffffff",
+					})
+					if (kept === null) return ok({ generated: false, note: "The user did not keep it." })
+
+					const saved = await acceptMark(ctx.projectPath, slugTag(args.what))
+					if (!saved.ok) return fail(saved.error ?? "The mark could not be saved.")
+					await regenerateRulesFiles(ctx.projectPath).catch(() => {})
+					return ok({
+						generated: true,
+						tag: saved.tag,
+						reference: `@${saved.tag}`,
+						note: "Reference it by that tag in the page you write. It is in the asset index and the rules files now.",
+					})
+				}
+
 				if (args.kind === "shader") {
 					// One authored result, not three takes. The frames shown are three
 					// moments of the SAME animation; the pick is a keep, not a choice.

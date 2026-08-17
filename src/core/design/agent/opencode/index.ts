@@ -308,8 +308,22 @@ export class OpencodeBackend implements CodingBackend {
 	}
 
 	private server(): Promise<RunningServer> {
-		return ensureOpencodeServer(CARET_SERVER_CONFIG)
+		return ensureOpencodeServer({ ...CARET_SERVER_CONFIG, ...serverConfigExtra })
 	}
+}
+
+/**
+ * Host-supplied additions to the spawn config, merged over Caret's own.
+ *
+ * The desktop registers its MCP stdio bridge here — a concern the core cannot
+ * own, because the bridge's path is an Electron userData detail. Registered
+ * before the first session; the server spawns once per process, so anything
+ * registered after it boots waits for the next launch.
+ */
+let serverConfigExtra: Partial<OpencodeConfig> = {}
+
+export function extendOpencodeServerConfig(extra: Partial<OpencodeConfig>): void {
+	serverConfigExtra = { ...serverConfigExtra, ...extra }
 }
 
 /** The emulated path's instruction. Deliberately blunt — it is read by weaker models. */

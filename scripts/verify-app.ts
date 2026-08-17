@@ -4141,6 +4141,48 @@ export default function CatalogDemo() {
 		return `the clip centered within ${Math.round(Math.min(centered.boxDelta, centered.visualDelta))}px of the shirt's centerline, and the edit left an undo step`
 	})
 
+	await scenario("cg. the sidebar chat agent reaches Caret's own tools through the bridge", async () => {
+		// The gap this closes: Caret's tools were served only to EXTERNALLY
+		// connected agents, and the user's own chat had none — "the agent can
+		// make things easier by using the generator as a tool" was true for
+		// Cursor and false for Caret. The road is a stdio bridge OpenCode spawns
+		// per project directory (probe-mcp-bridge.ts measured the spawn
+		// behaviour; stdio-bridge.test.ts holds the proxying) — this drives the
+		// last leg: a real chat turn, a real tool call, in the app.
+		const sent = await chrome.evaluate(async (target) => {
+			return Boolean(
+				await (window as any).caret.invoke(
+					"agent:send",
+					target,
+					"Call the get_project tool now and tell me the page count. If you have no such tool, say TOOLLESS.",
+				),
+			)
+		}, fixture)
+		assert(sent !== null, "the chat send returned nothing")
+
+		const toolEntry = await waitFor(
+			"the chat transcript to show a caret tool call",
+			async () => {
+				const state = await chrome.evaluate(async (target) => (window as any).caret.invoke("agent:state", target), fixture)
+				const entries = state?.transcript?.entries ?? []
+				const tool = entries.find(
+					(entry: { kind: string; name?: string }) => entry.kind === "tool" && (entry.name ?? "").includes("get_project"),
+				)
+				if (tool) return tool
+				// TOOLLESS in an assistant reply means the bridge did not deliver —
+				// fail fast with the honest cause instead of waiting out the clock.
+				const gaveUp = entries.some(
+					(entry: { kind: string; text?: string }) => entry.kind === "assistant" && (entry.text ?? "").includes("TOOLLESS"),
+				)
+				if (gaveUp) throw new Error("the agent says it has no get_project tool — the bridge did not deliver")
+				return null
+			},
+			300_000,
+		)
+
+		return `the chat agent called ${(toolEntry as { name?: string }).name} through the per-project bridge`
+	})
+
 	await scenario("bf. @ picks an asset in the chat composer too", async () => {
 		// The composer is a different surface from the canvas — Caret's own window,
 		// not the generated shell — so nothing the canvas picker does carries over,

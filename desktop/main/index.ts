@@ -10,9 +10,11 @@ import * as path from "path"
 import { fileURLToPath } from "url"
 
 import { disposeBackends, setBundledBackendDirectory } from "../../src/core/design"
+import { extendOpencodeServerConfig } from "../../src/core/design/agent/opencode"
 import { Logger } from "../../src/shared/services/Logger"
 import { registerIpcHandlers } from "./ipc"
 import { closeLauncherWindow, hasLauncherWindow, type LauncherWindowOptions, openLauncherWindow } from "./launcher-window"
+import { ensureMcpBridge } from "./mcp/stdio-bridge"
 import { buildMenu } from "./menu"
 import { loadPrefs } from "./prefs"
 import { WindowManager } from "./window-manager"
@@ -69,6 +71,16 @@ async function main(): Promise<void> {
 	// and the design core is deliberately host-free, so it is told rather than
 	// left to guess — and it never falls back to `PATH`.
 	if (app.isPackaged) setBundledBackendDirectory(path.join(process.resourcesPath, "opencode"))
+
+	// The chat agent's road to Caret's own tools: a stdio bridge OpenCode
+	// launches per project directory, which finds that project's MCP endpoint
+	// from its cwd. Registered before any session so the spawn config carries
+	// it; a failure here costs the chat its tools, never the chat itself.
+	try {
+		extendOpencodeServerConfig({ mcp: { caret: await ensureMcpBridge() } })
+	} catch (err) {
+		Logger.warn(`[main] chat agent will have no Caret tools: ${err}`)
+	}
 
 	const launcherOptions: LauncherWindowOptions = {
 		chromeEntry: resolveChromeEntry(),
