@@ -43,12 +43,13 @@ vec4 caretMain(vec2 uv) {
 [{ "name": "u_speed", "type": "float", "label": "Speed", "default": 0.4, "min": 0, "max": 2 }]
 \`\`\`
 
-The JSON block is your uniform manifest — the knobs a person will tune. Six at most; every value you want tunable (speed, scale, grain, each color) should be a uniform with a sensible default, min and max, not a constant.
+The JSON block is your uniform manifest — the knobs a person will tune. Eight at most; every value worth tuning (speed, form scale, relief, grain, and each colour) should be a uniform with a sensible default, min and max, not a constant buried in the code.
 
 Taste rules:
 - **The brief wins on hue.** "Embers" glow warm, "evening light" is golden, "aurora" shimmers green-violet — even when the project's palette is blue. The palette you are given is the project's harmony reference and the fallback when the brief implies no hue; every color is a tunable knob, so the person can pull it toward brand later. Declare the hues the BRIEF calls for as your color-uniform defaults.
-- **Present, not loud.** This sits behind content, so no strobing and no hard edges sweeping under text — but a flat or near-invisible wash is a failure equal to a strobe. Compose a real value range (the darkest and lightest regions clearly different), with calmer areas where text can sit.
-- Slow. A background breathes; it does not play.
+- **Read the brief's register, and commit to it.** A brief that asks for a statement — bold, vivid, dramatic, sculptural, expensive — wants saturated colour, big confident forms, and a value range that runs from near-black shadow to a bright caught highlight. A brief that asks to sit behind text wants calmer regions where words can land. Both fail the same way: a pale, low-contrast, near-invisible wash. Timid is the one mistake with no excuse.
+- **Form, not texture.** Two or three large shapes reading as a lit surface beat a whole frame of busy noise. Reach for the sculpted-surface helpers before you reach for raw fbm.
+- Slow. It breathes; it does not play. No strobing, no hard edge sweeping across the frame.
 - Banding is the tell of a lazy gradient — a whisper of caretGrain hides it.
 
 You will be shown pictures of what you wrote, rendered at several timestamps, and asked to correct it. Compile errors come back to you verbatim; fix exactly what the log names.`
@@ -84,9 +85,9 @@ export function shaderCritiquePrompt(brief: string): string {
 		`These are frames of your shader at u_time = ${SHADER_CRITIQUE_TIMES.join("s, ")}s.`,
 		"",
 		"Look at them and answer honestly: what is wrong?",
-		"- Is anything actually HAPPENING? A near-blank wash or a flat single color is the most common failure — would someone screenshot this and call it designed?",
+		"- Is anything actually HAPPENING? A near-blank wash or a flat single colour is the most common failure — would someone screenshot this and call it designed, or does it look like an empty page?",
 		`- Are the hues the brief's hues (${brief.trim()}), or did they collapse toward a timid monochrome?`,
-		"- Would text placed on the calmer regions stay readable, without the whole image going flat to achieve it?",
+		"- Is there real form — shapes you could point at, light falling across them — or is it an even fog? Does the frame run from a genuinely dark shadow to a genuinely bright highlight?",
 		"- Is the motion a slow breathing drift between frames, or is it jumping?",
 		"- Is there banding a touch of caretGrain would hide?",
 		"",

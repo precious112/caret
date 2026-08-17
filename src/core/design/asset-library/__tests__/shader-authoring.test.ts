@@ -57,9 +57,12 @@ describe("validateUniformManifest", () => {
 		assert.equal(result.uniforms.length, 3)
 	})
 
-	it("rejects more than six knobs", () => {
-		const flood = Array.from({ length: 7 }, (_, i) => ({ name: `u_k${i}`, type: "float", label: "K", default: 0 }))
-		assert.ok(!validateUniformManifest(flood).ok)
+	it("allows the eight a lit surface needs, and refuses the ninth", () => {
+		// Three colours plus speed/scale/relief/grain is seven — a six-knob cap
+		// forbade the sculptural look outright.
+		const eight = Array.from({ length: 8 }, (_, i) => ({ name: `u_k${i}`, type: "float", label: "K", default: 0 }))
+		assert.ok(validateUniformManifest(eight).ok)
+		assert.ok(!validateUniformManifest([...eight, { name: "u_k8", type: "float", label: "K", default: 0 }]).ok)
 	})
 
 	it("rejects names that are not u_-prefixed, reserved, or duplicated", () => {

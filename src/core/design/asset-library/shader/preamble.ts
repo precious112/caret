@@ -68,6 +68,45 @@ vec3 caretPalette(float t, vec3 a, vec3 b, vec3 c) {
 
 float caretGrain(vec2 uv, float time) {
 	return caretHash(uv * 731.7 + fract(time) * 17.0) - 0.5;
+}
+
+float caretRelief(vec2 p, float t) {
+	// Deliberately LOW frequency everywhere. A normal is a derivative, and
+	// differentiating multi-octave fbm turns big folds into tinfoil — measured:
+	// the first version of this looked crumpled at every scale. Two slow sine
+	// lobes, a gentle domain warp, and one octave of smooth noise is the whole
+	// recipe for a form you can point at.
+	// Tuned so that p = centred, aspect-corrected uv (roughly -0.5..0.5) with a
+	// scale of 1.0 puts ONE big fold across the frame. That calibration is the
+	// whole difference between a sculpture and a flat wash: an earlier version
+	// needed p multiplied by ~2 before anything was visible, every model
+	// sensibly passed scale 1.0, and every result came out flat.
+	vec2 q = p;
+	q += 0.30 * vec2(caretNoise(q * 1.1 + t * 0.05), caretNoise(q * 1.1 - t * 0.04 + 7.3));
+	float h = 0.95 * sin(q.x * 3.4 + t * 0.22);
+	h += 0.65 * sin(q.y * 2.6 - t * 0.17 + 1.7);
+	h += 0.35 * caretNoise(q * 1.45 + t * 0.03);
+	return h;
+}
+
+vec3 caretReliefNormal(vec2 p, float t, float strength) {
+	// A wide-ish sampling step low-passes the derivative, so the lighting
+	// describes the fold rather than the noise riding on it. The 0.3 calibrates
+	// strength to human numbers: 1.0 is a natural satin fold, not a cliff.
+	float e = 0.006;
+	float h = caretRelief(p, t);
+	float hx = caretRelief(p + vec2(e, 0.0), t);
+	float hy = caretRelief(p + vec2(0.0, e), t);
+	vec2 slope = vec2(hx - h, hy - h) / e * strength * 0.3;
+	return normalize(vec3(-slope, 1.0));
+}
+
+vec2 caretShade(vec3 n, vec3 lightDir, float gloss) {
+	vec3 l = normalize(lightDir);
+	float diffuse = clamp(dot(n, l), 0.0, 1.0);
+	vec3 halfway = normalize(l + vec3(0.0, 0.0, 1.0));
+	float specular = pow(clamp(dot(n, halfway), 0.0, 1.0), max(4.0, gloss));
+	return vec2(diffuse, specular);
 }`
 
 /**
@@ -82,8 +121,22 @@ export const SHADER_CONTRACT_DOC = `You are writing ONE GLSL ES 3.00 function:
 - u_time is seconds, forever increasing. Animate slowly — background motion, not a screensaver.
 - Return straight (non-premultiplied) RGBA.
 - Do NOT write: #version, precision, uniform declarations, main(), or texture reads. The scaffold owns those, and a body containing them is rejected before it compiles.
-- Helpers available: caretHash(vec2)->float, caretNoise(vec2)->float, caretFbm(vec2)->float (5 octaves), caretPalette(float t, vec3 a, vec3 b, vec3 c)->vec3, caretGrain(vec2 uv, float time)->float.
-- Your declared uniforms arrive as floats (type "float") or vec3 0..1 RGB (type "color").`
+- Your declared uniforms arrive as floats (type "float") or vec3 0..1 RGB (type "color").
+- You may define your own helper functions above caretMain.
+
+Helpers available:
+- caretHash(vec2) -> float, caretNoise(vec2) -> float, caretFbm(vec2) -> float (5 octaves)
+- caretPalette(float t, vec3 a, vec3 b, vec3 c) -> vec3 — a three-stop ramp
+- caretGrain(vec2 uv, float time) -> float, signed, roughly -0.5..0.5
+
+**The sculpted-surface set — this is how a gradient stops looking flat.** The best moving gradients are not coloured noise; they are a LIT SURFACE, where big smooth folds catch a light and fall away into shadow. That is what these three do:
+- caretRelief(vec2 p, float t) -> float — a slow-rolling height field of big domain-warped folds, roughly -1.5..1.5. Feed it CENTRED, aspect-corrected coordinates (uv - 0.5, x times aspect): at scale 1.0 that is one big fold across the frame, which is usually what you want. Scale up only for a busier surface.
+- caretReliefNormal(vec2 p, float t, float strength) -> vec3 — the surface normal of that height field. strength around 0.3-1.5; higher is more dramatic relief.
+- caretShade(vec3 n, vec3 lightDir, float gloss) -> vec2 — .x is diffuse 0..1, .y is a specular highlight 0..1. gloss 8 is soft and satin, 60+ is a tight wet-looking hotspot.
+
+**The light direction is the drama knob.** A grazing light — small z, like vec3(-0.7, 0.55, 0.28) — makes whole regions turn away and fall into deep shadow, which is what makes those big folds read as sculpture. A frontal light (z near 1) lights everything evenly and is how a bold brief ends up looking like a flat wash. Relief strength around 1.2-1.8 for a statement piece, 0.3-0.6 for something that has to sit under text.
+
+A typical sculptural body: build centred aspect-corrected p, get n = caretReliefNormal(p * u_scale, t, u_relief), s = caretShade(n, vec3(-0.5, 0.8, 0.6), u_gloss), map pow(s.x, 1.5) through caretPalette for the body colour, add s.y * a highlight colour, then a touch of caretGrain.`
 
 /** Reserved names the manifest may not redeclare. */
 const RESERVED_UNIFORMS = new Set(["u_time", "u_resolution"])
@@ -96,7 +149,10 @@ const UNIFORM_NAME = /^u_[a-z][a-zA-Z0-9_]{0,30}$/
  */
 export function validateUniformManifest(raw: unknown): { ok: true; uniforms: ShaderUniform[] } | { ok: false; reason: string } {
 	if (!Array.isArray(raw)) return { ok: false, reason: "the manifest is not a JSON array" }
-	if (raw.length > 6) return { ok: false, reason: `${raw.length} uniforms — six is the most a person will ever tune` }
+	// Eight, not six: a lit surface legitimately wants three colours (shadow,
+	// body, highlight) plus speed, form scale, relief and grain. Six forbade the
+	// sculptural look outright, which the reference renders found immediately.
+	if (raw.length > 8) return { ok: false, reason: `${raw.length} uniforms — eight is the most a person will sit and tune` }
 
 	const uniforms: ShaderUniform[] = []
 	const seen = new Set<string>()

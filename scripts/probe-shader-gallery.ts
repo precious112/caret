@@ -15,16 +15,13 @@
  * config probe-shader.ts certified). Costs real turns on the verify backend,
  * so it is a script, never a suite.
  */
-import { spawn } from "child_process"
 import * as fs from "fs/promises"
-import * as os from "os"
 import * as path from "path"
 
 import type { BackendSession, FoundationTokens } from "../src/core/design"
 import { derivePalette, disposeBackends, foundationWords } from "../src/core/design"
 import { probeVision } from "../src/core/design/agent/vision"
 import {
-	buildShaderRenderHtml,
 	type ExtractedShader,
 	extractShaderReply,
 	SHADER_COMPILE_RETRIES,
@@ -35,11 +32,9 @@ import {
 	shaderOpeningPrompt,
 	shaderRejectionPrompt,
 } from "../src/core/design/asset-library/shader/authoring"
+import { FRAME_SIZE, GALLERY_OUT, liveHtml, POSTER_SIZE, renderShader, slugOf, writeGalleryIndex } from "./shader-render"
 import { resolveVerifyModel } from "./verify-support"
 
-const OUT = path.resolve("release/shader-gallery")
-const FRAME_SIZE = { width: 640, height: 400 }
-const POSTER_SIZE = { width: 1600, height: 1000 }
 
 const BRIEFS = [
 	"a slow aurora for a hero section",
@@ -50,6 +45,14 @@ const BRIEFS = [
 	"dark-mode embers, barely moving",
 	"paper texture with a slow light drift",
 	"gentle waves of the brand color for a footer",
+	// The statement register: bold, sculptural, saturated. Written from a
+	// reference sheet of the look this feature is measured against.
+	"a bold statement gradient: mint green sweeping into lilac across one huge smooth fold, bright and clean",
+	"electric cobalt blue with deep near-black sculptural folds and violet highlights, dramatic",
+	"glowing warm yellow into amber and orange, with a dark form pushing in from one corner",
+	"a cream-white lit form against near-black, a thin acid-green rim where the light catches its edge",
+	"saturated orange into scarlet with heavy film grain, and a lilac wedge in the bottom corner",
+	"periwinkle and pale lavender folding across a soft diagonal light, calm and expensive",
 ]
 
 /** The same foundation probe-mark judges against — a real palette, not neon defaults. */
@@ -64,89 +67,6 @@ const tokens: FoundationTokens = {
 	typography: { fontFamily: "Inter", fallback: "system-ui", scaleRatio: 1.25, baseSize: 16, scale: {} },
 	spacing: { baseUnit: 4, scale: [0, 4, 8] },
 	radius: { character: "soft", scale: [0, 4, 8] },
-}
-
-interface RenderOutcome {
-	ok: boolean
-	/** The GLSL compiler's own words, when !ok. */
-	error?: string
-	/** One PNG per requested timestamp, in order, when ok. */
-	frames: Buffer[]
-}
-
-/**
- * Compiles and renders one shader in a fresh hidden-window Electron.
- * probe-shader.ts certified this exact configuration; `offscreen: true` is
- * deliberately absent (it froze between captures).
- */
-async function render(
-	shader: ExtractedShader,
-	size: { width: number; height: number },
-	timestamps: number[],
-): Promise<RenderOutcome> {
-	const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "caret-shader-"))
-	const htmlPath = path.join(scratch, "shader.html")
-	const mainPath = path.join(scratch, "main.js")
-	const resultPath = path.join(scratch, "result.json")
-
-	await fs.writeFile(htmlPath, buildShaderRenderHtml(shader.body, shader.uniforms, size), "utf-8")
-	await fs.writeFile(
-		mainPath,
-		`const { app, BrowserWindow } = require("electron")
-const fs = require("fs")
-const finish = (result) => { fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(result)); app.exit(0) }
-setTimeout(() => finish({ ok: false, error: "render timed out after 20s" }), 20000)
-app.whenReady().then(async () => {
-	try {
-		const win = new BrowserWindow({
-			show: false,
-			width: ${size.width},
-			height: ${size.height},
-			paintWhenInitiallyHidden: true,
-			webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
-		})
-		await win.loadFile(${JSON.stringify(htmlPath)})
-		await win.webContents.executeJavaScript(
-			"new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 200))))"
-		)
-		const state = await win.webContents.executeJavaScript("window.__caretShader")
-		if (!state || state.error) return finish({ ok: false, error: (state && state.error) || "the shader page never initialised" })
-
-		const frames = []
-		for (const t of ${JSON.stringify(timestamps)}) {
-			await win.webContents.executeJavaScript("window.__caretDrawAt(" + t + ")")
-			await new Promise((r) => setTimeout(r, 120))
-			const image = await win.webContents.capturePage()
-			frames.push(image.toPNG().toString("base64"))
-		}
-		finish({ ok: true, frames })
-	} catch (err) {
-		finish({ ok: false, error: String((err && err.message) || err) })
-	}
-})
-`,
-		"utf-8",
-	)
-
-	const electron = path.join(process.cwd(), "node_modules", ".bin", "electron")
-	await new Promise<void>((resolve) => {
-		const child = spawn(electron, [mainPath], { stdio: "ignore" })
-		child.on("exit", () => resolve())
-		child.on("error", () => resolve())
-	})
-
-	try {
-		const raw = JSON.parse(await fs.readFile(resultPath, "utf-8"))
-		return {
-			ok: raw.ok === true,
-			error: raw.error ? String(raw.error) : undefined,
-			frames: Array.isArray(raw.frames) ? raw.frames.map((f: string) => Buffer.from(f, "base64")) : [],
-		}
-	} catch {
-		return { ok: false, error: "electron exited without writing a result", frames: [] }
-	} finally {
-		await fs.rm(scratch, { recursive: true, force: true })
-	}
 }
 
 async function turn(session: BackendSession, input: { text: string; images?: string[] }): Promise<string> {
@@ -187,7 +107,7 @@ async function authorOne(
 			reply = await turn(session, { text: shaderRejectionPrompt(extracted.reason) })
 			continue
 		}
-		const rendered = await render(extracted.shader, FRAME_SIZE, SHADER_CRITIQUE_TIMES)
+		const rendered = await renderShader(extracted.shader, FRAME_SIZE, SHADER_CRITIQUE_TIMES)
 		if (!rendered.ok) {
 			log(`  compile failed: ${(rendered.error ?? "").split("\n")[0]}`)
 			fixes += 1
@@ -212,7 +132,7 @@ async function authorOne(
 		rounds += 1
 		const corrected = extractShaderReply(reply)
 		if (corrected.ok) {
-			const rendered = await render(corrected.shader, FRAME_SIZE, SHADER_CRITIQUE_TIMES)
+			const rendered = await renderShader(corrected.shader, FRAME_SIZE, SHADER_CRITIQUE_TIMES)
 			// Best COMPILING answer wins — a correction that broke the compile
 			// never replaces a round that worked.
 			if (rendered.ok) best = { shader: corrected.shader, frames: rendered.frames }
@@ -225,33 +145,9 @@ async function authorOne(
 	return { ...best, rounds }
 }
 
-function slugOf(brief: string): string {
-	return brief
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-|-$/g, "")
-		.slice(0, 48)
-}
-
-/** live.html: the same page the renderer compiled, plus a clock. It animates. */
-function liveHtml(shader: ExtractedShader): string {
-	return (
-		buildShaderRenderHtml(shader.body, shader.uniforms, FRAME_SIZE) +
-		`\n<script>
-const start = () => {
-	if (!window.__caretShader.ready) { setTimeout(start, 50); return }
-	const t0 = performance.now()
-	const loop = () => { window.__caretDrawAt((performance.now() - t0) / 1000); requestAnimationFrame(loop) }
-	loop()
-}
-start()
-</script>`
-	)
-}
-
 async function main(): Promise<void> {
-	const only = process.argv.slice(2).find((arg) => !arg.startsWith("--"))
-	const briefs = only ? [only] : BRIEFS
+	const named = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
+	const briefs = named.length > 0 ? named : BRIEFS
 
 	const model = await resolveVerifyModel()
 	if (!model) throw new Error("no verify backend/model available — set CARET_VERIFY_BACKEND / CARET_VERIFY_MODEL")
@@ -268,13 +164,13 @@ async function main(): Promise<void> {
 	const colors = [palette.brand, palette.brandQuiet, palette.surface]
 	const paletteWords = foundationWords(palette)
 
-	await fs.mkdir(OUT, { recursive: true })
+	await fs.mkdir(GALLERY_OUT, { recursive: true })
 
 	for (const brief of briefs) {
 		const slug = slugOf(brief)
 		// Resumable: a network abort mid-turn must cost one brief, not the run.
 		const done = await fs
-			.access(path.join(OUT, slug, "shader.json"))
+			.access(path.join(GALLERY_OUT, slug, "shader.json"))
 			.then(() => true)
 			.catch(() => false)
 		if (done) {
@@ -296,12 +192,12 @@ async function main(): Promise<void> {
 				continue
 			}
 
-			const dir = path.join(OUT, slug)
+			const dir = path.join(GALLERY_OUT, slug)
 			await fs.mkdir(dir, { recursive: true })
 			for (const [index, frame] of result.frames.entries()) {
 				await fs.writeFile(path.join(dir, `frame-${SHADER_CRITIQUE_TIMES[index]}s.png`), frame)
 			}
-			const poster = await render(result.shader, POSTER_SIZE, [2.0])
+			const poster = await renderShader(result.shader, POSTER_SIZE, [2.0])
 			if (poster.ok && poster.frames[0]) await fs.writeFile(path.join(dir, "poster.png"), poster.frames[0])
 			await fs.writeFile(path.join(dir, "live.html"), liveHtml(result.shader), "utf-8")
 			await fs.writeFile(
@@ -320,32 +216,9 @@ async function main(): Promise<void> {
 		}
 	}
 
-	// The index reflects the gallery ON DISK, not this run — earlier runs count.
-	const entries: Array<{ slug: string; brief: string; rounds: number }> = []
-	for (const dirent of await fs.readdir(OUT, { withFileTypes: true })) {
-		if (!dirent.isDirectory()) continue
-		try {
-			const meta = JSON.parse(await fs.readFile(path.join(OUT, dirent.name, "shader.json"), "utf-8"))
-			entries.push({ slug: dirent.name, brief: String(meta.brief), rounds: Number(meta.rounds) || 0 })
-		} catch {}
-	}
-
-	const index = `<!doctype html><meta charset="utf-8"><title>Caret shader gallery</title>
-<style>
-body{font:14px/1.5 system-ui;margin:32px;background:#fafafa;color:#18181b}
-h1{font-size:18px} .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:24px}
-figure{margin:0;background:#fff;border:1px solid #e4e4e7;border-radius:8px;overflow:hidden}
-iframe{width:100%;height:300px;border:0;display:block}
-figcaption{padding:10px 14px;color:#52525b}
-</style>
-<h1>Caret shader gallery — ${entries.length} of ${briefs.length} briefs compiled. These are LIVE, judge the motion.</h1>
-<div class="grid">
-${entries.map((e) => `<figure><iframe src="${e.slug}/live.html" loading="lazy"></iframe><figcaption>${e.brief} · ${e.rounds} round(s) · <a href="${e.slug}/poster.png">poster</a></figcaption></figure>`).join("\n")}
-</div>`
-	await fs.writeFile(path.join(OUT, "index.html"), index, "utf-8")
-
-	console.log(`\n${entries.length}/${briefs.length} briefs produced a compiling shader.`)
-	console.log(`open ${path.join(OUT, "index.html")} to rate them — they animate live.`)
+	const total = await writeGalleryIndex()
+	console.log(`\n${total} shader(s) in the gallery.`)
+	console.log(`open ${path.join(GALLERY_OUT, "index.html")} to rate them — they animate live.`)
 }
 
 main()
