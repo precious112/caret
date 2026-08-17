@@ -634,8 +634,8 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	/**
 	 * Models grouped by provider, for the chosen backend.
 	 *
-	 * Empty when the backend cannot enumerate — Codex has no such API — which the
-	 * panel renders as "type an id" rather than as an empty list that looks broken.
+	 * Empty when the backend cannot enumerate, which the picker renders as "type
+	 * an id" rather than as an empty list that looks broken.
 	 */
 	ipcMain.handle("agent:models", async () => {
 		const id = getPrefs().backendId
@@ -645,6 +645,42 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		} catch (err) {
 			Logger.warn(`[ipc] could not list ${id} models: ${err}`)
 			return []
+		}
+	})
+
+	/**
+	 * Subscriptions and sign-ins not yet connected.
+	 *
+	 * The picker shows these under the models you can already run, because "that
+	 * model is behind a sign-in you have not done" and "that model does not exist"
+	 * look identical from a list that only shows what works.
+	 */
+	ipcMain.handle("agent:providerDoors", async () => {
+		const id = getPrefs().backendId
+		if (!id) return []
+		try {
+			return (await getBackend(id).listProviderDoors?.()) ?? []
+		} catch (err) {
+			Logger.warn(`[ipc] could not list ${id} provider doors: ${err}`)
+			return []
+		}
+	})
+
+	/**
+	 * Does this model actually answer?
+	 *
+	 * A refusal here is the provider's own sentence, handed straight back. Failing
+	 * to probe is not a refusal — a network hiccup must not accuse someone's plan
+	 * of not covering a model it covers — so an unknown answer reads as fine.
+	 */
+	ipcMain.handle("agent:probeModel", async (_event, projectPath: string, model: string) => {
+		const id = getPrefs().backendId
+		if (!id || !model) return null
+		try {
+			return (await getBackend(id).probeModel?.(model, projectPath)) ?? null
+		} catch (err) {
+			Logger.warn(`[ipc] could not probe ${model}: ${err}`)
+			return null
 		}
 	})
 

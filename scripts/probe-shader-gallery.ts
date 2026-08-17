@@ -35,7 +35,6 @@ import {
 import { FRAME_SIZE, GALLERY_OUT, liveHtml, POSTER_SIZE, renderShader, slugOf, writeGalleryIndex } from "./shader-render"
 import { resolveVerifyModel } from "./verify-support"
 
-
 const BRIEFS = [
 	"a slow aurora for a hero section",
 	"a grainy warm gradient, calm, like evening light",

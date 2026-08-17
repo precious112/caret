@@ -139,8 +139,60 @@ export interface OpencodeProviderInfo {
 	models: Record<string, { name?: string; cost?: { input?: number; output?: number } }>
 }
 
-/** `GET /config/providers` */
+/** `GET /config/providers` — only the providers this machine is signed in to. */
 export interface OpencodeProvidersResponse {
 	providers: OpencodeProviderInfo[]
 	default: Record<string, string>
 }
+
+/** Only the fields the picker reads. A model carries about twenty more. */
+export interface OpencodeCatalogueModel {
+	id: string
+	name?: string
+	status?: string
+	/** ISO date. Newest first is how a provider's headline models are found. */
+	release_date?: string
+	cost?: { input?: number; output?: number }
+	limit?: { context?: number; output?: number }
+	capabilities?: {
+		input?: { image?: boolean }
+		output?: { text?: boolean }
+		/** False for image, video and speech models, which cannot run an agent. */
+		toolcall?: boolean
+		attachment?: boolean
+	}
+}
+
+export interface OpencodeCatalogueProvider {
+	id: string
+	name?: string
+	/** `api` for OpenCode's own plans, `custom` for everything from the catalogue. */
+	source?: string
+	/** Environment variables that would authenticate it, e.g. `["KIMI_API_KEY"]`. */
+	env?: string[]
+	models: Record<string, OpencodeCatalogueModel>
+}
+
+/**
+ * `GET /provider` — the whole catalogue, plus who you are signed in to.
+ *
+ * Distinct from `/config/providers`, which lists only the connected ones. This
+ * is the endpoint that lets Caret show a door to a subscription you have not
+ * connected yet, instead of pretending the provider does not exist. It is
+ * several megabytes, so it is cached — see `catalogue()`.
+ */
+export interface OpencodeCatalogueResponse {
+	all: OpencodeCatalogueProvider[]
+	/** Provider ids with a working credential. */
+	connected: string[]
+	default: Record<string, string>
+}
+
+/**
+ * `GET /provider/auth` — how to sign in, per provider, in the server's own words.
+ *
+ * Keyed by provider id. Absent means the only way in is an environment variable
+ * or a config file, which is why Anthropic does not appear: it prohibits
+ * subscription sign-in outside its own tools, so an API key is all there is.
+ */
+export type OpencodeProviderAuthResponse = Record<string, Array<{ type: "oauth" | "api"; label: string }>>

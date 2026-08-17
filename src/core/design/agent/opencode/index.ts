@@ -22,6 +22,7 @@ import {
 	type CodingBackend,
 	type ModelGroup,
 	type PermissionDecision,
+	type ProviderDoor,
 	type SendInput,
 	type StartSessionOptions,
 	StructuredOutputError,
@@ -31,12 +32,15 @@ import {
 import { resolveOpencodeBinary } from "./binary"
 import { openEventStream, request } from "./http"
 import type {
+	OpencodeCatalogueModel,
+	OpencodeCatalogueResponse,
 	OpencodeConfig,
 	OpencodeEvent,
 	OpencodeFileDiff,
 	OpencodePart,
 	OpencodePermissionReply,
 	OpencodePromptResponse,
+	OpencodeProviderAuthResponse,
 	OpencodeProvidersResponse,
 	OpencodeSession,
 	OpencodeToolState,
@@ -73,10 +77,96 @@ const DECISION_TO_REPLY: Record<PermissionDecision, OpencodePermissionReply> = {
 /** Tools whose input names a file Caret should show in the change list. */
 const FILE_TOOLS = new Set(["edit", "write", "patch", "multiedit"])
 
+/**
+ * Providers whose models cost nothing per token because a plan already paid.
+ *
+ * The distinction the picker turns on: these report `cost: 0` the way a season
+ * ticket reports no fare. Showing them as "no cost" beside a genuinely free tier
+ * would invite someone to spend a monthly quota believing it was free.
+ */
+const SUBSCRIPTION_PROVIDERS = new Set([
+	"openai",
+	"github-copilot",
+	"gitlab",
+	"kimi-for-coding",
+	"zai-coding-plan",
+	"zhipuai-coding-plan",
+	"poe",
+	"xai",
+])
+
+/**
+ * The sign-ins Caret offers, in the order it offers them.
+ *
+ * A shortlist of a very long catalogue, chosen on one test: a plan a developer
+ * plausibly already pays for, or a key they already have. Anthropic is here for
+ * its key alone — it prohibits subscription use outside its own tools, so the
+ * Pro/Max sign-in other providers offer does not exist for it and Caret must not
+ * imply otherwise.
+ */
+const OFFERED_PROVIDERS = [
+	"openai",
+	"kimi-for-coding",
+	"zai-coding-plan",
+	"zhipuai-coding-plan",
+	"github-copilot",
+	"anthropic",
+	"opencode",
+	"opencode-go",
+	"google",
+	"xai",
+]
+
+/** Long enough to be worth caching, short enough that a new sign-in shows up. */
+const CATALOGUE_TTL_MS = 30_000
+
+/**
+ * The human sentence buried in a transport error, or an honest stand-in.
+ *
+ * Errors from the server carry their real reason inside a JSON body — often
+ * nested, as `{ data: { message } }`. Anything else is machine noise, and
+ * quoting noise at a user is worse than admitting Caret does not know: at least
+ * the second is true.
+ */
+export function sentenceIn(raw: string): string {
+	const start = raw.indexOf("{")
+	if (start >= 0) {
+		try {
+			const body = JSON.parse(raw.slice(start)) as { message?: unknown; data?: { message?: unknown } }
+			const message = body.data?.message ?? body.message
+			if (typeof message === "string" && message.trim()) return message.trim()
+		} catch {
+			// Not JSON, or truncated. Fall through to the stand-in.
+		}
+	}
+	return "the provider would not accept this model"
+}
+
+/**
+ * The models of a provider that could actually run a turn, newest first.
+ *
+ * A catalogue is not a shortlist: it carries image generators, speech models and
+ * embedders alongside the coding models, and none of those can hold a tool call.
+ * `release_date` is how the headline model is found without Caret keeping its own
+ * opinion about which one that is.
+ */
+function agentic(models: Record<string, OpencodeCatalogueModel>): OpencodeCatalogueModel[] {
+	return Object.values(models)
+		.filter(
+			(model) =>
+				model.status !== "deprecated" &&
+				model.capabilities?.toolcall !== false &&
+				model.capabilities?.output?.text !== false,
+		)
+		.sort((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? ""))
+}
+
 export class OpencodeBackend implements CodingBackend {
 	readonly id = "opencode" as const
 	readonly providerName = "OpenCode"
 	readonly displayName = "OpenCode (bundled)"
+
+	private catalogueCache: { value: OpencodeCatalogueResponse; at: number } | null = null
 
 	async availability(): Promise<AvailabilityReport> {
 		const base = {
@@ -220,29 +310,170 @@ export class OpencodeBackend implements CodingBackend {
 	}
 
 	/**
-	 * Every provider the running server can reach, with its models.
+	 * Every provider this machine is signed in to, with its models.
 	 *
 	 * Ids carry the provider (`opencode-go/gpt-5.6-luna`) because that is what the
 	 * prompt route wants, and because it is the only way the free tier and the
 	 * paid one stay distinguishable once a model is chosen.
+	 *
+	 * Read from the full catalogue rather than `/config/providers`, which knows
+	 * the same providers but not the things the picker has to show: a context
+	 * window, and whether the model can see an image.
 	 */
 	async listModels(): Promise<ModelGroup[]> {
-		const server = await this.server()
-		const providers = await request<OpencodeProvidersResponse>(server, "/config/providers")
+		const catalogue = await this.catalogue()
+		const connected = new Set(catalogue.connected)
 
-		return providers.providers
+		return catalogue.all
+			.filter((provider) => connected.has(provider.id))
 			.map((provider) => ({
 				providerId: provider.id,
 				providerName: provider.name ?? provider.id,
+				subscription: SUBSCRIPTION_PROVIDERS.has(provider.id),
 				models: Object.entries(provider.models ?? {})
+					.filter(([, model]) => model.status !== "deprecated")
 					.map(([id, model]) => ({
 						id: `${provider.id}/${id}`,
 						label: model.name ?? id,
 						free: model.cost?.input === 0 && model.cost?.output === 0,
+						contextTokens: model.limit?.context,
+						seesImages: model.capabilities?.input?.image === true,
 					}))
 					.sort((a, b) => a.label.localeCompare(b.label)),
 			}))
 			.filter((group) => group.models.length > 0)
+	}
+
+	/**
+	 * The subscriptions and sign-ins worth offering, minus the ones already done.
+	 *
+	 * Curated, and it has to be: the catalogue holds nearly two hundred providers,
+	 * and a picker that lists all of them is a directory rather than an offer.
+	 * What earns a place is a plan a developer plausibly already pays for. The
+	 * rest stay reachable the way they always were — an environment variable, or
+	 * OpenCode's own `auth login`.
+	 *
+	 * Auth methods come from the server rather than from Caret's imagination, so a
+	 * flow that changes upstream changes here without a release. A provider the
+	 * server has no method for is still offered when a key can reach it, because
+	 * `env` names the variable that would.
+	 */
+	async listProviderDoors(): Promise<ProviderDoor[]> {
+		const server = await this.server()
+		const [catalogue, methodsByProvider] = await Promise.all([
+			this.catalogue(),
+			request<OpencodeProviderAuthResponse>(server, "/provider/auth").catch(() => ({}) as OpencodeProviderAuthResponse),
+		])
+
+		const connected = new Set(catalogue.connected)
+		const doors: ProviderDoor[] = []
+
+		for (const id of OFFERED_PROVIDERS) {
+			if (connected.has(id)) continue
+			const provider = catalogue.all.find((candidate) => candidate.id === id)
+			if (!provider) continue
+
+			const methods = (methodsByProvider[id] ?? []).map((method) => ({
+				kind: method.type === "oauth" ? ("oauth" as const) : ("api-key" as const),
+				label: method.label,
+			}))
+			// No published method does not mean no way in: these providers all take
+			// a key, and `env` is the server telling us which one.
+			if (methods.length === 0 && (provider.env?.length ?? 0) > 0) {
+				methods.push({ kind: "api-key", label: "Enter your key" })
+			}
+			if (methods.length === 0) continue
+
+			doors.push({
+				id,
+				name: provider.name ?? id,
+				methods,
+				subscription: SUBSCRIPTION_PROVIDERS.has(id),
+				// Three names, so the row says what it is for rather than only who
+				// runs it — "Kimi For Coding" means nothing until you see `k3`. Newest
+				// first, and only models that can actually drive an agent: taking
+				// whatever came first in the object offered OpenAI as "GPT-4o,
+				// gpt-image-1.5, GPT-5.3 Chat", two of which cannot run a turn.
+				sample: agentic(provider.models ?? {})
+					.slice(0, 3)
+					.map((model) => model.name ?? model.id),
+			})
+		}
+
+		return doors
+	}
+
+	/**
+	 * Ask a model one trivial question, and report what it says if it refuses.
+	 *
+	 * Tools are all switched off: this is about whether the model answers at all,
+	 * and a probe that could run a command would be a probe that could do damage.
+	 */
+	async probeModel(model: string, workingDirectory: string): Promise<string | null> {
+		const slash = model.indexOf("/")
+		if (slash <= 0) return null
+
+		const server = await this.server()
+		const session = await request<OpencodeSession>(server, "/session", {
+			method: "POST",
+			body: { title: "Caret: model check" },
+			query: { directory: workingDirectory },
+		})
+
+		try {
+			const response = await request<{ info?: { error?: { data?: { message?: string }; name?: string } } }>(
+				server,
+				`/session/${session.id}/message`,
+				{
+					method: "POST",
+					query: { directory: workingDirectory },
+					body: {
+						parts: [{ type: "text", text: "Reply with the single word: ok" }],
+						model: { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) },
+						tools: { bash: false, edit: false, write: false, webfetch: false },
+					},
+				},
+			)
+
+			const error = response.info?.error
+			if (!error) return null
+			// The provider's own sentence, not Caret's guess at what it meant.
+			return error.data?.message ?? error.name ?? "the provider refused this model"
+		} catch (err) {
+			// A refusal can also arrive as a transport error, and what `request`
+			// throws is addressed to a developer: a method, a path, a status code
+			// and a JSON body. Handing that to the composer would put
+			// `POST /session/ses_…/message (500)` in front of somebody who asked for
+			// a model. The sentence inside it is the only part they can act on.
+			return sentenceIn(err instanceof Error ? err.message : String(err))
+		} finally {
+			await request(server, `/session/${session.id}`, { method: "DELETE", query: { directory: workingDirectory } }).catch(
+				() => {},
+			)
+		}
+	}
+
+	/**
+	 * The provider catalogue, cached.
+	 *
+	 * Several megabytes of JSON that changes only when the server refreshes its
+	 * copy of the model registry, so re-fetching it every time the picker opens
+	 * would be pure latency. Short enough that connecting a provider in the other
+	 * tab shows up without a restart.
+	 */
+	private async catalogue(): Promise<OpencodeCatalogueResponse> {
+		const now = Date.now()
+		if (this.catalogueCache && now - this.catalogueCache.at < CATALOGUE_TTL_MS) return this.catalogueCache.value
+
+		const server = await this.server()
+		const value = await request<OpencodeCatalogueResponse>(server, "/provider")
+		this.catalogueCache = { value, at: now }
+		return value
+	}
+
+	/** Dropped when a credential changes, so a fresh sign-in is visible at once. */
+	forgetCatalogue(): void {
+		this.catalogueCache = null
 	}
 
 	async listSessions(workingDirectory: string): Promise<BackendSessionSummary[]> {

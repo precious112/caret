@@ -24,6 +24,7 @@
 import {
 	AlertTriangle,
 	AtSign,
+	Check,
 	ChevronDown,
 	ChevronRight,
 	History,
@@ -44,7 +45,9 @@ import type {
 	AssetEntryWire,
 	ComposerImage,
 	InterviewPromptWire,
+	ModelGroupWire,
 	ProjectState,
+	ProviderDoorWire,
 	TranscriptEntryWire,
 } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
@@ -73,6 +76,10 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
 	const [assets, setAssets] = useState<AssetEntryWire[]>([])
 	const [assetPrompt, setAssetPrompt] = useState<AssetOptionsPromptWire | null>(null)
+	// A model the provider will not serve, in the provider's own words. Held here
+	// rather than in the picker so it survives the popover closing — the whole
+	// point is that it is still true after you look away.
+	const [notice, setNotice] = useState<ModelNotice | null>(null)
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -174,6 +181,10 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 		streaming,
 		ready: state?.ready ?? false,
 		model: describeModel(state?.model ?? "", state?.providerName),
+		modelId: state?.model ?? "",
+		projectPath: project.path,
+		notice,
+		setNotice,
 		effort: state?.effort ?? "",
 		inputRef,
 		mentions,
@@ -311,7 +322,13 @@ interface ComposerProps {
 	send(): void
 	streaming: boolean
 	ready: boolean
+	/** For the pill: the model named the way a person would say it. */
 	model: string
+	/** The id itself, for marking what is chosen and for probing it. */
+	modelId: string
+	projectPath: string
+	notice: ModelNotice | null
+	setNotice(notice: ModelNotice | null): void
 	effort: string
 	onOpenBackendSetup(): void
 	onReferenceAsset(): void
@@ -369,6 +386,7 @@ function Composer(props: ComposerProps) {
 				props.attachFiles(Array.from(event.dataTransfer.files))
 			}}>
 			<AssetMentionList mentions={props.mentions} />
+			<ModelNoticeLine notice={props.notice} onOpenBackendSetup={props.onOpenBackendSetup} />
 			<div className="rounded-xl border border-shell-border bg-shell-bg focus-within:border-white/20">
 				<AttachedImages attached={props.attached} setAttached={props.setAttached} />
 				<textarea
@@ -393,13 +411,248 @@ function Composer(props: ComposerProps) {
 				/>
 				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
 					<AttachMenu {...props} />
-					<Pill grow label={props.model} onClick={props.onOpenBackendSetup} />
+					<ModelPicker {...props} />
 					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
 					<div className="flex-1" />
 					<SendButton {...props} />
 				</div>
 			</div>
 		</footer>
+	)
+}
+
+/** A model the provider refused, and what it said. */
+interface ModelNotice {
+	model: string
+	message: string
+}
+
+/**
+ * The picker: every model you can run right now, and the doors to the rest.
+ *
+ * This is where switching models happens, because switching models is the thing
+ * you most often want to do between one message and the next, and it used to
+ * mean leaving the conversation for a settings screen. The Backend tab still
+ * exists and this still points at it — but only for the thing it is actually
+ * for, which is connecting an account.
+ *
+ * Providers are groups rather than a flattened list for the same reason the
+ * setup screen groups them: `gpt-5.6-luna` served by a subscription you already
+ * pay for and the same weights billed per token are not the same offer, and a
+ * flat list hides which one you are about to spend.
+ */
+function ModelPicker(props: ComposerProps) {
+	const [open, setOpen] = useState(false)
+	const [groups, setGroups] = useState<ModelGroupWire[] | null>(null)
+	const [doors, setDoors] = useState<ProviderDoorWire[] | null>(null)
+	const [probing, setProbing] = useState(false)
+	const [filter, setFilter] = useState("")
+
+	useEffect(() => {
+		if (!open) return
+		const close = () => setOpen(false)
+		window.addEventListener("pointerdown", close)
+		return () => window.removeEventListener("pointerdown", close)
+	}, [open])
+
+	// Fetched on open rather than on mount: the catalogue is several megabytes on
+	// the other side of this call, and most sessions never open the picker.
+	useEffect(() => {
+		if (!open) return
+		setFilter("")
+		void invoke("agent:models").then((list) => setGroups(list ?? []))
+		void invoke("agent:providerDoors").then((list) => setDoors(list ?? []))
+	}, [open])
+
+	// One connected provider is a short list; three is not, and that is the state
+	// this whole feature exists to make normal. Matching the provider's name too,
+	// so "kimi" finds the models as well as the door.
+	const needle = filter.trim().toLowerCase()
+	const shown = (groups ?? [])
+		.map((group) => ({
+			...group,
+			models: needle
+				? group.models.filter(
+						(model) =>
+							model.label.toLowerCase().includes(needle) ||
+							model.id.toLowerCase().includes(needle) ||
+							group.providerName.toLowerCase().includes(needle),
+					)
+				: group.models,
+		}))
+		.filter((group) => group.models.length > 0)
+	const shownDoors = (doors ?? []).filter(
+		(door) => !needle || door.name.toLowerCase().includes(needle) || door.sample.join(" ").toLowerCase().includes(needle),
+	)
+
+	const choose = async (id: string) => {
+		setOpen(false)
+		props.setNotice(null)
+		await invoke("prefs:set", { backendModel: id })
+		if (!id) return
+
+		// Asked now, not when the user is three minutes into a turn. Entitlement is
+		// not in any catalogue: a plan lists models it will refuse.
+		setProbing(true)
+		try {
+			const refusal = await invoke("agent:probeModel", props.projectPath, id)
+			props.setNotice(refusal ? { model: id, message: refusal } : null)
+		} finally {
+			setProbing(false)
+		}
+	}
+
+	return (
+		<div className="relative min-w-0 flex-1" onPointerDown={(event) => event.stopPropagation()}>
+			<Pill
+				grow
+				label={probing ? "checking…" : props.model}
+				onClick={() => setOpen(!open)}
+				testId="chat-model-pill"
+				warn={Boolean(props.notice)}
+			/>
+			{open && (
+				<div
+					// Pulled left of the pill and kept narrower than the sidebar: anchored
+					// to the pill at full width it ran past the window edge, and a menu
+					// whose right-hand column is clipped hides the very thing it is for.
+					className="absolute -left-8 bottom-8 z-20 flex max-h-[60vh] w-[20.5rem] flex-col overflow-hidden rounded-lg border border-shell-border bg-shell-panel shadow-lg"
+					data-testid="chat-model-menu">
+					<input
+						autoFocus
+						className="shrink-0 border-b border-shell-border bg-transparent px-2.5 py-2 text-[12px] outline-none placeholder:text-shell-muted"
+						data-testid="chat-model-filter"
+						onChange={(event) => setFilter(event.target.value)}
+						placeholder="Filter models…"
+						value={filter}
+					/>
+					<div className="overflow-y-auto py-1">
+						{/* Not a match for anything typed, so it goes when filtering starts. */}
+						{!needle && (
+							<MenuItem
+								chosen={!props.modelId}
+								label="Automatic"
+								onClick={() => void choose("")}
+								sub="Whatever the provider considers current"
+							/>
+						)}
+
+						{shown.map((group) => (
+							<div key={group.providerId}>
+								<p className="mt-1 px-2.5 pt-1.5 pb-1 text-[10px] tracking-wide text-shell-muted uppercase">
+									{group.providerName}
+									{group.subscription && <span className="ml-1.5 normal-case">· your plan</span>}
+								</p>
+								{group.models.map((model) => (
+									<MenuItem
+										chosen={props.modelId === model.id}
+										key={model.id}
+										label={model.label}
+										onClick={() => void choose(model.id)}
+										sub={describeCapabilities(model, group)}
+										testId={`chat-model-${model.id}`}
+									/>
+								))}
+							</div>
+						))}
+
+						{groups?.length === 0 && (
+							<p className="px-2.5 py-2 text-[11px] leading-relaxed text-shell-muted">
+								No provider is connected, so there is nothing to run yet.
+							</p>
+						)}
+
+						{shownDoors.length > 0 && (
+							<>
+								<p className="mt-1 border-t border-shell-border px-2.5 pt-2 pb-1 text-[10px] tracking-wide text-shell-muted uppercase">
+									Connect
+								</p>
+								{shownDoors.map((door) => (
+									<MenuItem
+										key={door.id}
+										label={door.name}
+										onClick={() => {
+											setOpen(false)
+											props.onOpenBackendSetup()
+										}}
+										sub={`${door.subscription ? "Subscription" : "API key"} · ${door.sample.slice(0, 2).join(", ")}`}
+										testId={`chat-model-door-${door.id}`}
+									/>
+								))}
+							</>
+						)}
+					</div>
+				</div>
+			)}
+		</div>
+	)
+}
+
+/**
+ * What a model is, in the two facts that change what you can do with it.
+ *
+ * Sight is here because the overlay editor sends screenshots and a model that
+ * cannot see them does not fail — it describes what it never saw. Cost is here
+ * because "free" and "included in a plan you pay for" are different things.
+ */
+function describeCapabilities(model: ModelGroupWire["models"][number], group: ModelGroupWire): string {
+	const parts: string[] = []
+	if (model.contextTokens) parts.push(`${Math.round(model.contextTokens / 1000)}K context`)
+	if (model.seesImages) parts.push("sees images")
+	if (group.subscription) parts.push("included in your plan")
+	else if (model.free) parts.push("no cost")
+	return parts.join(" · ")
+}
+
+function MenuItem({
+	chosen,
+	label,
+	onClick,
+	sub,
+	testId,
+}: {
+	chosen?: boolean
+	label: string
+	onClick(): void
+	sub?: string
+	testId?: string
+}) {
+	return (
+		<button
+			className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-white/5"
+			data-testid={testId}
+			onClick={onClick}
+			type="button">
+			<span className="mt-0.5 w-3 shrink-0 text-caret-accent">{chosen && <Check size={12} />}</span>
+			<span className="min-w-0 flex-1">
+				<span className="block truncate text-[12px]">{label}</span>
+				{sub && <span className="block text-[10.5px] leading-snug text-shell-muted">{sub}</span>}
+			</span>
+		</button>
+	)
+}
+
+/**
+ * The provider's refusal, kept on screen.
+ *
+ * Quoted rather than paraphrased: only the provider knows whether this is a plan
+ * that does not cover the model, a model retired from a free tier, or an expired
+ * credential, and a Caret-authored sentence would have to guess at all three.
+ */
+function ModelNoticeLine({ notice, onOpenBackendSetup }: { notice: ModelNotice | null; onOpenBackendSetup(): void }) {
+	if (!notice) return null
+	return (
+		<div
+			className="mb-1.5 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5"
+			data-testid="chat-model-notice">
+			<AlertTriangle className="mt-0.5 shrink-0 text-amber-300" size={12} />
+			<p className="min-w-0 flex-1 text-[11px] leading-relaxed text-amber-100/90">
+				<span className="font-medium">{notice.model}</span> did not answer: {notice.message}
+				<button className="ml-1 underline hover:text-amber-100" onClick={onOpenBackendSetup} type="button">
+					Check the connection
+				</button>
+			</p>
+		</div>
 	)
 }
 
@@ -552,13 +805,28 @@ function SendButton(props: ComposerProps) {
 	)
 }
 
-function Pill({ label, onClick, grow }: { label: string; onClick(): void; grow?: boolean }) {
+function Pill({
+	label,
+	onClick,
+	grow,
+	testId,
+	warn,
+}: {
+	label: string
+	onClick(): void
+	grow?: boolean
+	testId?: string
+	/** The chosen model would not answer. Rule 1 allows colour on this: it waits on you. */
+	warn?: boolean
+}) {
 	return (
 		<button
 			className={cn(
-				"flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-shell-muted transition-colors hover:bg-white/5 hover:text-shell-text",
+				"flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition-colors hover:bg-white/5 hover:text-shell-text",
+				warn ? "text-amber-300" : "text-shell-muted",
 				grow && "shrink",
 			)}
+			data-testid={testId}
 			onClick={onClick}
 			type="button">
 			<span className="truncate">{label}</span>
@@ -949,7 +1217,7 @@ function IconButton({ children, label, onClick }: { children: React.ReactNode; l
  * other backends' are bare, so the provider comes from the backend itself.
  */
 function describeModel(model: string, providerName: string | null | undefined): string {
-	if (!model) return "default model"
+	if (!model) return "Automatic"
 
 	const slash = model.lastIndexOf("/")
 	if (slash === -1) return providerName ? `${model} (${providerName})` : model

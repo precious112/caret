@@ -14,7 +14,11 @@ import * as os from "os"
 import * as path from "path"
 
 import { buildShaderRenderHtml } from "../src/core/design/asset-library/shader/authoring"
-import { type ShaderUniform, validateFragmentBody, validateUniformManifest } from "../src/core/design/asset-library/shader/preamble"
+import {
+	type ShaderUniform,
+	validateFragmentBody,
+	validateUniformManifest,
+} from "../src/core/design/asset-library/shader/preamble"
 
 const SIZE = { width: 960, height: 600 }
 const OUT = path.resolve("release/verify-shots")
@@ -50,7 +54,10 @@ async function main(): Promise<void> {
 	if (!bodyCheck.ok) throw new Error(`the reference body fails validation: ${bodyCheck.reason}`)
 
 	// u_light is referenced by the body, so it must be declared like any other.
-	const manifest = validateUniformManifest([...MANIFEST, { name: "u_light", type: "color", label: "Light", default: "#a78bfa" }])
+	const manifest = validateUniformManifest([
+		...MANIFEST,
+		{ name: "u_light", type: "color", label: "Light", default: "#a78bfa" },
+	])
 	if (!manifest.ok) throw new Error(`the reference manifest fails validation: ${manifest.reason}`)
 	const uniforms: ShaderUniform[] = manifest.uniforms
 

@@ -38,7 +38,9 @@ async function main(): Promise<void> {
 		const bodyCheck = validateFragmentBody(meta.body)
 		const manifest = validateUniformManifest(meta.uniforms)
 		if (!bodyCheck.ok || !manifest.ok) {
-			console.log(`✗ ${dirent.name}: no longer valid (${!bodyCheck.ok ? bodyCheck.reason : !manifest.ok ? manifest.reason : ""})`)
+			console.log(
+				`✗ ${dirent.name}: no longer valid (${!bodyCheck.ok ? bodyCheck.reason : !manifest.ok ? manifest.reason : ""})`,
+			)
 			failed += 1
 			continue
 		}

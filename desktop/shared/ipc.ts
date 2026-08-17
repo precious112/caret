@@ -373,7 +373,19 @@ export interface AgentStateWire {
 export interface ModelGroupWire {
 	providerId: string
 	providerName: string
-	models: Array<{ id: string; label: string; free?: boolean }>
+	models: Array<{ id: string; label: string; free?: boolean; contextTokens?: number; seesImages?: boolean }>
+	/** A plan already paid for. Its models cost nothing per token, but are not free. */
+	subscription?: boolean
+}
+
+/** A provider worth offering that this machine is not signed in to. */
+export interface ProviderDoorWire {
+	id: string
+	name: string
+	methods: Array<{ kind: "oauth" | "api-key"; label: string }>
+	subscription: boolean
+	/** A few of the models it would put within reach, newest first. */
+	sample: string[]
 }
 
 export interface AgentSessionWire {
@@ -814,6 +826,16 @@ export interface IpcRequests {
 	"agent:selectBackend": (id: BackendIdWire | null) => void
 	/** Models the chosen backend can reach, grouped by provider. Empty = it cannot say. */
 	"agent:models": () => ModelGroupWire[]
+	"agent:providerDoors": () => ProviderDoorWire[]
+	/**
+	 * Whether a model will answer at all, in one trivial turn.
+	 *
+	 * Null means it answered. A string is the provider's own refusal — a plan that
+	 * does not cover it, a model retired from a free tier — which is a thing the
+	 * catalogue cannot know and the user should not discover three minutes into a
+	 * turn.
+	 */
+	"agent:probeModel": (projectPath: string, model: string) => string | null
 	"agent:sessions": (projectPath: string) => AgentSessionWire[]
 	"agent:replay": (projectPath: string, sessionId: string) => boolean
 

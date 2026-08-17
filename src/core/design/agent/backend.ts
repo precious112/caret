@@ -61,14 +61,54 @@ export interface ModelOption {
 	id: string
 	/** What the user reads, without the provider prefix. */
 	label: string
-	/** Free at the provider. Worth showing; a bill is not a nice surprise. */
+	/**
+	 * Nothing to pay per token.
+	 *
+	 * Two different situations wear this flag and the picker must not conflate
+	 * them: a genuinely free tier, and a subscription already paid for. See
+	 * {@link ModelGroup.subscription} — that is the one that says which.
+	 */
 	free?: boolean
+	/** Context window in tokens, when the provider states one. */
+	contextTokens?: number
+	/**
+	 * Whether the model accepts images.
+	 *
+	 * Load-bearing rather than decorative: the overlay editor sends screenshots,
+	 * and a model that cannot see them does not fail — it invents what it "saw".
+	 */
+	seesImages?: boolean
 }
 
 export interface ModelGroup {
 	providerId: string
 	providerName: string
 	models: ModelOption[]
+	/**
+	 * A plan rather than a meter — a ChatGPT sign-in, Kimi For Coding, a GLM
+	 * coding plan. Its models report no per-token cost because there is none to
+	 * report, which is *not* the same as free, and telling a user "no cost" about
+	 * a quota they are burning would be a lie by omission.
+	 */
+	subscription?: boolean
+}
+
+/**
+ * A provider that could be connected, and the ways in.
+ *
+ * Caret shows these because "the model you want lives behind a sign-in you have
+ * not done" is a different state from "that model does not exist", and only one
+ * of them is worth a button.
+ */
+export interface ProviderDoor {
+	id: string
+	name: string
+	/** In the backend's own words — it owns these flows, Caret only offers them. */
+	methods: Array<{ kind: "oauth" | "api-key"; label: string }>
+	/** True when this is a plan somebody may already be paying for. */
+	subscription: boolean
+	/** What connecting it would put within reach, for the row's one line. */
+	sample: string[]
 }
 
 export interface StartSessionOptions {
@@ -197,6 +237,25 @@ export interface CodingBackend {
 	 * the user to type an id rather than showing models that may not exist.
 	 */
 	listModels?(): Promise<ModelGroup[]>
+	/**
+	 * Providers worth offering that this machine is not signed in to.
+	 *
+	 * Separate from {@link listModels} because they answer different questions:
+	 * that one is "what can I run right now", this is "what would connecting get
+	 * me". Optional, because a backend that cannot enumerate its providers should
+	 * offer no doors rather than invented ones.
+	 */
+	listProviderDoors?(): Promise<ProviderDoor[]>
+	/**
+	 * One trivial round-trip, to find out whether a model will actually answer.
+	 *
+	 * Entitlement is invisible in a catalogue: a plan lists models it will refuse,
+	 * and the refusal arrives minutes later inside a turn the user thought was
+	 * working. This is the same lesson the verify suites learned from a model
+	 * advertised as free that answered `[404] unavailable for free`. Resolves with
+	 * the provider's own words when it refuses, or null when it answers.
+	 */
+	probeModel?(model: string, workingDirectory: string): Promise<string | null>
 	/** Sessions previously run in this project, newest first. */
 	listSessions?(workingDirectory: string): Promise<BackendSessionSummary[]>
 	/**
