@@ -73,7 +73,30 @@ export interface TakesPrompt extends InterviewPromptBase {
 	surface: string
 }
 
-export type InterviewPrompt = QuestionPrompt | OptionsPrompt | TakesPrompt
+/**
+ * Existing assets offered as answers to a question.
+ *
+ * Unlike every other kind, this one renders docked in the chat rather than on
+ * the interview surface: the choice belongs to a conversation already happening
+ * in the sidebar, and pulling the user to Foundation for it would remove the
+ * canvas they are planning against.
+ */
+export interface AssetOptionsPrompt extends InterviewPromptBase {
+	kind: "asset-options"
+	question: string
+	why?: string
+	options: AssetOption[]
+}
+
+/** One asset as a pickable option. URLs are Vite-relative, absolutised by the renderer. */
+export interface AssetOption {
+	tag: string
+	url: string
+	kind: string
+	posterUrl: string | null
+}
+
+export type InterviewPrompt = QuestionPrompt | OptionsPrompt | TakesPrompt | AssetOptionsPrompt
 
 interface Pending {
 	prompt: InterviewPrompt
@@ -85,7 +108,7 @@ const pending = new Map<string, Pending>()
 /** Sends a prompt to the chrome and resolves with whatever the user picks. */
 export function askUser(
 	send: (prompt: InterviewPrompt) => void,
-	prompt: Omit<QuestionPrompt, "id"> | Omit<OptionsPrompt, "id"> | Omit<TakesPrompt, "id">,
+	prompt: Omit<QuestionPrompt, "id"> | Omit<OptionsPrompt, "id"> | Omit<TakesPrompt, "id"> | Omit<AssetOptionsPrompt, "id">,
 ): Promise<string | null> {
 	const id = randomUUID()
 	const full = { ...prompt, id } as InterviewPrompt

@@ -24,11 +24,12 @@
  */
 
 import { Check, Copy } from "lucide-react"
-import { memo, useState } from "react"
+import { memo, useMemo, useState } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { cn } from "../lib/utils"
+import { assetTagFromHref, remarkAssetTags } from "./asset-tags"
 
 /**
  * Closes a fence the model hasn't finished typing.
@@ -172,12 +173,7 @@ const COMPONENTS: Components = {
 	),
 	hr: () => <hr className="my-3 border-shell-border" />,
 
-	a: ({ children, href }) => (
-		// Opened by the main process' navigation guard, in the OS browser.
-		<a className="text-caret-accent underline underline-offset-2 hover:text-caret-accent-hover" href={href}>
-			{children}
-		</a>
-	),
+	a: ({ children, href }) => <Anchor href={href}>{children}</Anchor>,
 
 	table: ({ children }) => <Table>{children}</Table>,
 	thead: ({ children }) => <thead>{children}</thead>,
@@ -193,6 +189,15 @@ const COMPONENTS: Components = {
 	img: ({ alt }) => <span className="text-shell-muted italic">{alt ? `[image: ${alt}]` : "[image]"}</span>,
 }
 
+function Anchor({ children, href }: { children?: React.ReactNode; href?: string }) {
+	return (
+		// Opened by the main process' navigation guard, in the OS browser.
+		<a className="text-caret-accent underline underline-offset-2 hover:text-caret-accent-hover" href={href}>
+			{children}
+		</a>
+	)
+}
+
 /** A hast element's text, including through nested spans. */
 function collectText(node: { type?: string; value?: string; children?: unknown[] }): string {
 	if (node.type === "text") return node.value ?? ""
@@ -200,16 +205,58 @@ function collectText(node: { type?: string; value?: string; children?: unknown[]
 	return node.children.map((child) => collectText(child as Parameters<typeof collectText>[0])).join("")
 }
 
-const PLUGINS = [remarkGfm]
+type Plugins = React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
+
+const PLUGINS: Plugins = [remarkGfm]
 
 /**
  * Memoised on the text: the transcript re-renders on every streamed chunk, and
  * re-parsing every earlier message each time is what makes a chat panel judder.
+ * The tag props must therefore be *stable* at the call site — a Set or handler
+ * rebuilt per render silently turns the memo off.
  */
-export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
+export const Markdown = memo(function Markdown({
+	text,
+	className,
+	assetTags,
+	onAssetTag,
+}: {
+	text: string
+	className?: string
+	/** Tags that exist in the library; `@tag` tokens matching one become clickable. */
+	assetTags?: ReadonlySet<string>
+	onAssetTag?(tag: string): void
+}) {
+	const plugins = useMemo(
+		(): Plugins => (assetTags && assetTags.size > 0 ? [remarkGfm, [remarkAssetTags, assetTags]] : PLUGINS),
+		[assetTags],
+	)
+
+	// Tag references arrive as `#asset-tag:` links; everything else keeps the
+	// stock anchor and its navigation-guard behaviour.
+	const components = useMemo((): Components => {
+		if (!onAssetTag) return COMPONENTS
+		return {
+			...COMPONENTS,
+			a: ({ children, href }) => {
+				const tag = assetTagFromHref(href)
+				if (!tag) return <Anchor href={href}>{children}</Anchor>
+				return (
+					<button
+						className="text-caret-accent transition-colors hover:text-caret-accent-hover"
+						data-testid="chat-asset-tag"
+						onClick={() => onAssetTag(tag)}
+						type="button">
+						{children}
+					</button>
+				)
+			},
+		}
+	}, [onAssetTag])
+
 	return (
 		<div className={cn("min-w-0", className)}>
-			<ReactMarkdown components={COMPONENTS} remarkPlugins={PLUGINS}>
+			<ReactMarkdown components={components} remarkPlugins={plugins}>
 				{closeOpenFence(text)}
 			</ReactMarkdown>
 		</div>

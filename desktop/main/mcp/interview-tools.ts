@@ -1,5 +1,7 @@
 /**
- * The three tools that let an agent run the foundation interview.
+ * The tools that let an agent put a question to the user and block on the
+ * answer — the foundation interview, and past it, mid-conversation choices
+ * like which existing asset a plan should use.
  *
  * The division of labour matters. The agent supplies **judgment** — which
  * questions are worth asking given what it already knows, and which few
@@ -14,11 +16,14 @@
 import { z } from "zod"
 
 import {
+	assetUrl,
 	candidateFontUrl,
 	countRecognisedTags,
+	findAsset,
 	INTERVIEW_QUESTIONS,
 	LIBRARY_TAGS,
 	narrowCandidates,
+	readAssetIndex,
 	resolveCandidate,
 	writeFoundationTokens,
 } from "../../../src/core/design"
@@ -173,6 +178,55 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				})
 			},
 		},
+		{
+			name: "present_asset_options",
+			title: "Offer the user existing assets to pick between",
+			description:
+				'Shows two to six assets that are ALREADY in this project\'s library as options against one question ("Which hero image?") and waits for the user to pick. It renders in the chat beside the canvas, so use it mid-conversation whenever a plan turns on which existing asset to use — do not make the user open the Assets tab to answer. Tags must name assets that exist; to make a new one, use generate_asset instead. Returns the picked tag, or null when the user dismissed the choice.',
+			inputSchema: {
+				question: z.string().describe('The choice, in plain words: "Which hero image?"'),
+				tags: z.array(z.string()).min(2).max(6).describe("Existing asset tags, with or without the leading @"),
+				why: z.string().describe("One line on what the pick decides, shown with the question"),
+			},
+			async handler(ctx: ToolContext, args: { question: string; tags: string[]; why: string }) {
+				const index = await readAssetIndex(ctx.projectPath)
+				const wanted = args.tags.map((tag) => tag.replace(/^@/, ""))
+
+				// Every tag has to exist before anything is shown. Offering a mix of
+				// real and invented options would let the user pick a picture of
+				// nothing, and the agent would carry that tag into a page.
+				const missing = wanted.filter((tag) => !findAsset(index, tag))
+				if (missing.length > 0) {
+					const available = index.assets.map((asset) => `@${asset.tag}`).join(", ")
+					return fail(
+						`No asset tagged ${missing.map((tag) => `"${tag}"`).join(", ")}. ` +
+							`Available: ${available || "none — this project has no assets yet"}.`,
+					)
+				}
+
+				const picked = await askUser(send, {
+					kind: "asset-options",
+					question: args.question,
+					why: args.why,
+					options: wanted.map((tag) => {
+						const entry = findAsset(index, tag)!
+						return {
+							tag: entry.tag,
+							url: assetUrl(entry),
+							kind: entry.kind,
+							// Same route the library uses: posters live inside the assets
+							// directory, so the middleware that serves assets serves them.
+							posterUrl: entry.poster ? `/caret-assets/.posters/${encodeURIComponent(entry.poster)}` : null,
+						}
+					}),
+				})
+
+				return picked === null
+					? ok({ picked: null, note: "The user dismissed the choice without picking. Ask, or carry on without one." })
+					: ok({ picked })
+			},
+		},
+
 		{
 			name: "generate_asset",
 			title: "Generate an asset the design needs",

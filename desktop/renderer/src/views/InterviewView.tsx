@@ -19,13 +19,21 @@ import { cn } from "../lib/utils"
 export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswered?(): void }) {
 	const [prompt, setPrompt] = useState<InterviewPromptWire | null>(null)
 
-	useEffect(() => on("interview:prompt", (next) => setPrompt(next)), [])
+	// Asset picks are excluded: the chat renders those, and holding one here too
+	// would let "Skip this" answer a prompt docked in another surface.
+	useEffect(
+		() =>
+			on("interview:prompt", (next) => {
+				if (next.kind !== "asset-options") setPrompt(next)
+			}),
+		[],
+	)
 
 	// A prompt sent before this surface existed would otherwise be lost, leaving
 	// the agent blocked on a question nobody ever saw.
 	useEffect(() => {
 		void invoke("interview:pending").then((waiting) => {
-			if (waiting) setPrompt(waiting)
+			if (waiting && waiting.kind !== "asset-options") setPrompt(waiting)
 		})
 	}, [])
 
@@ -82,9 +90,9 @@ export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswer
 					<QuestionScreen onAnswer={respond} prompt={prompt} />
 				) : prompt.kind === "takes" ? (
 					<TakesScreen onPick={respond} prompt={prompt} />
-				) : (
+				) : prompt.kind === "options" ? (
 					<OptionsScreen onPick={respond} prompt={prompt} />
-				)}
+				) : null}
 
 				<button
 					className="mt-8 rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"

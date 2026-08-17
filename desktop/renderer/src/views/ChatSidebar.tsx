@@ -41,28 +41,38 @@ import { ThinkingOrb } from "thinking-orbs"
 import type {
 	AgentSessionWire,
 	AgentStateWire,
+	AssetEntryWire,
 	ComposerImage,
+	InterviewPromptWire,
 	ProjectState,
 	TranscriptEntryWire,
 } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 import { AssetMentionList, type AssetMentions, useAssetMentions } from "./AssetMentions"
+import { splitAssetTags } from "./asset-tags"
 import { Markdown } from "./Markdown"
 
 export const CHAT_SIDEBAR_WIDTH = 380
+
+/** The one prompt kind this sidebar renders; everything else is Foundation's. */
+type AssetOptionsPromptWire = Extract<InterviewPromptWire, { kind: "asset-options" }>
 
 interface ChatSidebarProps {
 	project: ProjectState
 	onClose(): void
 	onOpenBackendSetup(): void
+	/** Opens the asset viewer over the canvas. State lives in App, not here. */
+	onViewAsset(tag: string): void
 }
 
-export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSidebarProps) {
+export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset }: ChatSidebarProps) {
 	const [state, setState] = useState<AgentStateWire | null>(null)
 	const [draft, setDraft] = useState("")
 	const [attached, setAttached] = useState<ComposerImage[]>([])
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
+	const [assets, setAssets] = useState<AssetEntryWire[]>([])
+	const [assetPrompt, setAssetPrompt] = useState<AssetOptionsPromptWire | null>(null)
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -72,6 +82,37 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 			if (path === project.path) setState(next)
 		})
 	}, [project.path])
+
+	// Tag detection and option thumbnails both need the current index. Followed
+	// on the same event the library follows, because assets arrive from agents
+	// and from Finder, not only from this window's own surfaces.
+	useEffect(() => {
+		const refresh = () => void invoke("assets:list", project.path).then((list) => setAssets(list ?? []))
+		refresh()
+		return on("assets:changed", (changed) => {
+			if (changed === project.path) refresh()
+		})
+	}, [project.path])
+
+	// Asset picks dock here rather than on the interview surface — the plan they
+	// belong to is this conversation. The mount-time catch-up is not optional:
+	// a prompt sent before this listener existed is lost forever, and an agent
+	// can ask while the sidebar is closed.
+	useEffect(() => {
+		const keep = (prompt: InterviewPromptWire | null) => {
+			if (prompt?.kind === "asset-options") setAssetPrompt(prompt)
+		}
+		void invoke("interview:pending").then(keep)
+		return on("interview:prompt", keep)
+	}, [])
+
+	const resolveAssetPrompt = (picked: string | null) => {
+		if (!assetPrompt) return
+		void invoke("interview:respond", assetPrompt.id, picked)
+		setAssetPrompt(null)
+	}
+
+	const assetTags = useMemo(() => new Set(assets.map((asset) => asset.tag)), [assets])
 
 	// Sticks to the bottom while a turn streams. Checked against the scroll
 	// position first: yanking the view back down while someone is reading an
@@ -109,12 +150,18 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 					new Promise<ComposerImage | null>((resolve) => {
 						const reader = new FileReader()
 						reader.onload = () =>
-							resolve(typeof reader.result === "string" ? { name: file.name || "pasted image", dataUrl: reader.result } : null)
+							resolve(
+								typeof reader.result === "string"
+									? { name: file.name || "pasted image", dataUrl: reader.result }
+									: null,
+							)
 						reader.onerror = () => resolve(null)
 						reader.readAsDataURL(file)
 					}),
 			),
-		).then((read) => setAttached((current) => [...current, ...read.filter((image): image is ComposerImage => image !== null)]))
+		).then((read) =>
+			setAttached((current) => [...current, ...read.filter((image): image is ComposerImage => image !== null)]),
+		)
 	}, [])
 
 	const composer = {
@@ -201,11 +248,13 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 					<div className={cn("flex flex-col gap-1.5", index > 0 && "mt-7")} key={turn[0]?.id ?? index}>
 						{turn.map((entry) => (
 							<Entry
+								assetTags={assetTags}
 								entry={entry}
 								key={entry.id}
 								onRespond={(requestId, decision) =>
 									void invoke("agent:permission", project.path, requestId, decision)
 								}
+								onViewAsset={onViewAsset}
 							/>
 						))}
 					</div>
@@ -215,6 +264,16 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup }: ChatSideba
 
 				<FileChanges files={state?.transcript.files ?? []} />
 			</div>
+
+			{assetPrompt && (
+				<AssetOptionsBlock
+					canvasUrl={project.canvasUrl}
+					onDismiss={() => resolveAssetPrompt(null)}
+					onPick={(tag) => resolveAssetPrompt(tag)}
+					onView={onViewAsset}
+					prompt={assetPrompt}
+				/>
+			)}
 
 			{state?.pendingApproval && (
 				<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-approval">
@@ -448,7 +507,11 @@ function AttachedImages({
 		<div className="flex flex-wrap gap-1.5 px-3 pt-2.5" data-testid="chat-attachments">
 			{attached.map((image, index) => (
 				<span className="group relative" key={`${image.name}-${index}`} title={image.name}>
-					<img alt={image.name} className="size-11 rounded-md border border-shell-border object-cover" src={image.dataUrl} />
+					<img
+						alt={image.name}
+						className="size-11 rounded-md border border-shell-border object-cover"
+						src={image.dataUrl}
+					/>
 					<button
 						className="absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-shell-panel text-shell-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-shell-text"
 						onClick={() => setAttached((current) => current.filter((_, at) => at !== index))}
@@ -567,20 +630,26 @@ function SessionList({ sessions: allSessions, onPick }: { sessions: AgentSession
 function Entry({
 	entry,
 	onRespond,
+	assetTags,
+	onViewAsset,
 }: {
 	entry: TranscriptEntryWire
 	onRespond(requestId: string, decision: "allow" | "deny" | "allow-always"): void
+	assetTags: ReadonlySet<string>
+	onViewAsset(tag: string): void
 }) {
 	switch (entry.kind) {
 		case "user":
 			return (
 				<div className="fade-in mb-1 max-w-[82%] self-end rounded-xl rounded-br-sm bg-white/[0.07] px-3 py-2 leading-relaxed whitespace-pre-wrap">
-					{entry.text}
+					<TaggedText onTag={onViewAsset} tags={assetTags} text={entry.text} />
 				</div>
 			)
 
 		case "assistant":
-			return <Markdown className="fade-in leading-relaxed" text={entry.text} />
+			return (
+				<Markdown assetTags={assetTags} className="fade-in leading-relaxed" onAssetTag={onViewAsset} text={entry.text} />
+			)
 
 		case "thinking":
 			return <Thinking text={entry.text} />
@@ -612,6 +681,113 @@ function Entry({
 				<p className="border-l-2 border-shell-border pl-3 text-[11.5px] leading-relaxed text-shell-muted">{entry.text}</p>
 			)
 	}
+}
+
+/**
+ * Plain text with known `@tags` made clickable, for the user's own bubbles.
+ * The assistant side gets the same treatment inside `Markdown`, off the same
+ * tokenizer, so the two halves of a conversation agree on what is a tag.
+ */
+function TaggedText({ text, tags, onTag }: { text: string; tags: ReadonlySet<string>; onTag(tag: string): void }) {
+	const segments = useMemo(() => splitAssetTags(text, tags), [text, tags])
+	return (
+		<>
+			{segments.map((segment, index) =>
+				segment.kind === "tag" ? (
+					<button
+						className="text-caret-accent transition-colors hover:text-caret-accent-hover"
+						data-testid="chat-asset-tag"
+						key={index}
+						onClick={() => onTag(segment.tag)}
+						type="button">
+						@{segment.tag}
+					</button>
+				) : (
+					<span key={index}>{segment.text}</span>
+				),
+			)}
+		</>
+	)
+}
+
+/**
+ * Assets the agent offered against one question, docked where approvals dock —
+ * the tool call is blocked on this, which is what earns it the accent border.
+ * Each chip is two acts on purpose: the picture opens the viewer for a closer
+ * look, "Use this" is the answer. Looking must never commit.
+ */
+function AssetOptionsBlock({
+	prompt,
+	canvasUrl,
+	onPick,
+	onView,
+	onDismiss,
+}: {
+	prompt: Extract<InterviewPromptWire, { kind: "asset-options" }>
+	canvasUrl: string | null
+	onPick(tag: string): void
+	onView(tag: string): void
+	onDismiss(): void
+}) {
+	// Same absolutising the library does: this chrome is not served by Vite, so
+	// the index's relative paths would 404 against the chrome's own origin.
+	const absolute = (url: string) => (canvasUrl ? new URL(url, canvasUrl).toString() : null)
+
+	return (
+		<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-asset-options">
+			<div className="flex items-start gap-2">
+				<div className="min-w-0 flex-1">
+					<p className="leading-relaxed">{prompt.question}</p>
+					{prompt.why && <p className="mt-0.5 text-[11.5px] leading-relaxed text-shell-muted">{prompt.why}</p>}
+				</div>
+				<button
+					className="flex size-6 shrink-0 items-center justify-center rounded-lg text-shell-muted transition-colors hover:bg-white/10 hover:text-shell-text"
+					data-testid="chat-asset-options-dismiss"
+					onClick={onDismiss}
+					title="Dismiss"
+					type="button">
+					<X size={12} />
+				</button>
+			</div>
+
+			<div className="mt-2.5 flex flex-wrap gap-2">
+				{prompt.options.map((option) => {
+					const preview = option.kind === "video" && option.posterUrl ? option.posterUrl : option.url
+					const src = option.kind === "image" || option.kind === "vector" || option.posterUrl ? absolute(preview) : null
+					return (
+						<div
+							className="w-[104px] overflow-hidden rounded-lg border border-shell-border"
+							data-testid="chat-asset-option"
+							key={option.tag}>
+							<button
+								className="block h-16 w-full bg-black/20"
+								onClick={() => onView(option.tag)}
+								title={`Look at @${option.tag}`}
+								type="button">
+								{src ? (
+									<img alt={option.tag} className="size-full object-cover" src={src} />
+								) : (
+									<span className="flex size-full items-center justify-center text-[10px] tracking-wide text-shell-muted uppercase">
+										{option.kind}
+									</span>
+								)}
+							</button>
+							<p className="truncate px-1.5 pt-1 font-mono text-[10.5px] text-shell-muted" title={`@${option.tag}`}>
+								@{option.tag}
+							</p>
+							<button
+								className="w-full px-1.5 pt-0.5 pb-1.5 text-left text-[11px] font-medium text-caret-accent transition-colors hover:text-caret-accent-hover"
+								data-testid="chat-asset-option-use"
+								onClick={() => onPick(option.tag)}
+								type="button">
+								Use this
+							</button>
+						</div>
+					)
+				})}
+			</div>
+		</div>
+	)
 }
 
 /**

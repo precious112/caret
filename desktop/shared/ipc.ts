@@ -138,6 +138,29 @@ export type InterviewPromptWire =
 			step?: number
 			total?: number
 	  }
+	| {
+			/**
+			 * Existing assets offered as answers to a question. Rendered docked in
+			 * the chat, never on the interview surface — the conversation this
+			 * belongs to is happening in the sidebar, and yanking the user to
+			 * Foundation for it would break the surface they were planning on.
+			 */
+			kind: "asset-options"
+			id: string
+			question: string
+			why?: string
+			options: AssetOptionWire[]
+			step?: number
+			total?: number
+	  }
+
+/** One asset, as a pickable option. URLs are Vite-relative like `AssetEntryWire`'s. */
+export interface AssetOptionWire {
+	tag: string
+	url: string
+	kind: string
+	posterUrl: string | null
+}
 
 /**
  * The **in-app** foundation interview, which Caret runs itself.

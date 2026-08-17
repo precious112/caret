@@ -4183,6 +4183,64 @@ export default function CatalogDemo() {
 		return `the chat agent called ${(toolEntry as { name?: string }).name} through the per-project bridge`
 	})
 
+	await scenario("ch. the agent offers assets as options in the chat, and a pick answers the tool", async () => {
+		// The planning conversation's missing piece, end to end and model-free:
+		// an agent (driven here as a raw MCP client, the way ca does) offers two
+		// existing assets against a question; the widget docks in the CHAT — not
+		// the interview surface — the sidebar opens itself if it was closed, a
+		// chip's thumbnail opens the viewer over the canvas for a closer look
+		// without answering anything, and only "Use this" resolves the tool.
+		assert(discovery, "no discovery record (scenario b must run first)")
+
+		const assetsDir = path.join(fixture, ".caret", "assets")
+		await fs.mkdir(assetsDir, { recursive: true })
+		await fs.writeFile(path.join(assetsDir, "pick-a.png"), solidPng(400, 250, [40, 90, 160]))
+		await fs.writeFile(path.join(assetsDir, "pick-b.png"), solidPng(400, 250, [160, 90, 40]))
+		await waitFor(
+			"the two option assets to be indexed",
+			async () => {
+				try {
+					const raw = JSON.parse(await fs.readFile(path.join(assetsDir, "index.json"), "utf-8"))
+					const tags = new Set((raw.assets ?? []).map((a: { tag: string }) => a.tag))
+					return tags.has("pick-a") && tags.has("pick-b") ? true : null
+				} catch {
+					return null
+				}
+			},
+			30_000,
+		)
+
+		// Fired, not awaited: the tool BLOCKS on the user, and the assertion that
+		// it has not returned yet is part of the contract.
+		const pending = callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 61,
+			method: "tools/call",
+			params: {
+				name: "present_asset_options",
+				arguments: { question: "Which one for the hero?", tags: ["pick-a", "pick-b"], why: "The plan needs a hero image." },
+			},
+		}).then(async (response) => mcpSaid(await response.text()))
+
+		await chrome.waitForSelector('[data-testid="chat-asset-options"]', { timeout: 20_000 })
+		const chips = chrome.locator('[data-testid="chat-asset-option"]')
+		assert((await chips.count()) === 2, "both offered assets should appear as chips")
+
+		// Looking must never commit: the thumbnail opens the viewer, the tool
+		// stays pending, and the canvas-covering overlay names the right asset.
+		await chips.filter({ hasText: "@pick-a" }).locator("button").first().click()
+		await chrome.waitForSelector('[data-testid="asset-viewer"]', { timeout: 10_000 })
+		const viewed = await chrome.textContent('[data-testid="asset-viewer-tag"]')
+		assert(viewed?.includes("pick-a"), `the viewer shows "${viewed}", not the clicked asset`)
+		await chrome.click('[data-testid="asset-viewer-close"]')
+
+		await chips.filter({ hasText: "@pick-b" }).locator('[data-testid="chat-asset-option-use"]').click()
+		const said = await waitFor("the blocked tool call to resolve with the pick", async () => pending, 30_000)
+		assert(said.includes('"picked"') && said.includes("pick-b"), `the tool answered with: ${said.slice(0, 200)}`)
+
+		return `offered two assets in the chat, viewed one without answering, and "Use this" resolved the tool with pick-b`
+	})
+
 	await scenario("bf. @ picks an asset in the chat composer too", async () => {
 		// The composer is a different surface from the canvas — Caret's own window,
 		// not the generated shell — so nothing the canvas picker does carries over,

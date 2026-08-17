@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { ProjectState } from "../../shared/ipc"
 import { invoke, on } from "./ipc"
 import { AssetsView } from "./views/AssetsView"
+import { AssetViewer } from "./views/AssetViewer"
 import { BackendPanel } from "./views/BackendPanel"
 import { CHAT_SIDEBAR_WIDTH, ChatSidebar } from "./views/ChatSidebar"
 import { FoundationView } from "./views/FoundationView"
@@ -24,6 +25,13 @@ export function App() {
 	const [project, setProject] = useState<ProjectState | null>(null)
 	const [surface, setSurface] = useState<Surface>("canvas")
 	const [chatOpen, setChatOpen] = useState(false)
+	/**
+	 * The asset being viewed large, if any. Held here rather than in the chat
+	 * because the viewer covers the canvas column while the chat stays beside it,
+	 * and because opening it must also hide the native canvas view — which is
+	 * this component's job, in the visibility effect below.
+	 */
+	const [viewerTag, setViewerTag] = useState<string | null>(null)
 	/**
 	 * True while an agent is blocked on a question. Nothing may navigate away
 	 * from the foundation surface until it is answered — the token editor closes
@@ -68,17 +76,33 @@ export function App() {
 		return () => observer.disconnect()
 	}, [project, chatOpen])
 
+	// The asset viewer is a React overlay, which the native canvas view would
+	// simply sit on top of — so viewing an asset hides the canvas exactly the
+	// way switching surfaces does, and closing restores it.
 	useEffect(() => {
-		if (project) invoke("canvas:setVisible", project.path, surface === "canvas")
-	}, [project, surface])
+		if (project) invoke("canvas:setVisible", project.path, surface === "canvas" && viewerTag === null)
+	}, [project, surface, viewerTag])
+
+	// A stale tag from the last project would open the viewer onto "nothing is
+	// tagged that" in the new one.
+	useEffect(() => setViewerTag(null), [project?.path])
 
 	// An agent asking the user a direct question has to reach them. Left on the
 	// canvas they would see nothing at all while the agent waited indefinitely,
-	// so an arriving prompt takes them to it.
+	// so an arriving prompt takes them to it. Asset picks are the exception:
+	// they render docked in the chat, beside whatever the user was looking at,
+	// and switching them to Foundation would hide the surface they answer on.
 	useEffect(
 		() =>
-			on("interview:prompt", () => {
+			on("interview:prompt", (prompt) => {
+				// Same principle, different surface: the prompt has to land where
+				// somebody will see it, or the agent blocks forever.
+				if (prompt.kind === "asset-options") {
+					setChatOpen(true)
+					return
+				}
 				markInterviewPending(true)
+				setViewerTag(null)
 				setSurface("foundation")
 			}),
 		[],
@@ -93,10 +117,13 @@ export function App() {
 	useEffect(() => {
 		if (!project) return
 		void invoke("interview:pending").then((waiting) => {
-			if (waiting) {
-				markInterviewPending(true)
-				setSurface("foundation")
+			if (!waiting) return
+			if (waiting.kind === "asset-options") {
+				setChatOpen(true)
+				return
 			}
+			markInterviewPending(true)
+			setSurface("foundation")
 		})
 	}, [project])
 
@@ -125,7 +152,9 @@ export function App() {
 		}
 
 		void invoke("interview:pending").then((pending) => {
-			if (pending) return
+			// A pending asset pick never vetoes: it is answered in the chat, which
+			// travels with the user across surfaces.
+			if (pending && pending.kind !== "asset-options") return
 			interviewPendingRef.current = false
 			setSurface(next)
 		})
@@ -161,7 +190,9 @@ export function App() {
 			/>
 
 			<div className="flex min-h-0 flex-1">
-				<div className="flex min-w-0 flex-1 flex-col">
+				{/* `relative` so the asset viewer can blanket exactly this column —
+				    the canvas's own footprint — while the chat stays beside it. */}
+				<div className="relative flex min-w-0 flex-1 flex-col">
 					{surface === "foundation" && (
 						<FoundationView
 							onDone={() => requestSurface("canvas")}
@@ -171,12 +202,14 @@ export function App() {
 					)}
 					{surface === "agent" && <BackendPanel onClose={() => requestSurface("canvas")} project={project} />}
 					{surface === "assets" && <AssetsView onClose={() => requestSurface("canvas")} project={project} />}
+					{viewerTag && <AssetViewer onClose={() => setViewerTag(null)} project={project} tag={viewerTag} />}
 				</div>
 
 				{chatOpen && (
 					<ChatSidebar
 						onClose={() => setChatOpen(false)}
 						onOpenBackendSetup={() => requestSurface("agent")}
+						onViewAsset={setViewerTag}
 						project={project}
 					/>
 				)}

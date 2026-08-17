@@ -45,8 +45,15 @@ export function FoundationView({
 	useEffect(() => setActiveProject(project.path), [project.path])
 
 	// An *external* agent's question wins over whatever is on screen: unlike
-	// Caret's own flows, there is a tool call blocked on it.
-	useEffect(() => on("interview:prompt", () => setMode("agent")), [])
+	// Caret's own flows, there is a tool call blocked on it. Asset picks are
+	// not this surface's to show — they dock in the chat.
+	useEffect(
+		() =>
+			on("interview:prompt", (prompt) => {
+				if (prompt.kind !== "asset-options") setMode("agent")
+			}),
+		[],
+	)
 
 	// And a prompt that arrived *before* this view existed still has to land.
 	// The event is what switches the surface here, so when the user was anywhere
@@ -57,7 +64,7 @@ export function FoundationView({
 	// first and it fails every time.
 	useEffect(() => {
 		void invoke("interview:pending").then((waiting) => {
-			if (waiting) setMode("agent")
+			if (waiting && waiting.kind !== "asset-options") setMode("agent")
 		})
 	}, [])
 
