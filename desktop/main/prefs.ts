@@ -61,7 +61,7 @@ export interface Prefs {
 	 * right model for chat and the right model for a specific job are often not
 	 * the same one — mesh optimization has a recommended set of its own.
 	 */
-	laneModels: { mark?: string; model3d?: string }
+	laneModels: { mark?: string; model3d?: string; shader?: string }
 }
 
 const DEFAULTS: Prefs = {

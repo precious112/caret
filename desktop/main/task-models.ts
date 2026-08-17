@@ -16,7 +16,7 @@ import { getBackend, isRecommendedOptimizer } from "../../src/core/design"
 import type { TaskModelWire } from "../shared/ipc"
 import { getPrefs, setPref } from "./prefs"
 
-export type LaneTask = "mark" | "model3d"
+export type LaneTask = "mark" | "model3d" | "shader"
 
 export async function listTaskModels(task: LaneTask): Promise<TaskModelWire[]> {
 	const prefs = getPrefs()

@@ -38,19 +38,25 @@ import type {
 	Model3dOutcomeWire,
 	ProjectState,
 	RecipeCardWire,
+	ShaderOutcomeWire,
 	TaskModelWire,
 } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 
-type Stage = "ask" | "clarify" | "recipe" | "variant" | "name" | "mark" | "model3d"
+type Stage = "ask" | "clarify" | "recipe" | "variant" | "name" | "mark" | "model3d" | "shader"
 
-/** The four things this screen makes. Picked, never guessed from prose. */
+/** The things this screen makes. Picked, never guessed from prose. */
 const KINDS: Array<{ id: GenerationKindWire; label: string; hint: string }> = [
 	{ id: "image", label: "A photograph or image", hint: "For a hero, a card, or anywhere a picture goes." },
 	{ id: "texture", label: "A texture or pattern", hint: "Grain, a wash, a halftone. Free, instant, and tunable after." },
 	{ id: "mark", label: "A logo or mark", hint: "Drawn as vector, rendered, corrected against its own render." },
 	{ id: "object3d", label: "A 3D object", hint: "Built from an image, then optimized so it does not weigh the page down." },
+	{
+		id: "shader",
+		label: "An animated background",
+		hint: "A living gradient, written as code — colours and motion stay tunable.",
+	},
 ]
 
 /** Ratios the image lane composes for. */
@@ -86,6 +92,13 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 
 	const runTakes = useCallback(
 		async (ratio: string, answers: Record<string, string>) => {
+			// The shader lane rides the same ask → clarify road, then runs its own
+			// loop: one authored result to watch, not three takes to pick from.
+			if (kind === "shader") {
+				setReplies(answers)
+				setStage("shader")
+				return
+			}
 			setAspect(ratio)
 			setChosen(null)
 			setVariants([])
@@ -97,7 +110,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 				setBusy(false)
 			}
 		},
-		[project.path, request],
+		[project.path, request, kind],
 	)
 
 	/**
@@ -199,7 +212,9 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 											? "The model draws it, sees its own render, and corrects — three rounds."
 											: stage === "model3d"
 												? "Built from an image in your library, then optimized to a page-friendly weight."
-												: "Give it a name you would type."}
+												: stage === "shader"
+													? "The model writes it as code, compiles it, and corrects against its own frames."
+													: "Give it a name you would type."}
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
@@ -515,6 +530,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 
 				{stage === "mark" && <MarkFlow onClose={onClose} project={project} subject={text.trim()} />}
 				{stage === "model3d" && <Model3dFlow onClose={onClose} project={project} />}
+				{stage === "shader" && <ShaderFlow answers={replies} onClose={onClose} project={project} subject={text.trim()} />}
 			</div>
 		</div>
 	)
@@ -680,6 +696,173 @@ function MarkFlow({
 							onClick={accept}
 							type="button">
 							Add to assets
+						</button>
+					</div>
+					{error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+				</div>
+			)}
+		</section>
+	)
+}
+
+/**
+ * The shader lane's flow: watch the model write, compile and correct, then
+ * keep or don't.
+ *
+ * The subject and the clarify answers arrive from the ask road — asking again
+ * would be asking twice. What accepting produces is TWO things and the copy
+ * says so: a live component in the project, and a poster in the assets. The
+ * preview strip is three stills at fixed timestamps; the motion itself is
+ * judged where it will actually live, on the page.
+ */
+function ShaderFlow({
+	project,
+	onClose,
+	subject,
+	answers,
+}: {
+	project: ProjectState
+	onClose(saved: string | null): void
+	subject: string
+	answers: Record<string, string>
+}) {
+	const [busy, setBusy] = useState(false)
+	const [progress, setProgress] = useState("")
+	const [rounds, setRounds] = useState<Array<{ round: number; preview: string }>>([])
+	const [outcome, setOutcome] = useState<ShaderOutcomeWire | null>(null)
+	const [tag, setTag] = useState("")
+	const [error, setError] = useState<string | null>(null)
+
+	useEffect(
+		() =>
+			on("generate:progress", (path, update: GenerateProgressWire) => {
+				if (path !== project.path || update.job !== "shader") return
+				setProgress(update.stage)
+				if (update.round !== undefined && update.preview) {
+					setRounds((current) => [
+						...current.filter((r) => r.round !== update.round),
+						{ round: update.round!, preview: update.preview! },
+					])
+				}
+			}),
+		[project.path],
+	)
+
+	const generate = async () => {
+		setBusy(true)
+		setOutcome(null)
+		setRounds([])
+		setError(null)
+		try {
+			const result = await invoke("generate:shader", project.path, {
+				kind: "shader",
+				text: subject,
+				...(Object.keys(answers).length > 0 ? { answers } : {}),
+			})
+			setOutcome(result ?? null)
+			if (result?.ok) setTag(suggestTag(subject))
+		} finally {
+			setBusy(false)
+			setProgress("")
+		}
+	}
+
+	const accept = async () => {
+		setBusy(true)
+		try {
+			const result = await invoke("generate:shaderAccept", project.path, tag)
+			if (result?.ok) onClose(result.tag ?? tag)
+			else setError(result?.error ?? "Could not save that.")
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	return (
+		<section className="mx-auto max-w-2xl" data-testid="generate-shader">
+			<p className="text-sm text-shell-muted">
+				Writing an animated background for: <span className="text-shell-fg">{subject}</span>
+			</p>
+
+			<div className="mt-3 flex items-center gap-3">
+				<button
+					className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+					data-testid="shader-generate"
+					disabled={busy || !subject.trim()}
+					onClick={generate}
+					type="button">
+					{outcome ? "Write another" : "Write it"}
+				</button>
+			</div>
+
+			<TaskModelPicker disabled={busy} task="shader" />
+
+			{busy && (
+				<p className="mt-4 text-xs text-shell-muted" data-testid="shader-progress">
+					{progress || "Starting…"}
+				</p>
+			)}
+
+			{rounds.length > 0 && !outcome?.ok && (
+				<div className="mt-4 grid grid-cols-3 gap-3" data-testid="shader-rounds">
+					{rounds.map((entry) => (
+						<figure className="m-0" key={entry.round}>
+							<img alt="" className="w-full rounded-lg border border-shell-border" src={entry.preview} />
+							<figcaption className="mt-1 text-center text-[11px] text-shell-muted">Round {entry.round}</figcaption>
+						</figure>
+					))}
+				</div>
+			)}
+
+			{outcome && !outcome.ok && (
+				<div className="mt-4 rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted">
+					<p>{outcome.reason}</p>
+					{outcome.needsAnotherModel && <p className="mt-2">Pick a model that accepts images above, then try again.</p>}
+				</div>
+			)}
+
+			{outcome?.ok && (
+				<div className="mt-5" data-testid="shader-result">
+					<p className="mb-2 text-xs text-shell-muted">
+						Moments from the animation — {outcome.rounds} round(s) on {outcome.model}.
+					</p>
+					<div className="grid grid-cols-3 gap-3" data-testid="shader-frames">
+						{(outcome.frames ?? []).map((frame, index) => (
+							<img
+								alt=""
+								className="w-full rounded-lg border border-shell-border"
+								key={frame.slice(-24)}
+								src={frame}
+							/>
+						))}
+					</div>
+					{(outcome.knobs?.length ?? 0) > 0 && (
+						<p className="mt-3 text-xs text-shell-muted" data-testid="shader-knobs">
+							Tunable after: {outcome.knobs!.map((knob) => knob.label).join(" · ")}
+						</p>
+					)}
+					<label className="mt-4 block text-sm" htmlFor="shader-tag">
+						What should it be called? <code className="text-xs text-shell-muted">@{tag || "name"}</code>
+					</label>
+					<p className="mt-1 text-xs text-shell-muted">
+						Saving adds a live component to your project and a poster still to your assets.
+					</p>
+					<div className="mt-2 flex gap-2">
+						<input
+							className="min-w-0 flex-1 rounded-md border border-shell-border bg-transparent px-3 py-2 font-mono text-sm outline-none"
+							data-testid="shader-tag"
+							id="shader-tag"
+							onChange={(event) => setTag(event.target.value)}
+							onKeyDown={(event) => event.key === "Enter" && accept()}
+							value={tag}
+						/>
+						<button
+							className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+							data-testid="shader-save"
+							disabled={busy}
+							onClick={accept}
+							type="button">
+							Add to project
 						</button>
 					</div>
 					{error && <p className="mt-2 text-xs text-red-400">{error}</p>}
@@ -943,7 +1126,7 @@ function TaskModelPicker({
 	disabled,
 	recommendedNote,
 }: {
-	task: "mark" | "model3d"
+	task: "mark" | "model3d" | "shader"
 	disabled?: boolean
 	recommendedNote?: boolean
 }) {

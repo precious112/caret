@@ -458,7 +458,7 @@ export interface AssetAddResult {
 }
 
 /** What the user is generating, chosen before they describe it. */
-export type GenerationKindWire = "image" | "texture" | "mark" | "object3d"
+export type GenerationKindWire = "image" | "texture" | "mark" | "object3d" | "shader"
 
 /** What the user asked for, on its way to main. */
 export interface AssetRequestWire {
@@ -540,7 +540,7 @@ export interface RecipeCardWire {
  * worth watching: the model correcting its own work.
  */
 export interface GenerateProgressWire {
-	job: "mark" | "model3d"
+	job: "mark" | "model3d" | "shader"
 	/** Short, present-tense, for the status line. */
 	stage: string
 	detail?: string
@@ -554,6 +554,22 @@ export interface MarkOutcomeWire {
 	ok: boolean
 	/** Preview of the final round, as a data URL. */
 	preview?: string
+	rounds?: number
+	model?: string
+	reason?: string
+	/** True when the fix is picking a model that accepts images. */
+	needsAnotherModel?: boolean
+}
+
+/** What the shader loop came back with. The GLSL stays in main until accepted. */
+export interface ShaderOutcomeWire {
+	ok: boolean
+	/** Frames at the critique timestamps, as data URLs — the picker's strip. */
+	frames?: string[]
+	/** The knobs the model declared, for the "what you can tune" line. */
+	knobs?: Array<{ name: string; label: string }>
+	/** Luminance spread of the final render — the anti-timidity number. */
+	range?: { min: number; max: number }
 	rounds?: number
 	model?: string
 	reason?: string
@@ -705,9 +721,21 @@ export interface IpcRequests {
 	 * `recommended` marks the named set for that task — matched against what the
 	 * backend actually reports, never a hardcoded id list that goes stale.
 	 */
-	"generate:taskModels": (task: "mark" | "model3d") => TaskModelWire[]
+	"generate:taskModels": (task: "mark" | "model3d" | "shader") => TaskModelWire[]
 	/** Per-task model override. Empty string clears back to the session model. */
-	"generate:setTaskModel": (task: "mark" | "model3d", model: string) => void
+	"generate:setTaskModel": (task: "mark" | "model3d" | "shader", model: string) => void
+
+	/**
+	 * Runs the shader loop: the model writes GLSL against Caret's scaffold,
+	 * Caret compiles it, bounces compile errors and flat renders back, then
+	 * shows the model its own frames. Awaited for the whole run — progress
+	 * arrives on `generate:progress` with job "shader". The request carries the
+	 * user's words and their clarify answers; the GLSL stays in main until
+	 * accepted, when it becomes a component in `.caret/components/shaders/`
+	 * plus a poster asset.
+	 */
+	"generate:shader": (projectPath: string, request: AssetRequestWire) => ShaderOutcomeWire
+	"generate:shaderAccept": (projectPath: string, tag: string) => WriteResult & { tag?: string; componentPath?: string }
 
 	/**
 	 * Whether the request needs anything more before it is worth spending on.

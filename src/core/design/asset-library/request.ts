@@ -45,7 +45,7 @@ import type { AssetRecipe, GeneratorPalette, RecipeRequest } from "./types"
  * something in mind, and a model guessing the lane from prose is a guess that
  * can be wrong about which pipeline runs and what it costs.
  */
-export type GenerationKind = "image" | "texture" | "mark" | "object3d"
+export type GenerationKind = "image" | "texture" | "mark" | "object3d" | "shader"
 
 export interface AssetRequest {
 	kind: GenerationKind
@@ -148,6 +148,17 @@ export function composeAssetRequest(
 	const said = request.text.trim().replace(/\.$/, "")
 	const answers = answerWords(request.answers)
 
+	if (request.kind === "shader") {
+		// The authored shader lane compiles, renders and critiques, so like the
+		// mark it wants a brief. Style guidance lives in the shader system
+		// prompt; the brief carries only what the user could know.
+		return {
+			lane: "authored",
+			brief: [`${said}.`, answers].filter(Boolean).join(" "),
+			avoid: [...SLOP_TELLS],
+		}
+	}
+
 	if (request.kind === "mark") {
 		// The authored lane renders, screenshots and re-emits, so what it needs is
 		// a brief rather than a photographic prompt.
@@ -212,6 +223,8 @@ const ASPECTS_FOR: Record<GenerationKind, string[]> = {
 	texture: ["16:9", "3:2", "1:1"],
 	mark: ["1:1"],
 	object3d: ["1:1"],
+	// The poster's ratio only — the live component fills whatever box it gets.
+	shader: ["16:10", "21:9", "1:1"],
 }
 
 /**
@@ -237,8 +250,8 @@ export function recipeForRequest(request: AssetRequest): AssetRecipe {
 		id: `request:${request.kind}:${fnv1a(said)}`,
 		name: said || "Untitled request",
 		use: said,
-		kind: request.kind === "mark" ? "mark" : "photo",
-		lane: request.kind === "mark" ? "authored" : "raster",
+		kind: request.kind === "mark" ? "mark" : request.kind === "shader" ? "gradient" : "photo",
+		lane: request.kind === "mark" || request.kind === "shader" ? "authored" : "raster",
 		purposes: [request.kind === "mark" ? "mark" : request.kind === "object3d" ? "object3d" : "background"],
 		tags: [],
 		aspects: ASPECTS_FOR[request.kind],
@@ -346,4 +359,5 @@ const KIND_WORDS: Record<GenerationKind, string> = {
 	texture: "a texture or pattern",
 	mark: "a logo or mark",
 	object3d: "a 3D object",
+	shader: "an animated background shader",
 }

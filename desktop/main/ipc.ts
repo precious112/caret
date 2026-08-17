@@ -40,8 +40,10 @@ import {
 	writeFoundationTokens,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import type { AssetRequestWire, ComposerImage } from "../shared/ipc"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
+import { acceptShader, authorShader, discardShader, holdShader } from "./authored-shaders"
 import { resolveNotification } from "./electron-host"
 import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
 import { acceptModel3d, discardModel3d, generateModel3d } from "./generate-3d"
@@ -71,9 +73,9 @@ import {
 	startWizard,
 	wizardBack,
 } from "./token-wizard"
-import type { ComposerImage } from "../shared/ipc"
 import type { DesignInboundMessage } from "./types"
 import type { WindowManager } from "./window-manager"
+
 /**
  * Image formats a vision model will actually read, mapped to their MIME types.
  *
@@ -419,6 +421,43 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return result.ok ? { ok: true, tag: result.tag } : { ok: false, error: result.error }
 	})
 
+	ipcMain.handle("generate:shader", async (_event, projectPath: string, request: AssetRequestWire) => {
+		const tokens = await readFoundationTokens(projectPath).catch(() => null)
+		const window = windows.get(projectPath)
+
+		const result = await authorShader({
+			projectPath,
+			request: { kind: "shader", text: request.text, answers: request.answers },
+			tokens,
+			modelOverride: taskModel("shader") || undefined,
+			onProgress: (update) =>
+				window?.sendToChrome("generate:progress", projectPath, {
+					job: "shader",
+					stage: update.stage,
+					...(update.round !== undefined ? { round: update.round } : {}),
+					...(update.previewPng ? { preview: `data:image/png;base64,${update.previewPng.toString("base64")}` } : {}),
+				}),
+		})
+
+		if (!result.ok) return { ok: false, reason: result.reason, needsAnotherModel: result.needsAnotherModel }
+
+		holdShader(projectPath, { outcome: result.shader, subject: request.text.trim(), answers: request.answers })
+		return {
+			ok: true,
+			frames: result.shader.framePngs.map((frame) => `data:image/png;base64,${frame.toString("base64")}`),
+			knobs: result.shader.uniforms.map((uniform) => ({ name: uniform.name, label: uniform.label })),
+			range: result.shader.range,
+			rounds: result.shader.rounds,
+			model: result.shader.model,
+		}
+	})
+
+	ipcMain.handle("generate:shaderAccept", async (_event, projectPath: string, tag: string) => {
+		const result = await acceptShader(projectPath, tag)
+		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+		return result.ok ? { ok: true, tag: result.tag, componentPath: result.componentPath } : { ok: false, error: result.error }
+	})
+
 	ipcMain.handle("generate:model3d", async (_event, projectPath: string, sourceTag: string) => {
 		const window = windows.get(projectPath)
 		return generateModel3d(projectPath, sourceTag, (update) =>
@@ -447,6 +486,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		discardPending(projectPath)
 		discardMark(projectPath)
 		discardModel3d(projectPath)
+		discardShader(projectPath)
 	})
 
 	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>, kind?: string) =>

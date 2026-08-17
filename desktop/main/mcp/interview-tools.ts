@@ -177,12 +177,12 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 			name: "generate_asset",
 			title: "Generate an asset the design needs",
 			description:
-				"Makes an image, texture, logo mark or 3D object and adds it to the project's assets, returning the @tag to reference it. Use this when the design you are discussing needs something the user does not have — say what it is in plain words, the way you would describe it to somebody. Caret asks the user to approve it first (images and 3D cost the user money on their own key), generates three takes, and lets them point at one. Everything about how it is lit, framed and coloured comes from the project's foundation, so describe the SUBJECT and not the styling.",
+				"Makes an image, texture, logo mark, 3D object or animated background shader and adds it to the project's assets, returning the @tag to reference it. Use this when the design you are discussing needs something the user does not have — say what it is in plain words, the way you would describe it to somebody. Caret asks the user to approve it first (images and 3D cost the user money on their own key), generates, and lets them point at what they want to keep. Everything about how it is lit, framed and coloured comes from the project's foundation, so describe the SUBJECT and not the styling — except a shader, where hues and mood belong in the description.",
 			inputSchema: {
 				kind: z
-					.enum(["image", "texture", "mark", "object3d"])
+					.enum(["image", "texture", "mark", "object3d", "shader"])
 					.describe(
-						"image: a photograph. texture: grain, a wash, a pattern — free and local. mark: a logo. object3d: a 3D model.",
+						"image: a photograph. texture: grain, a wash, a pattern — free and local. mark: a logo. object3d: a 3D model. shader: an animated background gradient, written as a live component with tunable colours.",
 					),
 				what: z.string().min(2).describe('What it is, in plain words: "a brushed steel paperclip"'),
 				why: z.string().describe("One line on what it is for, shown to the user when asking whether to make it"),
@@ -190,7 +190,12 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 			},
 			async handler(
 				ctx: ToolContext,
-				args: { kind: "image" | "texture" | "mark" | "object3d"; what: string; why: string; transparent?: boolean },
+				args: {
+					kind: "image" | "texture" | "mark" | "object3d" | "shader"
+					what: string
+					why: string
+					transparent?: boolean
+				},
 			) {
 				const request = {
 					kind: args.kind,
@@ -210,6 +215,46 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				})
 				if (consent !== "Generate it") {
 					return ok({ generated: false, note: "The user declined. Carry on without it, or suggest an alternative." })
+				}
+
+				if (args.kind === "shader") {
+					// One authored result, not three takes. The frames shown are three
+					// moments of the SAME animation; the pick is a keep, not a choice.
+					const { authorShader, holdShader, acceptShader } = await import("../authored-shaders")
+					const { readFoundationTokens } = await import("../../../src/core/design")
+					const { taskModel } = await import("../task-models")
+					const tokens = await readFoundationTokens(ctx.projectPath).catch(() => null)
+					const result = await authorShader({
+						projectPath: ctx.projectPath,
+						request: { kind: "shader", text: args.what },
+						tokens,
+						modelOverride: taskModel("shader") || undefined,
+					})
+					if (!result.ok) return ok({ generated: false, note: `Generation did not produce anything: ${result.reason}` })
+
+					holdShader(ctx.projectPath, { outcome: result.shader, subject: args.what })
+					const kept = await askUser(send, {
+						kind: "takes",
+						title: `Moments of ${args.what}`,
+						subtitle: `${args.why} These are three moments of one animation — pick any to keep it.`,
+						takes: result.shader.framePngs.map((frame, index) => ({
+							index,
+							preview: `data:image/png;base64,${frame.toString("base64")}`,
+						})),
+						surface: "#0a0a0a",
+					})
+					if (kept === null) return ok({ generated: false, note: "The user did not keep it." })
+
+					const saved = await acceptShader(ctx.projectPath, slugTag(args.what))
+					if (!saved.ok) return fail(saved.error ?? "The shader could not be saved.")
+					await regenerateRulesFiles(ctx.projectPath).catch(() => {})
+					return ok({
+						generated: true,
+						tag: saved.tag,
+						reference: `@${saved.tag}`,
+						component: saved.componentPath,
+						note: `The live animated version is the component at ${saved.componentPath} — import and place THAT for motion; the @tag is its poster still. Its colours and motion are tunable props.`,
+					})
 				}
 
 				const takes = await requestTakes(ctx.projectPath, request, "")

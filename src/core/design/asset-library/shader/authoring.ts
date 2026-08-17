@@ -80,6 +80,23 @@ export function shaderRejectionPrompt(reason: string): string {
 	return [`Your reply was rejected before compiling: ${reason}.`, "", "Resend both fenced blocks, corrected."].join("\n")
 }
 
+/**
+ * The automatic timidity gate. A shader can compile perfectly and still be the
+ * one failure the taste rules forbid — a near-invisible wash — and that is
+ * measurable: the luminance spread of a rendered frame. Below this, the model
+ * is told so and asked again before a person ever sees it. Auto-correct, not
+ * detect: the finding goes back into the loop, not into a warning.
+ */
+export const SHADER_MIN_LUMINANCE_SPREAD = 40
+
+export function shaderFlatPrompt(range: { min: number; max: number }): string {
+	return [
+		`Your shader compiled, but the rendered frame is nearly flat: its luminance runs only from ${range.min} to ${range.max} of 255.`,
+		"That is the near-invisible-wash failure the rules name as the one with no excuse. Compose a real value range — a genuinely dark region and a genuinely bright one in the same frame. The sculpted-surface helpers with a grazing light are the reliable way there.",
+		"Resend both fenced blocks, corrected.",
+	].join("\n")
+}
+
 export function shaderCritiquePrompt(brief: string): string {
 	return [
 		`These are frames of your shader at u_time = ${SHADER_CRITIQUE_TIMES.join("s, ")}s.`,

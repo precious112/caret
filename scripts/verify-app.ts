@@ -2762,6 +2762,130 @@ export default function ListDemo() {
 		return `row 2's text landed in the data literal ("Aurora Loafer"), template and item 1 untouched`
 	})
 
+	await scenario("cf. a shader component renders real moving pixels in the shell, no model anywhere", async () => {
+		// The runner template is a string until a project runs it; this is where
+		// it runs. Seeded exactly the way acceptShader writes it — the shared lib
+		// runner plus a small instance whose knobs are literal props — then
+		// rendered isolated and captured, asserting live pixels rather than a
+		// mounted element: a canvas that exists but never draws is the exact
+		// failure a template slip produces.
+		const caretDir = path.join(fixture, ".caret")
+		const { SHADER_RUNNER_SOURCE } = await import("../src/core/design/authoring/shader-runner")
+		await fs.mkdir(path.join(caretDir, "lib"), { recursive: true })
+		await fs.writeFile(path.join(caretDir, "lib", "CaretShader.tsx"), SHADER_RUNNER_SOURCE)
+
+		await fs.mkdir(path.join(caretDir, "components", "shaders"), { recursive: true })
+		await fs.writeFile(
+			path.join(caretDir, "components", "shaders", "glow.tsx"),
+			`import CaretShader from "../../lib/CaretShader"
+
+const FRAGMENT = \`vec4 caretMain(vec2 uv) {
+	float aspect = u_resolution.x / u_resolution.y;
+	vec2 p = vec2((uv.x - 0.5) * aspect, uv.y - 0.5);
+	vec3 n = caretReliefNormal(p * u_scale, u_time * u_speed, 1.5);
+	vec2 s = caretShade(n, vec3(-0.7, 0.55, 0.28), 40.0);
+	vec3 col = caretPalette(pow(s.x, 1.5), u_shadow, u_base, u_light);
+	return vec4(col + s.y * u_light * 0.6, 1.0);
+}\`
+
+export default function GlowShader({ className }: { className?: string }) {
+	return (
+		<CaretShader
+			fragment={FRAGMENT}
+			uniforms={{
+				u_speed: 0.35, // Speed
+				u_scale: 1.1, // Form scale
+				u_shadow: "#05061a", // Shadow
+				u_base: "#1d2bd6", // Base
+				u_light: "#a78bfa", // Light
+			}}
+			className={className}
+		/>
+	)
+}
+`,
+		)
+
+		const pageDir = path.join(caretDir, "pages", "shader-demo")
+		await fs.mkdir(pageDir, { recursive: true })
+		await fs.writeFile(
+			path.join(pageDir, "index.tsx"),
+			`import GlowShader from "../../components/shaders/glow"
+
+export default function ShaderDemo() {
+  return (
+    <div className="min-h-screen bg-black p-8">
+      <GlowShader className="h-[420px] w-[640px]" />
+    </div>
+  )
+}
+`,
+		)
+		await fs.writeFile(
+			path.join(pageDir, "meta.json"),
+			JSON.stringify({ id: "shader-demo", title: "Shader Demo", type: "page", states: [], tags: [] }),
+		)
+
+		// Rendered isolated in a fresh hidden window, captured twice with time in
+		// between — pixels must exist AND move, because the runner's whole promise
+		// is a LIVE background, and a frozen first frame would pass a single shot.
+		const outcome = await waitFor(
+			"the shader page to render moving pixels",
+			async () =>
+				app!.evaluate(async ({ BrowserWindow }) => {
+					// The canvas is a WebContentsView CHILD of the window, not a window —
+					// the same trap ce's poll fell into.
+					const win = BrowserWindow.getAllWindows()[0]
+					const views = (win?.contentView?.children ?? []) as any[]
+					const source = views
+						.map((v) => (v.webContents && !v.webContents.isDestroyed() ? v.webContents.getURL() : ""))
+						.find((u: string) => u.startsWith("http://localhost"))
+					if (!source) return null
+					const base = new URL(source).origin
+					const probe = new BrowserWindow({
+						show: false,
+						width: 900,
+						height: 600,
+						paintWhenInitiallyHidden: true,
+						webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+					})
+					try {
+						await probe.loadURL(`${base}?page=shader-demo&isolated=1`)
+						await probe.webContents.executeJavaScript(
+							`new Promise((r) => { const check = () => { const c = document.querySelector("canvas"); if (c && c.width > 0) requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 250))); else setTimeout(check, 200) }; check() })`,
+						)
+						const a = await probe.webContents.capturePage()
+						await new Promise((r) => setTimeout(r, 450))
+						const b = await probe.webContents.capturePage()
+						const bitsA = a.getBitmap()
+						const bitsB = b.getBitmap()
+						let blank = true
+						for (let i = 4; i < bitsA.length; i += 4) {
+							if (bitsA[i] !== bitsA[0] || bitsA[i + 1] !== bitsA[1] || bitsA[i + 2] !== bitsA[2]) {
+								blank = false
+								break
+							}
+						}
+						let moved = false
+						for (let i = 0; i < bitsA.length && !moved; i += 4) {
+							if (Math.abs(bitsA[i] - bitsB[i]) > 3) moved = true
+						}
+						return { blank, moved }
+					} catch (err) {
+						return { error: String(err instanceof Error ? err.message : err) }
+					} finally {
+						if (!probe.isDestroyed()) probe.destroy()
+					}
+				}),
+			120_000,
+		)
+		assert(!("error" in outcome), `the shader page did not render: ${(outcome as any).error}`)
+		assert(!(outcome as any).blank, "the shader canvas painted nothing — the runner drew a blank")
+		assert((outcome as any).moved, "the shader pixels are frozen — the animation loop never advanced")
+
+		return "the hand-seeded shader component painted and animated in the real shell"
+	})
+
 	await scenario("bw. an agent reads and writes the same Params over MCP", async () => {
 		// The shared human/agent surface, closed end to end: get_params resolves
 		// the subtitle the way the user's panel does — naming its token binding —
