@@ -60,12 +60,15 @@ const params = new URLSearchParams(window.location.search)
 const isolatedPageId = params.get("page")
 const mode = params.get("mode")
 
-// Route components are React.lazy — the router must stay evaluable when one
-// page's imports are broken, so a page fails HERE, at render, in its own
-// document. The boundary is what turns that rejection into the same honest
-// error card a runtime crash gets, instead of a blank white box that is
-// indistinguishable from a blank page. Big type on purpose: thumbnails render
-// at roughly quarter scale.
+// Routes carry loaders, not components — the router must stay evaluable when
+// one page's imports are broken, so a page fails HERE, in its own document.
+// The loader is AWAITED before anything mounts: rendering a lazy component
+// instead committed an empty frame first, and everything keyed on "the frame
+// has content" raced that null commit. First paint is the whole page or the
+// error card, never a blank. The boundary covers the other half — a page that
+// loads and then crashes at runtime — with the same card, because blank-white
+// is indistinguishable from an empty page. Big type on purpose: thumbnails
+// render at roughly quarter scale.
 class CaretPageBoundary extends React.Component<{ children?: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
   static getDerivedStateFromError(error: Error) { return { error } }
@@ -99,7 +102,7 @@ if (isolatedPageId && mode === "focused") {
       import("./lib/bridge"),
       import("./lib/canvas/canvas.css"),
     ])
-  }).then(([routerMod, overlayMod, stateMod, bridgeMod]) => {
+  }).then(async ([routerMod, overlayMod, stateMod, bridgeMod]) => {
     flog("all modules loaded")
     const { routes } = routerMod as any
     const { OverlayPainter } = overlayMod as any
@@ -115,9 +118,11 @@ if (isolatedPageId && mode === "focused") {
         '<p>Page "' + isolatedPageId + '" not found in routes.</p></div>'
       return
     }
-    flog("route found, rendering FocusedApp")
+    flog("route found, loading the page module")
 
-    const PageComponent = route.component
+    // Awaited BEFORE the app mounts — see CaretPageBoundary's comment. A
+    // rejection here (an unresolvable import) falls to the catch below.
+    const PageComponent = (await route.loader()).default
 
     function FocusedApp() {
       const [paintMode, setPaintMode] = React.useState(false)
@@ -253,9 +258,7 @@ if (isolatedPageId && mode === "focused") {
             <button onClick={() => window.parent.postMessage({ source: "caret-page-iframe", type: "simulate" }, "*")} className="caret-focused-fab caret-focused-sim-btn" title="Simulate">▶</button>
             <div className="caret-focused-content">
               <CaretPageBoundary>
-                <React.Suspense fallback={null}>
-                  <PageComponent />
-                </React.Suspense>
+                <PageComponent />
               </CaretPageBoundary>
             </div>
             {paintMode && <OverlayPainter onClose={() => setPaintMode(false)} />}
@@ -292,18 +295,18 @@ if (isolatedPageId && mode === "focused") {
     showPageError("Page crashed", String(e.message || e.error || "Unknown runtime error"))
   })
 
-  import("virtual:caret-router").then(({ routes }: any) => {
+  import("virtual:caret-router").then(async ({ routes }: any) => {
     const route = routes.find((r: any) => r.name === isolatedPageId)
     if (!route) {
       showPageError("Page not found", "pages/" + isolatedPageId + "/index.tsx is missing or failed to compile")
       return
     }
-    const PageComponent = route.component
+    // Awaited before mounting, so the first paint is the page or the error
+    // card — never an empty frame something else mistakes for "rendered".
+    const PageComponent = (await route.loader()).default
     createRoot(document.getElementById("root")!).render(
       <CaretPageBoundary>
-        <React.Suspense fallback={null}>
-          <PageComponent />
-        </React.Suspense>
+        <PageComponent />
       </CaretPageBoundary>
     )
   }).catch((err) => {

@@ -56,8 +56,8 @@ async function main(): Promise<void> {
 		const router = await fetch(`${url}@id/__x00__virtual:caret-router`)
 		console.log(`router module: ${router.status} ${router.ok ? "(evaluable)" : "(BROKEN — the old failure)"}`)
 		const routerBody = await router.text()
-		const lazy = routerBody.includes("React.lazy")
-		console.log(`router imports pages lazily: ${lazy}`)
+		const lazy = routerBody.includes("loader:") && !routerBody.includes("import Page")
+		console.log(`router carries loaders, no static page imports: ${lazy}`)
 
 		// 2. The healthy page still transforms and still lists in the router.
 		const healthy = await fetch(`${url}pages/healthy/index.tsx`)

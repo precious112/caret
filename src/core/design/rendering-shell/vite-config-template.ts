@@ -27,17 +27,22 @@ function caretRouterPlugin() {
     const pages = allDirs.filter(p => existsSync(join(pagesDir, p, "index.tsx")))
     const broken = allDirs.filter(p => !existsSync(join(pagesDir, p, "index.tsx")))
 
-    // Lazy, never static. The existsSync guard above only covers a page whose
-    // file is MISSING; a page whose file exists but carries an unresolvable
-    // import fails at transform time, and with static imports that failure was
-    // the router's own — one refused catalog component 500'd this module, HMR
-    // re-evaluated it into the error, and every page on the canvas died at
-    // once (measured: a full certification run lost ce, bq and by to a single
-    // \`pixel-trail\` import the budget had correctly refused to supply). With
-    // lazy factories the router always evaluates; a broken page rejects inside
-    // its own iframe when rendered, where the entry error-cards it honestly.
-    const imports = 'import * as React from "react"\\n' + pages.map((p, i) => \`const Page\${i} = React.lazy(() => import("./pages/\${p}/index.tsx"))\`).join("\\n")
-    const routeEntries = pages.map((p, i) => \`  { path: "/\${p}", component: Page\${i}, name: "\${p}" }\`).join(",\\n")
+    // Loaders, never static imports — and never React.lazy either; both wrong
+    // answers have now been measured. The existsSync guard above only covers a
+    // page whose file is MISSING; a page whose file exists but imports a file
+    // that does not (a catalog piece the budget refused) fails at transform,
+    // and with static imports that failure was the router's own — HMR
+    // re-evaluated this module into the error and every page on the canvas
+    // died at once (a certification run lost ce, bq and by to one refused
+    // \`pixel-trail\` import). React.lazy fixed that and broke three OTHER
+    // scenarios: a lazy component inside Suspense commits an EMPTY frame
+    // before the chunk lands, and every probe keyed on "the frame has content"
+    // raced that null commit (the next run lost bz, bo and br to it). So the
+    // route carries a loader, and the entry AWAITS it before mounting: the
+    // router always evaluates, a broken page rejects in the one document that
+    // renders it, and first paint is the whole page — exactly the timing the
+    // static imports had.
+    const routeEntries = pages.map(p => \`  { path: "/\${p}", name: "\${p}", loader: () => import("./pages/\${p}/index.tsx") }\`).join(",\\n")
 
     const metas = allDirs.map(p => {
       const isBroken = broken.includes(p)
@@ -65,7 +70,7 @@ function caretRouterPlugin() {
     const hmrTail = 'if (import.meta.hot) { import.meta.hot.accept() }\\n' +
       'if (typeof window !== "undefined") { window.dispatchEvent(new CustomEvent("caret:routes-updated", { detail: { routes, pageMetas } })) }'
 
-    return \`\${imports}\\nexport const routes = [\\n\${routeEntries}\\n]\\nexport const pageMetas = [\\n\${metaEntries}\\n]\\n\${hmrTail}\`
+    return \`export const routes = [\\n\${routeEntries}\\n]\\nexport const pageMetas = [\\n\${metaEntries}\\n]\\n\${hmrTail}\`
   }
 
   return {

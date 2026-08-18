@@ -404,7 +404,7 @@ function generateCanvasView(): string {
 
 		interface Props {
 		  pages: PageInfo[]
-		  routes: Array<{ path: string; name: string; component: React.ComponentType }>
+		  routes: Array<{ path: string; name: string; loader: () => Promise<{ default: React.ComponentType }> }>
 		  onFocus: (pageId: string) => void
 		  onSimulate: (pageId: string) => void
 		  flows: FlowDefinition[]
