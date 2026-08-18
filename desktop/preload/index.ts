@@ -82,6 +82,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"agent:probeModel": true,
 	"agent:connectProvider": true,
 	"agent:completeOauth": true,
+	"agent:oauthStatus": true,
 	"agent:disconnectProvider": true,
 	"agent:sessions": true,
 	"agent:replay": true,

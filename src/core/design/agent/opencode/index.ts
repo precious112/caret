@@ -16,6 +16,7 @@
 import { Logger } from "@/shared/services/Logger"
 import {
 	type AvailabilityReport,
+	BackendError,
 	type BackendEvent,
 	type BackendSession,
 	type BackendSessionSummary,
@@ -129,7 +130,7 @@ const CATALOGUE_TTL_MS = 30_000
  * quoting noise at a user is worse than admitting Caret does not know: at least
  * the second is true.
  */
-export function sentenceIn(raw: string): string {
+export function sentenceIn(raw: string, fallback = "the provider would not accept this model"): string {
 	const start = raw.indexOf("{")
 	if (start >= 0) {
 		try {
@@ -140,7 +141,7 @@ export function sentenceIn(raw: string): string {
 			// Not JSON, or truncated. Fall through to the stand-in.
 		}
 	}
-	return "the provider would not accept this model"
+	return fallback
 }
 
 /**
@@ -168,6 +169,9 @@ export class OpencodeBackend implements CodingBackend {
 	readonly displayName = "OpenCode (bundled)"
 
 	private catalogueCache: { value: OpencodeCatalogueResponse; at: number } | null = null
+
+	/** Browser sign-ins that ended badly, in words the panel can show. */
+	private oauthFailures = new Map<string, string>()
 
 	async availability(): Promise<AvailabilityReport> {
 		const base = {
@@ -431,12 +435,25 @@ export class OpencodeBackend implements CodingBackend {
 			{ method: "POST", body: { method: Number(methodId) || 0 } },
 		)
 
+		this.oauthFailures.delete(providerId)
+		const needsCode = started.method === "code"
+
+		// **`authorize` only STARTS the flow — `callback` is what finishes it.**
+		// Learned from a real sign-in that looked perfect and stored nothing: the
+		// browser showed "Authorization successful", the loopback listener
+		// exchanged the code, and the tokens went to a promise nobody was
+		// awaiting. The server's own handler (read from the binary) holds the
+		// pending flow and, for an `auto` method, `callback()` — called with no
+		// code — is the await that collects the tokens and persists them. So for
+		// auto flows the finish is kicked off here, unawaited: it blocks for as
+		// long as the person takes in their browser, and the panel watches
+		// {@link oauthStatus} for the outcome.
+		if (!needsCode) void this.finishAutoOauth(providerId, Number(methodId) || 0)
+
 		return {
 			url: started.url,
 			instructions: started.instructions,
-			// `auto` is the server saying it will finish this itself on its own
-			// loopback listener. Anything else wants the code off the page.
-			needsCode: started.method !== undefined && started.method !== "auto",
+			needsCode,
 		}
 	}
 
@@ -448,6 +465,45 @@ export class OpencodeBackend implements CodingBackend {
 		})
 		await this.reloadCredentials()
 		return ok !== false
+	}
+
+	/**
+	 * Where a browser sign-in stands: finished, failed, or still in the browser.
+	 *
+	 * The panel polls this instead of the model list because the list sits
+	 * behind the catalogue cache, and because "it failed" and "it has not
+	 * happened yet" render differently — one is a message, the other a spinner.
+	 */
+	async oauthStatus(providerId: string): Promise<{ connected: boolean; failure?: string }> {
+		const failure = this.oauthFailures.get(providerId)
+		if (failure) return { connected: false, failure }
+		const catalogue = await this.catalogue()
+		return { connected: catalogue.connected.includes(providerId) }
+	}
+
+	/**
+	 * Collects and persists an `auto` OAuth — the server-side await.
+	 *
+	 * Runs for minutes by design: the server holds this request open until the
+	 * loopback listener (or a device-code poll) completes, up to its own
+	 * five-minute window. Success persists the credential server-side, so the
+	 * only thing left is making the running instance notice it.
+	 */
+	private async finishAutoOauth(providerId: string, method: number): Promise<void> {
+		try {
+			const server = await this.server()
+			const ok = await request<boolean>(server, `/provider/${providerId}/oauth/callback`, {
+				method: "POST",
+				body: { method },
+			})
+			if (ok === false) throw new BackendError("the provider did not accept the sign-in")
+			await this.reloadCredentials()
+			Logger.info(`[backend] ${providerId} connected by browser sign-in`)
+		} catch (err) {
+			const raw = err instanceof Error ? err.message : String(err)
+			this.oauthFailures.set(providerId, sentenceIn(raw, "the sign-in did not complete"))
+			Logger.warn(`[backend] ${providerId} browser sign-in did not complete: ${raw}`)
+		}
 	}
 
 	async disconnectProvider(providerId: string): Promise<void> {

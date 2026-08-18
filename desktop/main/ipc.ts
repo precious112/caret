@@ -745,6 +745,19 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
+	ipcMain.handle("agent:oauthStatus", async (_event, providerId: string) => {
+		try {
+			const status = (await catalogueBackend().oauthStatus?.(providerId)) ?? { connected: false }
+			// A credential just arrived from outside Caret's own call path, so every
+			// remembered entitlement verdict may have changed.
+			if (status.connected) probedModels.clear()
+			return status
+		} catch (err) {
+			Logger.warn(`[ipc] could not read oauth status for ${providerId}: ${err}`)
+			return { connected: false }
+		}
+	})
+
 	ipcMain.handle("agent:disconnectProvider", async (_event, providerId: string) => {
 		try {
 			await catalogueBackend().disconnectProvider?.(providerId)

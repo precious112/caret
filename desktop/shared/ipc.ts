@@ -853,6 +853,8 @@ export interface IpcRequests {
 		key?: string,
 	) => { ok: true; challenge: OauthChallengeWire | null } | { ok: false; error: string }
 	"agent:completeOauth": (providerId: string, methodId: string, code: string) => { ok: boolean; error?: string }
+	/** Polled while a browser sign-in is out: finished, failed, or still going. */
+	"agent:oauthStatus": (providerId: string) => { connected: boolean; failure?: string }
 	"agent:disconnectProvider": (providerId: string) => boolean
 	"agent:sessions": (projectPath: string) => AgentSessionWire[]
 	"agent:replay": (projectPath: string, sessionId: string) => boolean

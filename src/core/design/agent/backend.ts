@@ -293,6 +293,12 @@ export interface CodingBackend {
 	connectProvider?(providerId: string, methodId: string, key?: string): Promise<OauthChallenge | null>
 	/** Finishes a flow that asked for a code. */
 	completeOauth?(providerId: string, methodId: string, code: string): Promise<boolean>
+	/**
+	 * Where a browser sign-in stands. Polled by the panel, because the flow
+	 * finishes in a browser Caret is not part of: `connected` when the
+	 * credential landed, `failure` with the reason when it will never land.
+	 */
+	oauthStatus?(providerId: string): Promise<{ connected: boolean; failure?: string }>
 	/** Forgets a credential. The provider stays offered; it just stops being connected. */
 	disconnectProvider?(providerId: string): Promise<void>
 	/** Sessions previously run in this project, newest first. */

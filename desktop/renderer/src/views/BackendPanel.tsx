@@ -332,18 +332,26 @@ function ProviderDoorRow({ door, onConnected }: { door: ProviderDoorWire; onConn
 	}
 
 	// Polled rather than pushed: the sign-in completes in a browser, in a process
-	// Caret is not part of, and the only honest signal is the provider appearing
-	// in the connected list. Given up on after two minutes so a browser tab left
-	// open does not leave a spinner running forever.
+	// Caret is not part of. The status endpoint is the honest signal — the first
+	// version watched the model list instead, which sits behind the catalogue
+	// cache AND behind the server's own stale provider registry, so a sign-in
+	// that succeeded perfectly read as "didn't complete" for two minutes and
+	// then gave up. Five minutes matches the server's own flow window; a failure
+	// is shown the moment it is known rather than waited out.
 	const pollUntilConnected = async () => {
-		const deadline = Date.now() + 120_000
+		const deadline = Date.now() + 300_000
 		while (Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, 2000))
-			const models = await invoke("agent:models")
-			if ((models ?? []).some((group) => group.providerId === door.id)) {
+			const status = await invoke("agent:oauthStatus", door.id)
+			if (status?.connected) {
 				setOpen(null)
 				setChallenge(null)
 				await onConnected()
+				return
+			}
+			if (status?.failure) {
+				setChallenge(null)
+				setError(status.failure)
 				return
 			}
 		}
