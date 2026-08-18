@@ -3177,24 +3177,45 @@ export default function ShaderDemo() {
 					return { error: "the resize handles never appeared on selection — diag: " + JSON.stringify(diag) }
 				}
 
-				// Drag the right-edge handle with a real mouse.
-				const handleRaw = await pageFrame.executeJavaScript(
-					`(() => { const r = document.querySelector('#caret-resize-handles').children[0].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
-				)
-				const from = { x: Math.round(offset.x + handleRaw.x), y: Math.round(offset.y + handleRaw.y) }
-				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
-				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
-				for (let step = 1; step <= 6; step++) {
-					wc.sendInputEvent({
-						type: "mouseMove",
-						x: from.x - Math.round((90 * step) / 6),
-						y: from.y,
-						button: "left",
-						buttons: 1,
-					})
-					await new Promise((r) => setTimeout(r, 40))
+				// Drag the right-edge handle with a real mouse — and CHECK the grab
+				// took. A mouseDown that misses the handle (these coordinates cross
+				// a scaled iframe, see the harness notes) produces no drag, no
+				// commit, and thirty silent seconds; one full run failed exactly
+				// that way. The committed width lands back in the DOM as a w-[..px]
+				// class within about a second of a real drag, so each attempt polls
+				// for it and a miss retries the grab instead of reporting nothing.
+				let dragged = false
+				for (let attempt = 0; attempt < 3 && !dragged; attempt++) {
+					const handleRaw = await pageFrame.executeJavaScript(
+						`(() => { const h = document.querySelector('#caret-resize-handles'); if (!h) return null; const r = h.children[0].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
+					)
+					if (!handleRaw) return { error: "the resize handles disappeared before the drag" }
+					const from = { x: Math.round(offset.x + handleRaw.x), y: Math.round(offset.y + handleRaw.y) }
+					wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
+					wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
+					for (let step = 1; step <= 6; step++) {
+						wc.sendInputEvent({
+							type: "mouseMove",
+							x: from.x - Math.round((90 * step) / 6),
+							y: from.y,
+							button: "left",
+							buttons: 1,
+						})
+						await new Promise((r) => setTimeout(r, 40))
+					}
+					wc.sendInputEvent({ type: "mouseUp", x: from.x - 90, y: from.y, button: "left", clickCount: 1 })
+
+					const landedDeadline = Date.now() + 6000
+					while (Date.now() < landedDeadline && !dragged) {
+						dragged = await pageFrame
+							.executeJavaScript(
+								`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); return !!el && /w-\\[\\d+px\\]/.test(el.className) })()`,
+							)
+							.catch(() => false)
+						if (!dragged) await new Promise((r) => setTimeout(r, 300))
+					}
 				}
-				wc.sendInputEvent({ type: "mouseUp", x: from.x - 90, y: from.y, button: "left", clickCount: 1 })
+				if (!dragged) return { error: "three drags on the handle produced no committed width in the DOM" }
 
 				return { ok: true }
 			} catch (err) {
@@ -5109,17 +5130,31 @@ export default function CatalogDemo() {
 		)
 
 		// The acceptance IS the reverse sync: the mapping refreshed, drift clean.
-		const after = await callMcp(discovery.url, discovery.token, {
-			jsonrpc: "2.0",
-			id: 97,
-			method: "tools/call",
-			params: { name: "get_drift", arguments: {} },
-		})
-		const afterText = await after.text()
-		assert(
-			(afterText.includes('"appDrift": 0') || afterText.includes('\\"appDrift\\": 0')) &&
-				(afterText.includes('"conflicts": 0') || afterText.includes('\\"conflicts\\": 0')),
-			`the accepted proposal did not refresh the mapping: ${afterText.slice(0, 400)}`,
+		// Polled, not asked once — the accept deletes the scratch (which the wait
+		// above watches) BEFORE it re-records the mapping, and the refresh runs a
+		// git subprocess. A single get_drift fired the instant the scratch
+		// vanished raced that gap and lost a full run; the product's ordering is
+		// fine, the harness just has to wait for the state it is asserting.
+		let afterText = ""
+		await waitFor(
+			"the mapping to refresh and drift to read clean",
+			async () => {
+				const after = await callMcp(discovery!.url, discovery!.token, {
+					jsonrpc: "2.0",
+					id: 97,
+					method: "tools/call",
+					params: { name: "get_drift", arguments: {} },
+				})
+				afterText = await after.text()
+				const clean =
+					(afterText.includes('"appDrift": 0') || afterText.includes('\\"appDrift\\": 0')) &&
+					(afterText.includes('"conflicts": 0') || afterText.includes('\\"conflicts\\": 0'))
+				return clean ? true : null
+			},
+			20_000,
+			// The raw body starts with SSE framing; the tool's own words say which
+			// entry is still dirty.
+			async () => `last get_drift said: ${mcpSaid(afterText)}`,
 		)
 
 		return `app drift → model-written proposal → accepted by click → mapping refreshed, drift clean`
