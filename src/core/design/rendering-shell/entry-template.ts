@@ -60,6 +60,27 @@ const params = new URLSearchParams(window.location.search)
 const isolatedPageId = params.get("page")
 const mode = params.get("mode")
 
+// Route components are React.lazy — the router must stay evaluable when one
+// page's imports are broken, so a page fails HERE, at render, in its own
+// document. The boundary is what turns that rejection into the same honest
+// error card a runtime crash gets, instead of a blank white box that is
+// indistinguishable from a blank page. Big type on purpose: thumbnails render
+// at roughly quarter scale.
+class CaretPageBoundary extends React.Component<{ children?: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", padding: 48, background: "#fff5f5", color: "#b91c1c", fontFamily: "system-ui,sans-serif", textAlign: "center" }}>
+        <div style={{ fontSize: 96, lineHeight: 1 }}>⚠</div>
+        <div style={{ fontSize: 48, fontWeight: 700, margin: "24px 0 16px" }}>Page failed to load</div>
+        <div style={{ fontSize: 26, color: "#7f1d1d", maxWidth: 900, wordBreak: "break-word" }}>{String(this.state.error)}</div>
+      </div>
+    )
+  }
+}
+
 if (isolatedPageId && mode === "focused") {
   const flog = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: "[focused] " + msg } }, "*")
   flog("loading for page: " + isolatedPageId)
@@ -231,7 +252,11 @@ if (isolatedPageId && mode === "focused") {
             </button>
             <button onClick={() => window.parent.postMessage({ source: "caret-page-iframe", type: "simulate" }, "*")} className="caret-focused-fab caret-focused-sim-btn" title="Simulate">▶</button>
             <div className="caret-focused-content">
-              <PageComponent />
+              <CaretPageBoundary>
+                <React.Suspense fallback={null}>
+                  <PageComponent />
+                </React.Suspense>
+              </CaretPageBoundary>
             </div>
             {paintMode && <OverlayPainter onClose={() => setPaintMode(false)} />}
           </div>
@@ -274,7 +299,13 @@ if (isolatedPageId && mode === "focused") {
       return
     }
     const PageComponent = route.component
-    createRoot(document.getElementById("root")!).render(<PageComponent />)
+    createRoot(document.getElementById("root")!).render(
+      <CaretPageBoundary>
+        <React.Suspense fallback={null}>
+          <PageComponent />
+        </React.Suspense>
+      </CaretPageBoundary>
+    )
   }).catch((err) => {
     showPageError("Page failed to load", String(err))
   })

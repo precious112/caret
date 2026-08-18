@@ -27,7 +27,16 @@ function caretRouterPlugin() {
     const pages = allDirs.filter(p => existsSync(join(pagesDir, p, "index.tsx")))
     const broken = allDirs.filter(p => !existsSync(join(pagesDir, p, "index.tsx")))
 
-    const imports = pages.map((p, i) => \`import Page\${i} from "./pages/\${p}/index.tsx"\`).join("\\n")
+    // Lazy, never static. The existsSync guard above only covers a page whose
+    // file is MISSING; a page whose file exists but carries an unresolvable
+    // import fails at transform time, and with static imports that failure was
+    // the router's own — one refused catalog component 500'd this module, HMR
+    // re-evaluated it into the error, and every page on the canvas died at
+    // once (measured: a full certification run lost ce, bq and by to a single
+    // \`pixel-trail\` import the budget had correctly refused to supply). With
+    // lazy factories the router always evaluates; a broken page rejects inside
+    // its own iframe when rendered, where the entry error-cards it honestly.
+    const imports = 'import * as React from "react"\\n' + pages.map((p, i) => \`const Page\${i} = React.lazy(() => import("./pages/\${p}/index.tsx"))\`).join("\\n")
     const routeEntries = pages.map((p, i) => \`  { path: "/\${p}", component: Page\${i}, name: "\${p}" }\`).join(",\\n")
 
     const metas = allDirs.map(p => {
