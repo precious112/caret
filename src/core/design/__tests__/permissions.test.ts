@@ -58,6 +58,31 @@ describe("classify", () => {
 	})
 })
 
+describe("rulePermission — Caret's own MCP tools", () => {
+	// The chat agent can edit a page two ways: the backend's `edit` tool, or
+	// Caret's own `caret_write_page` over the bridge. The first was always
+	// gated; the second used to run without any permission event at all, so
+	// the same write was recorded or silent depending on which tool the model
+	// happened to pick. Both routes must land on the same ruling.
+	it("auto-allows a caret_ tool with the design-layer note", () => {
+		const ruling = rulePermission({ action: "caret_write_page", patterns: ["*"] }, context())
+		assert.deepEqual(ruling, { kind: "auto", decision: "allow", reason: "the design layer is Caret's own to write" })
+	})
+
+	it("allows it in a plan too — the design layer is not the app", () => {
+		const ruling = rulePermission({ action: "caret_update_tokens", patterns: [] }, context({ mode: "read-only" }))
+		assert.equal(ruling.kind, "auto")
+		assert.equal((ruling as { decision: string }).decision, "allow")
+	})
+
+	it("does not let the prefix leak onto other actions", () => {
+		// `caretaker` is a made-up backend action, not one of Caret's tools; it
+		// must fall through to the unrecognised-action ask.
+		const ruling = rulePermission({ action: "caretaker", patterns: [] }, context())
+		assert.equal(ruling.kind, "ask")
+	})
+})
+
 describe("rulePermission — edits", () => {
 	it("auto-approves the design layer, in either mode", () => {
 		for (const mode of ["read-only", "write"] as const) {

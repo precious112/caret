@@ -45,6 +45,18 @@ const EDIT_ACTIONS = new Set(["edit", "write", "patch", "multiedit"])
 export function rulePermission(request: PermissionRequest, context: PermissionContext): PermissionRuling {
 	if (EDIT_ACTIONS.has(request.action)) return ruleEdit(request, context)
 
+	// Caret's own MCP tools, as the bundled backend's chat agent sees them. Only
+	// the mutating ones are gated (the spawn config names them — see
+	// `desktop/main/index.ts`), and every one of them writes inside `.caret/` by
+	// construction: the bridge is the design layer's API and reaches nothing
+	// else. So the ruling is the same as an `edit` aimed at the design layer —
+	// allowed, with the note that makes the auto-approval visible in the chat.
+	// Without this, the request would fall to the unrecognised-action ask below,
+	// and a chat turn would stall on a question about Caret's own tool.
+	if (request.action.startsWith("caret_")) {
+		return { kind: "auto", decision: "allow", reason: "the design layer is Caret's own to write" }
+	}
+
 	if (request.action === "external_directory") {
 		return context.mode === "read-only"
 			? { kind: "auto", decision: "deny", reason: "a plan may not reach outside this project" }

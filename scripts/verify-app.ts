@@ -4825,17 +4825,25 @@ export default function CatalogDemo() {
 			},
 			20_000,
 		)
+		// Searched across EVERY window's views, not `getAllWindows()[0]` — that
+		// index is a race. cb's second project window stays open for the rest of
+		// the run, and the overlay-verify loop opens hidden screenshot windows
+		// whenever an edit turn lands, so whichever window sits at [0] when this
+		// happens to run decided a whole scenario. One run failed as "no canvas
+		// view" while the canvas was fine in a window one index over.
 		const overlayShown = await app!.evaluate(async ({ BrowserWindow }) => {
-			const win = BrowserWindow.getAllWindows()[0]
-			const views = (win?.contentView?.children ?? []) as any[]
-			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-			if (!canvas) return false
-			const deadline = Date.now() + 20000
+			const deadline = Date.now() + 30000
 			while (Date.now() < deadline) {
-				const up = await canvas.webContents
-					.executeJavaScript(`!!document.querySelector('[data-testid="variant-compare"]')`)
-					.catch(() => false)
-				if (up) return true
+				for (const win of BrowserWindow.getAllWindows()) {
+					for (const view of (win?.contentView?.children ?? []) as any[]) {
+						const wc = view?.webContents
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						const up = await wc
+							.executeJavaScript(`!!document.querySelector('[data-testid="variant-compare"]')`)
+							.catch(() => false)
+						if (up) return true
+					}
+				}
 				await new Promise((r) => setTimeout(r, 300))
 			}
 			return false
@@ -4873,35 +4881,45 @@ export default function CatalogDemo() {
 		// different faults — the take failing, or the canvas never hearing that it
 		// landed — and "never became clickable" cannot tell them apart. Two runs
 		// were spent learning nothing because of that.
+		// Same all-windows search as overlayShown, and for the same reason: the
+		// one-shot `getAllWindows()[0]` grab this used to make was the whole
+		// failure — "no canvas view" while the canvas sat healthy in another
+		// window. The click is attempted per live view; the first view that has
+		// the button wins, which also self-selects the right project window.
 		const picked = await app!.evaluate(async ({ BrowserWindow }, useTestId: string) => {
-			const win = BrowserWindow.getAllWindows()[0]
-			const views = (win?.contentView?.children ?? []) as any[]
-			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-			if (!canvas) return { ok: false, diag: "no canvas view" }
-			const deadline = Date.now() + 20000
+			const deadline = Date.now() + 30000
+			let lastDiag = "no live canvas view in any window"
 			while (Date.now() < deadline) {
-				const clicked = await canvas.webContents
-					.executeJavaScript(
-						`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
-					)
-					.catch(() => false)
-				if (clicked) return { ok: true, diag: "" }
+				for (const win of BrowserWindow.getAllWindows()) {
+					for (const view of (win?.contentView?.children ?? []) as any[]) {
+						const wc = view?.webContents
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						const clicked = await wc
+							.executeJavaScript(
+								`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
+							)
+							.catch(() => false)
+						if (clicked) return { ok: true, diag: "" }
+						const diag = await wc
+							.executeJavaScript(
+								`(() => {
+									const compare = document.querySelector('[data-testid="variant-compare"]')
+									if (!compare) return null
+									const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
+										id: c.getAttribute('data-testid'),
+										hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
+										label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
+									}))
+									return JSON.stringify({ compareUp: true, cards })
+								})()`,
+							)
+							.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
+						if (diag) lastDiag = String(diag)
+					}
+				}
 				await new Promise((r) => setTimeout(r, 300))
 			}
-			const diag = await canvas.webContents
-				.executeJavaScript(
-					`(() => {
-						const compare = document.querySelector('[data-testid="variant-compare"]')
-						const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
-							id: c.getAttribute('data-testid'),
-							hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
-							label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
-						}))
-						return JSON.stringify({ compareUp: !!compare, cards })
-					})()`,
-				)
-				.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
-			return { ok: false, diag: String(diag) }
+			return { ok: false, diag: lastDiag }
 		}, `variant-use-${chosen.id}`)
 		if (!picked.ok) {
 			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
@@ -4935,14 +4953,45 @@ export default function CatalogDemo() {
 	})
 
 	await inference("by. app drift becomes a reviewed proposal, and accepting it makes the design true again", async () => {
-		// Phase 9 end to end: bx left home mapped to src/checkout-view.tsx and
-		// CLEAN. Drift it now — self-contained, nothing between bx and here
-		// inherits it. Then propose_design_update runs a real model turn that
+		// Phase 9 end to end: home mapped to src/checkout-view.tsx and CLEAN,
+		// then drifted, then propose_design_update runs a real model turn that
 		// writes the App's-version take; the compare surface offers it against
 		// the current design; a real click accepts it; the mapping refreshes and
 		// get_drift reads clean — the design tells the truth again.
+		//
+		// The mapping is re-recorded HERE, not inherited from bx. This scenario
+		// used to say "bx left home mapped and clean, nothing between here and
+		// there inherits it" — which was false in a way that only failed when the
+		// model felt like it: gg's sync apply refreshes home's mapping to
+		// whichever app files the model chose to write, and a translation that
+		// landed anywhere but checkout-view.tsx left this scenario drifting an
+		// unmapped file. computeDrift then honestly reported nothing, and the
+		// refusal read as a product bug. Recording first pins the baseline this
+		// scenario's whole premise stands on.
 		assert(discovery, "no MCP discovery record")
 		await openMcpSession(discovery.url, discovery.token)
+
+		await fs.writeFile(
+			path.join(fixture, "src", "checkout-view.tsx"),
+			"export const CheckoutView = () => <div>the translated checkout, at rest</div>\n",
+		)
+		const rerecord = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 95,
+			method: "tools/call",
+			params: {
+				name: "report_sync_mapping",
+				arguments: {
+					mappings: [{ designPath: ".caret/pages/home/index.tsx", appPaths: ["src/checkout-view.tsx"] }],
+				},
+			},
+		})
+		const rerecordText = await rerecord.text()
+		assert(
+			rerecordText.includes('"recorded": 1') || rerecordText.includes('\\"recorded\\": 1'),
+			`the baseline mapping was not recorded: ${mcpSaid(rerecordText)}`,
+		)
+
 		await fs.writeFile(
 			path.join(fixture, "src", "checkout-view.tsx"),
 			"export const CheckoutView = () => <div>edited directly in the app, after translation</div>\n",
@@ -4990,41 +5039,48 @@ export default function CatalogDemo() {
 		// Same diagnosis as bq: the scratch reading "ready" while no button renders
 		// is the canvas not hearing about it, which is a different fault from the
 		// take failing, and the bare boolean could name neither.
+		// All windows, all views, retried — the `getAllWindows()[0]` one-shot this
+		// replaces is a race against cb's still-open second window and the hidden
+		// screenshot windows the verify loop spawns. See bq for the full account.
 		const picked = await app!.evaluate(async ({ BrowserWindow }) => {
-			const win = BrowserWindow.getAllWindows()[0]
-			const views = (win?.contentView?.children ?? []) as any[]
-			const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-			if (!canvas) return { ok: false, diag: "no canvas view" }
-			const wc = canvas.webContents
 			const deadline = Date.now() + 30000
+			let lastDiag = "no live canvas view in any window"
 			while (Date.now() < deadline) {
-				const clicked = await wc
-					.executeJavaScript(
-						`(() => {
-							const b = document.querySelector('[data-testid="variant-use-home--v1"]')
-							if (!b) return false
-							b.click()
-							return true
-						})()`,
-					)
-					.catch(() => false)
-				if (clicked) return { ok: true, diag: "" }
+				for (const win of BrowserWindow.getAllWindows()) {
+					for (const view of (win?.contentView?.children ?? []) as any[]) {
+						const wc = view?.webContents
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						const clicked = await wc
+							.executeJavaScript(
+								`(() => {
+									const b = document.querySelector('[data-testid="variant-use-home--v1"]')
+									if (!b) return false
+									b.click()
+									return true
+								})()`,
+							)
+							.catch(() => false)
+						if (clicked) return { ok: true, diag: "" }
+						const diag = await wc
+							.executeJavaScript(
+								`(() => {
+									const compare = document.querySelector('[data-testid="variant-compare"]')
+									if (!compare) return null
+									const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
+										id: c.getAttribute('data-testid'),
+										hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
+										label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
+									}))
+									return JSON.stringify({ compareUp: true, cards })
+								})()`,
+							)
+							.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
+						if (diag) lastDiag = String(diag)
+					}
+				}
 				await new Promise((r) => setTimeout(r, 300))
 			}
-			const diag = await wc
-				.executeJavaScript(
-					`(() => {
-						const compare = document.querySelector('[data-testid="variant-compare"]')
-						const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
-							id: c.getAttribute('data-testid'),
-							hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
-							label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
-						}))
-						return JSON.stringify({ compareUp: !!compare, cards })
-					})()`,
-				)
-				.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
-			return { ok: false, diag: String(diag) }
+			return { ok: false, diag: lastDiag }
 		})
 		if (!picked.ok) {
 			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")

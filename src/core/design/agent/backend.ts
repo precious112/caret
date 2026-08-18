@@ -50,11 +50,12 @@ export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh"
 /**
  * A model, and who serves it.
  *
- * The distinction is not pedantry. A *backend* is the agent loop Caret drives —
- * OpenCode, Claude Code, Codex. A *provider* is who serves the weights, and one
- * backend commonly reaches several: the bundled OpenCode alone sees OpenCode Go
- * and OpenCode Zen, which differ in whether they cost money. Collapsing the two
- * is how a backend's name ends up displayed where a model's belongs.
+ * The distinction is not pedantry. A *backend* is the agent loop Caret drives.
+ * A *provider* is who serves the weights, and one backend reaches many: the
+ * bundled OpenCode sees its own Go and Zen plans, a ChatGPT subscription, Kimi
+ * For Coding, the GLM coding plans, and anything reachable by key — which differ
+ * in whether they cost money and in whose money it is. Collapsing the two is how
+ * a backend's name ends up displayed where a model's belongs.
  */
 export interface ModelOption {
 	/** What Caret persists and sends, in the backend's own namespace. */

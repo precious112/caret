@@ -616,7 +616,11 @@ export class OpencodeBackend implements CodingBackend {
 	}
 
 	private server(): Promise<RunningServer> {
-		return ensureOpencodeServer({ ...CARET_SERVER_CONFIG, ...serverConfigExtra })
+		return ensureOpencodeServer({
+			...CARET_SERVER_CONFIG,
+			...serverConfigExtra,
+			permission: { ...CARET_SERVER_CONFIG.permission, ...serverConfigExtra.permission },
+		})
 	}
 }
 
@@ -624,14 +628,21 @@ export class OpencodeBackend implements CodingBackend {
  * Host-supplied additions to the spawn config, merged over Caret's own.
  *
  * The desktop registers its MCP stdio bridge here — a concern the core cannot
- * own, because the bridge's path is an Electron userData detail. Registered
- * before the first session; the server spawns once per process, so anything
- * registered after it boots waits for the next launch.
+ * own, because the bridge's path is an Electron userData detail. It also names
+ * the bridge's mutating tools as permission keys, which is why `permission`
+ * merges by key instead of shallowly: a host adding one gate must not silently
+ * drop the core's `edit`/`bash` asks, which are the boundary everything else
+ * stands on. Registered before the first session; the server spawns once per
+ * process, so anything registered after it boots waits for the next launch.
  */
 let serverConfigExtra: Partial<OpencodeConfig> = {}
 
 export function extendOpencodeServerConfig(extra: Partial<OpencodeConfig>): void {
-	serverConfigExtra = { ...serverConfigExtra, ...extra }
+	serverConfigExtra = {
+		...serverConfigExtra,
+		...extra,
+		permission: { ...serverConfigExtra.permission, ...extra.permission },
+	}
 }
 
 /** The emulated path's instruction. Deliberately blunt — it is read by weaker models. */

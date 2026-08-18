@@ -93,6 +93,15 @@ const ATTACHABLE_IMAGES: Record<string, string> = {
 }
 
 /**
+ * Entitlement verdicts, remembered for as long as the app runs.
+ *
+ * Null means the model answered. A string is the provider's refusal. Cleared by
+ * a credential change, because that is the one thing that can turn a refusal
+ * into an answer without the user going anywhere.
+ */
+const probedModels = new Map<string, string | null>()
+
+/**
  * Which backend answers a question that is not about a running turn.
  *
  * Listing models and connecting accounts have to work *before* a backend is
@@ -686,9 +695,21 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("agent:probeModel", async (_event, projectPath: string, model: string) => {
 		const id = getPrefs().backendId
 		if (!id || !model) return null
+
+		// Asked once per model per run of the app. Browsing the picker would
+		// otherwise spend a turn on every model somebody tried, and entitlement
+		// does not change between two clicks — it changes when a plan does, which
+		// is a thing you do somewhere else and come back from.
+		const remembered = probedModels.get(model)
+		if (remembered !== undefined) return remembered
+
 		try {
-			return (await getBackend(id).probeModel?.(model, projectPath)) ?? null
+			const verdict = (await getBackend(id).probeModel?.(model, projectPath)) ?? null
+			probedModels.set(model, verdict)
+			return verdict
 		} catch (err) {
+			// Deliberately not remembered: a network hiccup must not brand a model
+			// as refused for the rest of the session.
 			Logger.warn(`[ipc] could not probe ${model}: ${err}`)
 			return null
 		}
@@ -704,6 +725,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("agent:connectProvider", async (_event, providerId: string, methodId: string, key?: string) => {
 		try {
 			const challenge = (await catalogueBackend().connectProvider?.(providerId, methodId, key)) ?? null
+			probedModels.clear()
 			if (challenge) await shell.openExternal(challenge.url)
 			return { ok: true as const, challenge }
 		} catch (err) {
@@ -716,6 +738,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("agent:completeOauth", async (_event, providerId: string, methodId: string, code: string) => {
 		try {
 			const ok = (await catalogueBackend().completeOauth?.(providerId, methodId, code)) ?? false
+			probedModels.clear()
 			return { ok, error: ok ? undefined : "That code was not accepted." }
 		} catch (err) {
 			return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -725,6 +748,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("agent:disconnectProvider", async (_event, providerId: string) => {
 		try {
 			await catalogueBackend().disconnectProvider?.(providerId)
+			probedModels.clear()
 			return true
 		} catch (err) {
 			Logger.warn(`[ipc] could not disconnect ${providerId}: ${err}`)

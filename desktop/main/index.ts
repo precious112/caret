@@ -15,6 +15,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import { registerIpcHandlers } from "./ipc"
 import { closeLauncherWindow, hasLauncherWindow, type LauncherWindowOptions, openLauncherWindow } from "./launcher-window"
 import { ensureMcpBridge } from "./mcp/stdio-bridge"
+import { MUTATING_TOOL_NAMES } from "./mcp/tools"
 import { buildMenu } from "./menu"
 import { loadPrefs } from "./prefs"
 import { WindowManager } from "./window-manager"
@@ -76,8 +77,18 @@ async function main(): Promise<void> {
 	// launches per project directory, which finds that project's MCP endpoint
 	// from its cwd. Registered before any session so the spawn config carries
 	// it; a failure here costs the chat its tools, never the chat itself.
+	//
+	// The permission keys ride along because the backend's own gate only covers
+	// the tools it ships — a `caret_*` call is an MCP tool from its point of
+	// view and used to run without ever asking, so a page rewritten through
+	// `caret_write_page` left no permission record in the chat at all. Naming
+	// the mutating tools here puts them through the same boundary as an `edit`;
+	// Caret's ruling then auto-allows them as design-layer writes, visibly.
 	try {
-		extendOpencodeServerConfig({ mcp: { caret: await ensureMcpBridge() } })
+		extendOpencodeServerConfig({
+			mcp: { caret: await ensureMcpBridge() },
+			permission: Object.fromEntries(MUTATING_TOOL_NAMES.map((name) => [`caret_${name}`, "ask"])),
+		})
 	} catch (err) {
 		Logger.warn(`[main] chat agent will have no Caret tools: ${err}`)
 	}

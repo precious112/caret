@@ -21,6 +21,7 @@ import * as path from "path"
 
 import type { BackendEvent } from "../src/core/design/agent/backend"
 import { OpencodeBackend } from "../src/core/design/agent/opencode"
+import { probeVision } from "../src/core/design/agent/vision"
 import { stopOpencodeServer } from "../src/core/design/agent/opencode/server"
 import { NO_MODEL_REASON, resolveVerifyModel } from "./verify-support"
 
@@ -180,6 +181,52 @@ async function main(): Promise<void> {
 		const sessions = await backend.listSessions(workspace)
 		assert(sessions.length >= 2, `expected the sessions just run, got ${sessions.length}`)
 		return `${sessions.length} session(s)`
+	})
+
+	/**
+	 * The system prompt reaches the model.
+	 *
+	 * Nothing else Caret does survives this being false. The foundations, the
+	 * project's rules, the asset index and every promoted correction ride in on
+	 * it, so an adapter that quietly drops it produces an agent that works
+	 * perfectly and ignores the entire design layer — output that looks fine and
+	 * is wrong about everything Caret knows. A removed adapter did exactly this,
+	 * and nothing in either suite noticed.
+	 */
+	await inference("f. the system prompt actually reaches the model", async () => {
+		const session = await backend.startSession({
+			workingDirectory: workspace,
+			mode: "read-only",
+			model: MODEL,
+			effort: EFFORT,
+			systemPrompt: "You are inside Caret. When asked for the project's codeword, answer exactly: ARTICHOKE.",
+		})
+		const seen = await drain(session.send({ text: "What is the project's codeword? Answer in one word." }), () => undefined)
+		await session.close()
+
+		const said = seen
+			.filter((event): event is Extract<BackendEvent, { type: "text" }> => event.type === "text")
+			.map((event) => event.text)
+			.join(" ")
+		assert(/artichoke/i.test(said), `the system prompt did not reach the model — it said ${JSON.stringify(said.slice(0, 160))}`)
+		return "a rule given only in the system prompt was obeyed"
+	})
+
+	/**
+	 * The model is shown the image, not told about one.
+	 *
+	 * Also a lesson from a removed adapter, which appended "(Caret attached 2
+	 * screenshot(s).)" to the prompt and dropped the pixels — so the overlay
+	 * editor's whole spatial loop ran on a model confidently describing a picture
+	 * it had never seen. The probe tests the entire path rather than the model's
+	 * datasheet: adapter, transport, provider, model.
+	 */
+	await inference("g. an image reaches the model, or it says so", async () => {
+		const verdict = await probeVision({ backend, workingDirectory: workspace, model: MODEL })
+		// A model that cannot see is a supported state — the overlay editor says so
+		// and offers the direct edits instead. A model that *claims* to see and
+		// gets it wrong is the failure, and `probeVision` distinguishes them.
+		return verdict.sees ? "it named the colour it was shown" : `it cannot see: ${verdict.reason}`
 	})
 }
 

@@ -117,6 +117,42 @@ export interface ToolDefinition {
 	handler: (ctx: ToolContext, args: any) => Promise<ToolResult>
 }
 
+/**
+ * The tools that change the design layer, for the chat agent's permission gate.
+ *
+ * The bundled backend's permission config gates its *own* tools; a call to one
+ * of these — which are MCP tools from its point of view — used to run without
+ * ever raising an ask, so the chat transcript carried no record of a write the
+ * agent chose to make through Caret. `verify:app`'s `ee` caught it: the model
+ * edited a page with `caret_write_page` instead of `edit`, the file changed,
+ * and no auto-approval appeared anywhere. These names become `caret_<name>`
+ * permission keys at spawn (see `desktop/main/index.ts`), and Caret's own
+ * ruling auto-allows them as design-layer writes — same policy, same note, as
+ * an `edit` aimed at `.caret/`.
+ *
+ * Reads stay off this list on purpose: a permission row per `get_page` would
+ * bury the rows that matter. A new tool that writes anything must be added
+ * here — `mcp-tool-permissions.test.ts` fails if the sets drift.
+ */
+export const MUTATING_TOOL_NAMES = [
+	"create_page",
+	"write_page",
+	"update_tokens",
+	"write_flow",
+	"install_component",
+	"describe_asset",
+	"propose_variants",
+	"set_param",
+	"start_sync",
+	"propose_design_update",
+	"report_sync_mapping",
+	"complete_sync",
+	// From the interview surface (`interview-tools.ts`): these two write the
+	// foundation and the asset library respectively.
+	"commit_foundation",
+	"generate_asset",
+] as const
+
 export const TOOLS: ToolDefinition[] = [
 	{
 		name: "get_project",

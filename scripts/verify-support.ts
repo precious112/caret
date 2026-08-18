@@ -3,10 +3,11 @@
  *
  * Two rules, and the second one is the important one:
  *
- * 1. **`CARET_VERIFY_BACKEND` and `CARET_VERIFY_MODEL` win.** Once you have an
- *    OpenCode Go or Codex subscription, that is how you point the suites at it —
- *    deliberately, by setting variables, in the backend's own naming.
- *    `CARET_VERIFY_EFFORT` goes with them.
+ * 1. **`CARET_VERIFY_MODEL` wins.** Once a subscription is connected — an
+ *    OpenCode plan, a ChatGPT sign-in, Kimi For Coding, a GLM coding plan — that
+ *    is how you point the suites at it: deliberately, by setting a variable, in
+ *    `provider/model` form. `CARET_VERIFY_EFFORT` goes with it, and
+ *    `CARET_VERIFY_BACKEND` survives for the day there is a second backend.
  * 2. **Nothing paid is ever spent by accident.** A test run must not quietly
  *    bill someone's subscription because it happened to find one signed in. So
  *    without that variable the suites use a zero-cost model if the backend
