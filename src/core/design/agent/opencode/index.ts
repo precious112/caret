@@ -282,7 +282,7 @@ export class OpencodeBackend implements CodingBackend {
 				body: {
 					parts: [{ type: "text", text: native ? req.prompt : emulationPrompt(req) }],
 					...(req.systemPrompt ? { system: req.systemPrompt } : {}),
-					...(modelRef(req.model) ?? {}),
+					...(modelRef(req.model, req.effort) ?? {}),
 					...(native ? { format: { type: "json_schema", schema: req.schema } } : {}),
 					// The model is answering a question, not doing work. Every tool it
 					// could reach for here is a way to spend minutes and get it wrong.
@@ -749,12 +749,36 @@ function parseJsonAnswer<T>(text: string): T {
 	throw new StructuredOutputError("its JSON was cut off before it closed")
 }
 
-/** `provider/model` split into the shape the prompt route wants. */
-function modelRef(model: string | undefined): { model: { providerID: string; modelID: string } } | null {
+/**
+ * `provider/model` split into the shape the prompt route wants, effort riding
+ * along as the server's `variant`.
+ *
+ * `variant` is a TOP-LEVEL body field beside `model`, not a field inside it —
+ * a variant tucked into the model ref is silently stripped and the session
+ * records `"default"` (measured; the route schema in the binary lists them as
+ * sibling body keys). Variants are synthesized by the server per model from
+ * its capabilities (`GET /provider` shows the ladder — e.g.
+ * `none,low,medium,high,xhigh,max`), and one the model does not offer is
+ * ignored gracefully: recorded, matched to nothing, the turn runs at the
+ * model's default (measured with a nonsense variant — no error). That makes
+ * pass-through safe, with one translation: the ladders have no `minimal`, and
+ * a miss means *default*, which measured near `high` — the opposite of what
+ * was asked. So `minimal` becomes `low`, the lowest rung every ladder carries.
+ *
+ * Exported for its tests only.
+ */
+export function modelRef(
+	model: string | undefined,
+	effort?: string,
+): { model: { providerID: string; modelID: string }; variant?: string } | null {
 	if (!model) return null
 	const slash = model.indexOf("/")
 	if (slash <= 0) return null
-	return { model: { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) } }
+	const variant = effort === "minimal" ? "low" : effort
+	return {
+		model: { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) },
+		...(variant ? { variant } : {}),
+	}
 }
 
 class OpencodeSessionHandle implements BackendSession {
@@ -813,7 +837,7 @@ class OpencodeSessionHandle implements BackendSession {
 						})),
 					],
 					...(this.options.systemPrompt ? { system: this.options.systemPrompt } : {}),
-					...(modelRef(this.options.model) ?? {}),
+					...(modelRef(this.options.model, this.options.effort) ?? {}),
 					// The Plan agent is a second line of defence, never the boundary:
 					// upstream subagents have been reported not to inherit it.
 					...(this.options.mode === "read-only" ? { agent: "plan" } : {}),

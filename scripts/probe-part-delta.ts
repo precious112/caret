@@ -31,6 +31,7 @@ async function main(): Promise<void> {
 	const backend = getBackend("opencode")
 	const session = await backend.startSession({
 		workingDirectory: dir,
+		mode: "read-only",
 		model: MODEL,
 		title: "probe: part deltas",
 	})
