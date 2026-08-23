@@ -4275,6 +4275,13 @@ function generateCaretGrabPlugin(): string {
 		          log("edit-text action:", filePath, "line:", lineNumber, el.tagName, el.textContent?.slice(0, 40))
 
 		          const original = el.textContent || ""
+		          // The selection layer stands down while the text is edited.
+		          // react-grab is deliberately re-armed after every selection, so a
+		          // click inside the editable — the user placing their cursor —
+		          // reads to it as a grab: it copies element context, toasts
+		          // "Copied", and the focus theft blurs the edit closed after one
+		          // keystroke-less click. Re-armed on finish and on Escape.
+		          ;(window as any).__REACT_GRAB__?.deactivate?.()
 		          el.contentEditable = "true"
 		          el.focus()
 
@@ -4285,6 +4292,7 @@ function generateCaretGrabPlugin(): string {
 		            el.contentEditable = "false"
 		            el.removeEventListener("blur", onBlur)
 		            el.removeEventListener("keydown", onKeyDown)
+		            try { (window as any).__REACT_GRAB__?.activate?.() } catch {}
 		            const newText = el.textContent || ""
 		            if (newText !== original) {
 		              log("edit-text: sending", filePath, JSON.stringify(original), "->", JSON.stringify(newText))
@@ -4320,6 +4328,7 @@ function generateCaretGrabPlugin(): string {
 		              el.contentEditable = "false"
 		              el.removeEventListener("blur", onBlur)
 		              el.removeEventListener("keydown", onKeyDown)
+		              try { (window as any).__REACT_GRAB__?.activate?.() } catch {}
 		            }
 		          }
 

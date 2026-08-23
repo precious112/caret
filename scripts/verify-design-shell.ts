@@ -1483,11 +1483,37 @@ async function main() {
 			await editText.click()
 			await page.waitForTimeout(400)
 
-			// The row is contentEditable now; retype its content and commit.
+			// Now do what a person does: CLICK inside the text to place the
+			// cursor, then type. The original version set textContent via script
+			// here, and that certified the pipeline while the gesture rotted —
+			// react-grab stays armed after every selection, so the cursor click
+			// read to it as a grab: "Copied" toast, focus stolen, edit closed
+			// after zero keystrokes. The edit action now stands react-grab down
+			// until the edit finishes, and this click is what holds that down.
+			await page.mouse.click(target.x, target.y)
+			await page.waitForTimeout(400)
+			const midEdit = await page.evaluate(() => {
+				const el = document.querySelectorAll('[data-caret-id="cat-name"]')[1] as HTMLElement
+				const host = document.querySelector("[data-react-grab]") as HTMLElement | null
+				return {
+					stillEditable: el.isContentEditable,
+					focused: document.activeElement === el,
+					toasted: host?.shadowRoot?.textContent?.includes("Copied") ?? false,
+				}
+			})
+			if (midEdit.toasted) throw new Error("the cursor click was read as a grab — react-grab said Copied mid-edit")
+			if (!midEdit.stillEditable || !midEdit.focused) {
+				throw new Error(`the cursor click ended the edit: ${JSON.stringify(midEdit)}`)
+			}
+
+			// Replace the content by typing. Selection via the DOM (the click
+			// above proved the cursor lands; cross-platform select-all keystrokes
+			// inside contentEditable are not what this scenario is about).
 			await page.evaluate(() => {
 				const el = document.querySelectorAll('[data-caret-id="cat-name"]')[1] as HTMLElement
-				el.textContent = "Aurora Loafer"
+				window.getSelection()?.selectAllChildren(el)
 			})
+			await page.keyboard.type("Aurora Loafer")
 			await page.keyboard.press("Enter")
 			await waitFor(
 				async () => ((await page.evaluate(() => (window as any).__EDITS__)) as any[]).length > 0,
