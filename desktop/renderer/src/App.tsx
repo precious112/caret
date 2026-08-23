@@ -7,7 +7,7 @@
  * wizard, agent setup, preferences) that temporarily take the canvas's place.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { ProjectState } from "../../shared/ipc"
+import { landsInChat, type ProjectState } from "../../shared/ipc"
 import { invoke, on } from "./ipc"
 import { AssetsView } from "./views/AssetsView"
 import { AssetViewer } from "./views/AssetViewer"
@@ -89,15 +89,17 @@ export function App() {
 
 	// An agent asking the user a direct question has to reach them. Left on the
 	// canvas they would see nothing at all while the agent waited indefinitely,
-	// so an arriving prompt takes them to it. Asset picks are the exception:
-	// they render docked in the chat, beside whatever the user was looking at,
-	// and switching them to Foundation would hide the surface they answer on.
+	// so an arriving prompt takes them to it. Chat-placed prompts are the
+	// exception — asset picks, and anything a chat-lane tool marked
+	// `place: "chat"`, like generation consent: they render docked in the chat,
+	// beside whatever the user was looking at, and switching them to Foundation
+	// would hide the surface they answer on.
 	useEffect(
 		() =>
 			on("interview:prompt", (prompt) => {
 				// Same principle, different surface: the prompt has to land where
 				// somebody will see it, or the agent blocks forever.
-				if (prompt.kind === "asset-options") {
+				if (landsInChat(prompt)) {
 					setChatOpen(true)
 					return
 				}
@@ -118,7 +120,7 @@ export function App() {
 		if (!project) return
 		void invoke("interview:pending").then((waiting) => {
 			if (!waiting) return
-			if (waiting.kind === "asset-options") {
+			if (landsInChat(waiting)) {
 				setChatOpen(true)
 				return
 			}
@@ -152,9 +154,9 @@ export function App() {
 		}
 
 		void invoke("interview:pending").then((pending) => {
-			// A pending asset pick never vetoes: it is answered in the chat, which
-			// travels with the user across surfaces.
-			if (pending && pending.kind !== "asset-options") return
+			// A pending chat-placed prompt never vetoes: it is answered in the
+			// chat, which travels with the user across surfaces.
+			if (pending && !landsInChat(pending)) return
 			interviewPendingRef.current = false
 			setSurface(next)
 		})

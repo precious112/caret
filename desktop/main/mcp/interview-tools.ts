@@ -260,9 +260,16 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				// Proposed, never assumed. The image and 3D lanes spend the user's own
 				// credits, and an agent deciding to spend them mid-conversation is the
 				// one thing this surface must not do.
+				//
+				// `place: "chat"` on this and every prompt below: generation asked for
+				// in a conversation is answered in the conversation. Without it these
+				// ride the interview's surface rules — force-switch to Foundation, all
+				// navigation vetoed until answered — and four parallel generate calls
+				// once pinned a user to a tab they never opened.
 				const paid = args.kind === "image" || args.kind === "object3d"
 				const consent = await askUser(send, {
 					kind: "question",
+					place: "chat",
 					question: `Generate ${args.what}?`,
 					hint: paid ? `${args.why} This one runs on your image key and costs you directly.` : args.why,
 					choices: ["Generate it", "Not now"],
@@ -300,6 +307,7 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					holdMark(ctx.projectPath, { svg: result.svg, subject: args.what, rounds: result.rounds, model: result.model })
 					const kept = await askUser(send, {
 						kind: "takes",
+						place: "chat",
 						title: `The mark, after ${result.rounds} round(s)`,
 						subtitle: `${args.why} Pick it to keep it.`,
 						takes: [{ index: 0, preview: `data:image/png;base64,${result.previewPng.toString("base64")}` }],
@@ -336,6 +344,7 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					holdShader(ctx.projectPath, { outcome: result.shader, subject: args.what })
 					const kept = await askUser(send, {
 						kind: "takes",
+						place: "chat",
 						title: `Moments of ${args.what}`,
 						subtitle: `${args.why} These are three moments of one animation — pick any to keep it.`,
 						takes: result.shader.framePngs.map((frame, index) => ({
@@ -367,6 +376,7 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 
 				const picked = await askUser(send, {
 					kind: "takes",
+					place: "chat",
 					title: `Three takes of ${args.what}`,
 					subtitle: args.why,
 					takes: takes.map((take) => ({ index: take.variant, preview: take.preview, error: take.error })),

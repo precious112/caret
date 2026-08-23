@@ -18,6 +18,14 @@ import { Logger } from "../../src/shared/services/Logger"
 
 export interface InterviewPromptBase {
 	id: string
+	/**
+	 * Where the prompt renders. Absent means the Foundation interview surface,
+	 * which force-switches the user to it and holds them there until answered —
+	 * right for the interview, wrong for a question that belongs to a chat
+	 * conversation. `"chat"` docks it in the sidebar instead: no surface switch,
+	 * no navigation veto. (`asset-options` prompts are chat-docked by kind.)
+	 */
+	place?: "chat"
 	/** Progress, so the user can see how much is left. */
 	step?: number
 	total?: number

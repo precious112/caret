@@ -17,7 +17,7 @@
  */
 import { useEffect, useState } from "react"
 
-import type { ProjectState } from "../../../shared/ipc"
+import { landsInChat, type ProjectState } from "../../../shared/ipc"
 import { TokenWizard } from "../components/design-wizard/TokenWizard"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
@@ -50,7 +50,7 @@ export function FoundationView({
 	useEffect(
 		() =>
 			on("interview:prompt", (prompt) => {
-				if (prompt.kind !== "asset-options") setMode("agent")
+				if (!landsInChat(prompt)) setMode("agent")
 			}),
 		[],
 	)
@@ -64,7 +64,7 @@ export function FoundationView({
 	// first and it fails every time.
 	useEffect(() => {
 		void invoke("interview:pending").then((waiting) => {
-			if (waiting && waiting.kind !== "asset-options") setMode("agent")
+			if (waiting && !landsInChat(waiting)) setMode("agent")
 		})
 	}, [])
 

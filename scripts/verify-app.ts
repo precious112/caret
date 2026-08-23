@@ -1546,28 +1546,42 @@ async function main(): Promise<void> {
 		// on the first read and throws "Body is unusable" on the second.
 		const settled = pending.then((response) => response.text())
 
-		// Same as `p`: no navigation first. A proposal has to reach the user
-		// wherever they are, or an agent asking while they are on the canvas waits
-		// forever on a question nobody saw.
-		//
+		// The resolve this scenario holds down: generation asked for in the chat
+		// is answered IN the chat. The consent must dock in the sidebar, and the
+		// surface the user was on must not move — the first shipped version
+		// hijacked the Foundation tab and vetoed every navigation until all
+		// pending consents were answered, and this scenario passed, because it
+		// only asserted that the question appeared *somewhere*.
+		const surfaceBefore = await chrome.getAttribute('[data-testid="app-shell"]', "data-surface")
+
 		// Raced against the call itself: a handler that throws would otherwise
 		// present as a selector timeout a minute later, pointing at the UI for a
 		// failure that happened in the tool.
 		const early = await Promise.race([
-			chrome.waitForSelector('[data-testid="interview-question"]', { timeout: 60_000 }).then(() => null),
+			chrome
+				.waitForSelector('[data-testid="chat-interview-dock"] [data-testid="interview-question"]', { timeout: 60_000 })
+				.then(() => null),
 			settled,
 		])
 		assert(early === null, `the tool returned before asking the user: ${String(early).slice(0, 500)}`)
-		const proposal = await chrome.textContent('[data-testid="interview-question"]')
+		const surfaceAfter = await chrome.getAttribute('[data-testid="app-shell"]', "data-surface")
+		assert(
+			surfaceAfter === surfaceBefore,
+			`the consent moved the user: surface was "${surfaceBefore}", now "${surfaceAfter}"`,
+		)
+		const proposal = await chrome.textContent('[data-testid="chat-interview-dock"]')
 		assert(
 			proposal?.includes("a fine grain overlay"),
 			`the proposal does not say what would be made: ${proposal?.slice(0, 200)}`,
 		)
 		await chrome.locator('[data-testid="interview-choice"]', { hasText: "Generate it" }).click()
 
-		// Consent given, three takes to point at. Raced for the same reason.
+		// Consent given, three takes to point at — docked in the chat like the
+		// consent was. Raced for the same reason.
 		const gaveUp = await Promise.race([
-			chrome.waitForSelector('[data-testid="interview-takes"]', { timeout: 120_000 }).then(() => null),
+			chrome
+				.waitForSelector('[data-testid="chat-interview-dock"] [data-testid="interview-takes"]', { timeout: 120_000 })
+				.then(() => null),
 			settled,
 		])
 		assert(gaveUp === null, `the tool returned instead of offering takes: ${String(gaveUp).slice(0, 500)}`)

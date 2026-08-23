@@ -117,7 +117,16 @@ export interface PresentedCandidateWire {
 }
 
 export type InterviewPromptWire =
-	| { kind: "question"; id: string; question: string; hint?: string; choices: string[]; step?: number; total?: number }
+	| {
+			kind: "question"
+			id: string
+			question: string
+			hint?: string
+			choices: string[]
+			place?: "chat"
+			step?: number
+			total?: number
+	  }
 	| {
 			kind: "options"
 			id: string
@@ -135,6 +144,7 @@ export type InterviewPromptWire =
 			subtitle?: string
 			takes: Array<{ index: number; preview: string; error?: string }>
 			surface: string
+			place?: "chat"
 			step?: number
 			total?: number
 	  }
@@ -153,6 +163,21 @@ export type InterviewPromptWire =
 			step?: number
 			total?: number
 	  }
+
+/**
+ * Where a prompt renders — and therefore which surfaces react to it.
+ *
+ * Asset picks always dock in the chat; a question or takes prompt does too when
+ * the tool that asked marked it `place: "chat"`. Everything else is the
+ * foundation interview, which force-switches the user to Foundation and pins
+ * them there until answered. Chat-placed prompts must trigger neither: asset
+ * generation proposed mid-conversation belongs to the conversation, and
+ * yanking the user to Foundation for it removes the canvas they were planning
+ * against.
+ */
+export function landsInChat(prompt: InterviewPromptWire): boolean {
+	return prompt.kind === "asset-options" || (prompt.kind !== "options" && prompt.place === "chat")
+}
 
 /** One asset, as a pickable option. URLs are Vite-relative like `AssetEntryWire`'s. */
 export interface AssetOptionWire {

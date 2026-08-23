@@ -39,16 +39,17 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ThinkingOrb } from "thinking-orbs"
 
-import type {
-	AgentSessionWire,
-	AgentStateWire,
-	AssetEntryWire,
-	ComposerImage,
-	InterviewPromptWire,
-	ModelGroupWire,
-	ProjectState,
-	ProviderDoorWire,
-	TranscriptEntryWire,
+import {
+	type AgentSessionWire,
+	type AgentStateWire,
+	type AssetEntryWire,
+	type ComposerImage,
+	type InterviewPromptWire,
+	landsInChat,
+	type ModelGroupWire,
+	type ProjectState,
+	type ProviderDoorWire,
+	type TranscriptEntryWire,
 } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
@@ -58,8 +59,10 @@ import { Markdown } from "./Markdown"
 
 export const CHAT_SIDEBAR_WIDTH = 380
 
-/** The one prompt kind this sidebar renders; everything else is Foundation's. */
+/** Chat-placed prompts this sidebar renders; everything else is Foundation's. */
 type AssetOptionsPromptWire = Extract<InterviewPromptWire, { kind: "asset-options" }>
+type QuestionPromptWire = Extract<InterviewPromptWire, { kind: "question" }>
+type TakesPromptWire = Extract<InterviewPromptWire, { kind: "takes" }>
 
 interface ChatSidebarProps {
 	project: ProjectState
@@ -75,7 +78,7 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 	const [attached, setAttached] = useState<ComposerImage[]>([])
 	const [sessions, setSessions] = useState<AgentSessionWire[] | null>(null)
 	const [assets, setAssets] = useState<AssetEntryWire[]>([])
-	const [assetPrompt, setAssetPrompt] = useState<AssetOptionsPromptWire | null>(null)
+	const [docked, setDocked] = useState<InterviewPromptWire | null>(null)
 	// A model the provider will not serve, in the provider's own words. Held here
 	// rather than in the picker so it survives the popover closing — the whole
 	// point is that it is still true after you look away.
@@ -101,22 +104,33 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 		})
 	}, [project.path])
 
-	// Asset picks dock here rather than on the interview surface — the plan they
-	// belong to is this conversation. The mount-time catch-up is not optional:
-	// a prompt sent before this listener existed is lost forever, and an agent
+	// Chat-placed prompts dock here rather than on the interview surface — the
+	// plan they belong to is this conversation. Asset picks always; questions
+	// and takes when the asking tool marked them `place: "chat"` (generation
+	// consent, generated takes). The mount-time catch-up is not optional: a
+	// prompt sent before this listener existed is lost forever, and an agent
 	// can ask while the sidebar is closed.
 	useEffect(() => {
 		const keep = (prompt: InterviewPromptWire | null) => {
-			if (prompt?.kind === "asset-options") setAssetPrompt(prompt)
+			if (prompt && landsInChat(prompt)) setDocked(prompt)
 		}
 		void invoke("interview:pending").then(keep)
 		return on("interview:prompt", keep)
 	}, [])
 
-	const resolveAssetPrompt = (picked: string | null) => {
-		if (!assetPrompt) return
-		void invoke("interview:respond", assetPrompt.id, picked)
-		setAssetPrompt(null)
+	const resolveDocked = (answer: string | null) => {
+		if (!docked) return
+		setDocked(null)
+		// Then ask for the next one: an agent can fire several generate calls in
+		// one turn, and each queued its prompt while this one held the dock. The
+		// events already fired, so only a re-fetch after answering can surface
+		// them — and it must run after the respond lands, or it reads back the
+		// prompt just answered.
+		void invoke("interview:respond", docked.id, answer).then(() =>
+			invoke("interview:pending").then((next) => {
+				if (next && landsInChat(next)) setDocked(next)
+			}),
+		)
 	}
 
 	const assetTags = useMemo(() => new Set(assets.map((asset) => asset.tag)), [assets])
@@ -276,14 +290,20 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 				<FileChanges files={state?.transcript.files ?? []} />
 			</div>
 
-			{assetPrompt && (
+			{docked?.kind === "asset-options" && (
 				<AssetOptionsBlock
 					canvasUrl={project.canvasUrl}
-					onDismiss={() => resolveAssetPrompt(null)}
-					onPick={(tag) => resolveAssetPrompt(tag)}
+					onDismiss={() => resolveDocked(null)}
+					onPick={(tag) => resolveDocked(tag)}
 					onView={onViewAsset}
-					prompt={assetPrompt}
+					prompt={docked}
 				/>
+			)}
+			{docked?.kind === "question" && (
+				<QuestionBlock onAnswer={resolveDocked} onDismiss={() => resolveDocked(null)} prompt={docked} />
+			)}
+			{docked?.kind === "takes" && (
+				<TakesBlock onDismiss={() => resolveDocked(null)} onPick={resolveDocked} prompt={docked} />
 			)}
 
 			{state?.pendingApproval && (
@@ -1054,6 +1074,105 @@ function AssetOptionsBlock({
 					)
 				})}
 			</div>
+		</div>
+	)
+}
+
+/**
+ * A chat-placed question — generation consent, mostly — docked where the
+ * conversation is. Same testids as the interview surface's question screen, so
+ * one certification selector covers a question wherever it lands.
+ */
+function QuestionBlock({
+	prompt,
+	onAnswer,
+	onDismiss,
+}: {
+	prompt: QuestionPromptWire
+	onAnswer(choice: string): void
+	onDismiss(): void
+}) {
+	return (
+		<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-interview-dock">
+			<div className="flex items-start gap-2" data-testid="interview-question">
+				<div className="min-w-0 flex-1">
+					<p className="leading-relaxed">{prompt.question}</p>
+					{prompt.hint && <p className="mt-0.5 text-[11.5px] leading-relaxed text-shell-muted">{prompt.hint}</p>}
+				</div>
+				<button
+					className="flex size-6 shrink-0 items-center justify-center rounded-lg text-shell-muted transition-colors hover:bg-white/10 hover:text-shell-text"
+					data-testid="chat-interview-dismiss"
+					onClick={onDismiss}
+					title="Dismiss"
+					type="button">
+					<X size={12} />
+				</button>
+			</div>
+			<div className="mt-2.5 flex flex-wrap gap-2">
+				{prompt.choices.map((choice, index) => (
+					<button
+						className={cn(
+							"rounded-lg px-3 py-1.5 transition-colors",
+							index === 0
+								? "bg-caret-accent font-medium text-white hover:bg-caret-accent-hover"
+								: "text-shell-muted hover:bg-white/5",
+						)}
+						data-testid="interview-choice"
+						key={choice}
+						onClick={() => onAnswer(choice)}
+						type="button">
+						{choice}
+					</button>
+				))}
+			</div>
+		</div>
+	)
+}
+
+/**
+ * Chat-placed takes — the generated results, to point at. Same testids as the
+ * interview surface's takes screen, for the same reason as above.
+ */
+function TakesBlock({ prompt, onPick, onDismiss }: { prompt: TakesPromptWire; onPick(index: string): void; onDismiss(): void }) {
+	const usable = prompt.takes.filter((take) => !take.error)
+	return (
+		<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-interview-dock">
+			<div className="flex items-start gap-2" data-testid="interview-takes">
+				<div className="min-w-0 flex-1">
+					<p className="leading-relaxed">{prompt.title}</p>
+					{prompt.subtitle && (
+						<p className="mt-0.5 text-[11.5px] leading-relaxed text-shell-muted">{prompt.subtitle}</p>
+					)}
+				</div>
+				<button
+					className="flex size-6 shrink-0 items-center justify-center rounded-lg text-shell-muted transition-colors hover:bg-white/10 hover:text-shell-text"
+					data-testid="chat-interview-dismiss"
+					onClick={onDismiss}
+					title="Keep none of them"
+					type="button">
+					<X size={12} />
+				</button>
+			</div>
+			{usable.length === 0 ? (
+				<p className="mt-2 text-[11.5px] text-shell-muted" data-testid="interview-takes-empty">
+					{prompt.takes[0]?.error ?? "Nothing came back."}
+				</p>
+			) : (
+				<div className="mt-2.5 grid grid-cols-3 gap-2">
+					{usable.map((take) => (
+						<button
+							className="overflow-hidden rounded-lg border border-shell-border transition-colors hover:border-caret-accent"
+							data-interview-take={take.index}
+							key={take.index}
+							onClick={() => onPick(String(take.index))}
+							type="button">
+							<span className="block" style={{ backgroundColor: prompt.surface }}>
+								<img alt="" className="block w-full" src={take.preview} />
+							</span>
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	)
 }

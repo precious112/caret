@@ -12,19 +12,19 @@
  */
 import { useEffect, useState } from "react"
 
-import type { InterviewPromptWire, PresentedCandidateWire } from "../../../shared/ipc"
+import { type InterviewPromptWire, landsInChat, type PresentedCandidateWire } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 
 export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswered?(): void }) {
 	const [prompt, setPrompt] = useState<InterviewPromptWire | null>(null)
 
-	// Asset picks are excluded: the chat renders those, and holding one here too
-	// would let "Skip this" answer a prompt docked in another surface.
+	// Chat-placed prompts are excluded: the chat renders those, and holding one
+	// here too would let "Skip this" answer a prompt docked in another surface.
 	useEffect(
 		() =>
 			on("interview:prompt", (next) => {
-				if (next.kind !== "asset-options") setPrompt(next)
+				if (!landsInChat(next)) setPrompt(next)
 			}),
 		[],
 	)
@@ -33,7 +33,7 @@ export function InterviewView({ onDone, onAnswered }: { onDone(): void; onAnswer
 	// the agent blocked on a question nobody ever saw.
 	useEffect(() => {
 		void invoke("interview:pending").then((waiting) => {
-			if (waiting && waiting.kind !== "asset-options") setPrompt(waiting)
+			if (waiting && !landsInChat(waiting)) setPrompt(waiting)
 		})
 	}, [])
 
