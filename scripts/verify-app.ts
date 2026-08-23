@@ -161,6 +161,20 @@ async function shot(page: Page, name: string): Promise<void> {
 	await page.screenshot({ path: path.join(SHOTS, `${name}.png`) })
 }
 
+/**
+ * Opens the chat sidebar if it is not already open — never a blind toggle.
+ *
+ * The Chat button toggles. cc clicked it assuming "closed" and was right for
+ * months — until the chat-docked consent change made ca leave the sidebar
+ * OPEN, and fifteen scenarios later cc's click closed it and starved waiting
+ * for content. A scenario must establish the state it needs, not inherit it.
+ */
+async function ensureChatOpen(page: Page): Promise<void> {
+	if ((await page.locator('[data-testid="chat-transcript"]').count()) > 0) return
+	await page.getByTestId("top-bar").getByRole("button", { name: "Chat" }).click()
+	await page.waitForSelector('[data-testid="chat-transcript"]', { timeout: 10_000 })
+}
+
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message)
 }
@@ -3155,16 +3169,31 @@ export default function ShaderDemo() {
 				}
 				if (!pageFrame) return { error: "the focused Home page never became a frame" }
 
+				// The focused iframe is SCALED (a 1440px page shown in a narrower
+				// view), so an in-page rect is not a mouse coordinate: every point
+				// must be mapped through the measured scale, or a click aimed at an
+				// 8px handle lands hundreds of pixels away while a click aimed at a
+				// wide paragraph still happens to hit. The subtitle click surviving
+				// unscaled is exactly what hid this — selection worked, the drag
+				// never did.
 				const offset = await wc.executeJavaScript(
-					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
+					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width } })()`,
 				)
+				const innerWidth = await pageFrame.executeJavaScript(`window.innerWidth`)
+				const scale = innerWidth > 0 ? offset.w / innerWidth : 1
+				// Inlined at each use — a named helper const in here gets esbuild's
+				// __name wrapper, which does not exist on the Electron side (see the
+				// harness notes; this file has hit that exact ReferenceError).
 
 				// Select the subtitle, which the handles attach to.
 				const subtitleRaw = await pageFrame.executeJavaScript(
 					`(() => { const el = document.querySelector('[data-caret-id="hero-subtitle"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
 				)
 				if (!subtitleRaw) return { error: "no subtitle on the page" }
-				const at = { x: Math.round(offset.x + subtitleRaw.x), y: Math.round(offset.y + subtitleRaw.y) }
+				const at = {
+					x: Math.round(offset.x + subtitleRaw.x * scale),
+					y: Math.round(offset.y + subtitleRaw.y * scale),
+				}
 
 				let handles = false
 				deadline = Date.now() + 30000
@@ -3204,7 +3233,10 @@ export default function ShaderDemo() {
 						`(() => { const h = document.querySelector('#caret-resize-handles'); if (!h) return null; const r = h.children[0].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`,
 					)
 					if (!handleRaw) return { error: "the resize handles disappeared before the drag" }
-					const from = { x: Math.round(offset.x + handleRaw.x), y: Math.round(offset.y + handleRaw.y) }
+					const from = {
+						x: Math.round(offset.x + handleRaw.x * scale),
+						y: Math.round(offset.y + handleRaw.y * scale),
+					}
 					wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
 					wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
 					for (let step = 1; step <= 6; step++) {
@@ -3229,7 +3261,10 @@ export default function ShaderDemo() {
 						if (!dragged) await new Promise((r) => setTimeout(r, 300))
 					}
 				}
-				if (!dragged) return { error: "three drags on the handle produced no committed width in the DOM" }
+				if (!dragged)
+					return {
+						error: `three drags on the handle produced no committed width in the DOM (iframe scale ${scale.toFixed(3)}, iframe ${Math.round(offset.w)}px wide showing innerWidth ${innerWidth}px)`,
+					}
 
 				return { ok: true }
 			} catch (err) {
@@ -3763,7 +3798,7 @@ export default function CatalogDemo() {
 	// to do them" is true.
 
 	await scenario("cc. with no backend, the chat refuses and names the fix", async () => {
-		await chrome.getByTestId("top-bar").getByRole("button", { name: "Chat" }).click()
+		await ensureChatOpen(chrome)
 		await chrome.waitForSelector('[data-testid="chat-no-backend"]', { timeout: 20_000 })
 
 		const refusal = await chrome.textContent('[data-testid="chat-no-backend"]')
@@ -3893,6 +3928,10 @@ export default function CatalogDemo() {
 		}
 
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
+		// Self-established, not inherited: the composer this reads lives in the
+		// sidebar cc happened to leave open. If cc failed — or the sidebar's
+		// open/closed state changes for any reason — this must still find it.
+		await ensureChatOpen(chrome)
 		await waitFor(
 			"the chat to become usable",
 			async () => ((await chrome.getByTestId("chat-input").isDisabled()) ? null : true),
@@ -5149,9 +5188,16 @@ export default function CatalogDemo() {
 		// git subprocess. A single get_drift fired the instant the scratch
 		// vanished raced that gap and lost a full run; the product's ordering is
 		// fine, the harness just has to wait for the state it is asserting.
+		//
+		// Clean is asserted for THIS scenario's entry, not globally. The global
+		// check ("appDrift": 0 anywhere) inherited every earlier scenario's
+		// leftovers: gg and ce write whatever app files the model chose, and a
+		// run where those landed after align-demo's mapping was recorded kept
+		// global drift nonzero forever — a timeout here for dirt this scenario
+		// never made. Same lesson as the re-record above: own premise, own entry.
 		let afterText = ""
 		await waitFor(
-			"the mapping to refresh and drift to read clean",
+			"the mapping to refresh and home's drift to read clean",
 			async () => {
 				const after = await callMcp(discovery!.url, discovery!.token, {
 					jsonrpc: "2.0",
@@ -5160,10 +5206,26 @@ export default function CatalogDemo() {
 					params: { name: "get_drift", arguments: {} },
 				})
 				afterText = await after.text()
-				const clean =
-					(afterText.includes('"appDrift": 0') || afterText.includes('\\"appDrift\\": 0')) &&
-					(afterText.includes('"conflicts": 0') || afterText.includes('\\"conflicts\\": 0'))
-				return clean ? true : null
+				try {
+					const frames = afterText.includes("data:")
+						? afterText
+								.split("\n")
+								.filter((line) => line.startsWith("data:"))
+								.map((line) => line.slice(5).trim())
+						: [afterText]
+					for (const frame of frames) {
+						const text = JSON.parse(frame)?.result?.content?.[0]?.text
+						if (typeof text !== "string") continue
+						const drift = JSON.parse(text) as {
+							entries?: Array<{ designPath?: string; classification?: string }>
+						}
+						const home = drift.entries?.find((entry) => entry.designPath === ".caret/pages/home/index.tsx")
+						if (home?.classification === "clean") return true
+					}
+				} catch {
+					// Not parseable yet — keep polling.
+				}
+				return null
 			},
 			20_000,
 			// The raw body starts with SSE framing; the tool's own words say which
@@ -5171,7 +5233,7 @@ export default function CatalogDemo() {
 			async () => `last get_drift said: ${mcpSaid(afterText)}`,
 		)
 
-		return `app drift → model-written proposal → accepted by click → mapping refreshed, drift clean`
+		return `app drift → model-written proposal → accepted by click → mapping refreshed, home reads clean`
 	})
 
 	// ── the authored and 3D lanes, for real ────────────────────────────────────
