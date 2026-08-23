@@ -1276,6 +1276,17 @@ const FILE_CHANGES_SHOWN = 5
  * the honest half — an animation loops identically whether the process is
  * alive or wedged; a counter cannot lie about time passing.
  */
+/**
+ * "47s", then "14m 39s", then "1h 05m" — the units a person thinks in.
+ * A counter that reads 879s makes the user do the division; the whole point
+ * of the counter is that the row's honesty costs the reader nothing.
+ */
+function elapsedLabel(seconds: number): string {
+	if (seconds < 60) return `${seconds}s`
+	if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`
+	return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`
+}
+
 function WorkingRow() {
 	const [startedAt] = useState(() => Date.now())
 	const [, tick] = useState(0)
@@ -1291,7 +1302,7 @@ function WorkingRow() {
 		<div className="mt-3 flex items-center gap-2.5 text-[12px] text-shell-muted" data-testid="chat-working">
 			<ThinkingOrb size={20} state="working" theme="dark" />
 			<span>Working…</span>
-			{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{seconds}s</span>}
+			{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
 		</div>
 	)
 }
