@@ -16,7 +16,20 @@ export type { DesignInboundMessage, DesignOutboundMessage } from "../../src/core
  * to answer "is the canvas running?" for every possible failure, including the
  * ones where it plainly was.
  */
-export type ScreenshotResult = { ok: true; dataUrl: string } | { ok: false; reason: string }
+export type ScreenshotResult =
+	| {
+			ok: true
+			dataUrl: string
+			/**
+			 * Set when the captured frame is known to be visually incomplete —
+			 * images that failed to load or were still loading at capture. Without
+			 * it, a page with a broken asset screenshots as clean evidence that
+			 * the asset "isn't showing", and an agent debugs a rendering problem
+			 * that does not exist.
+			 */
+			warning?: string
+	  }
+	| { ok: false; reason: string }
 export type {
 	AgentClientConfig,
 	NotificationLevel,

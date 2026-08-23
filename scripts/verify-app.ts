@@ -1019,6 +1019,52 @@ async function main(): Promise<void> {
 		return "names the page and the actual cause"
 	})
 
+	await scenario("u2. a screenshot with a hole in it says so", async () => {
+		// A frame whose image failed to load looks like clean evidence that the
+		// image "isn't rendering" — an agent burned a real turn debugging an SVG
+		// that rendered fine on the canvas, because the capture raced the asset
+		// and reported nothing. The capture may proceed; the caution may not be
+		// omitted.
+		const pageDir = path.join(fixture, ".caret", "pages", "broken-img")
+		await fs.mkdir(pageDir, { recursive: true })
+		await fs.writeFile(
+			path.join(pageDir, "index.tsx"),
+			`export default function BrokenImg() {\n` +
+				`\treturn (\n` +
+				`\t\t<div data-caret-id="bi-root" style={{ padding: 40 }}>\n` +
+				`\t\t\t<h1 data-caret-id="bi-title">A page with a missing picture</h1>\n` +
+				`\t\t\t<img alt="missing" data-caret-id="bi-img" src="/caret-assets/does-not-exist.png" width={200} />\n` +
+				`\t\t</div>\n` +
+				`\t)\n` +
+				`}\n`,
+		)
+
+		assert(discovery, "no discovery record")
+		const shotText = await waitFor(
+			"the screenshot to carry the broken-image caution",
+			async () => {
+				const response = await callMcp(discovery!.url, discovery!.token, {
+					jsonrpc: "2.0",
+					id: 61,
+					method: "tools/call",
+					params: { name: "get_screenshot", arguments: { pageId: "broken-img" } },
+				})
+				const text = await response.text()
+				// The page itself needs a beat to become routable after the write;
+				// retry until the screenshot succeeds at all.
+				return text.includes("captured just now") ? text : null
+			},
+			60_000,
+		)
+		assert(
+			/CAUTION/.test(shotText) && shotText.includes("does-not-exist.png"),
+			`the screenshot did not name its hole: ${mcpSaid(shotText).slice(0, 300)}`,
+		)
+
+		await fs.rm(pageDir, { recursive: true, force: true })
+		return "the capture succeeded and named the image that failed to load"
+	})
+
 	await scenario("v. an asset dropped into .caret/assets is indexed with no tool involved", async () => {
 		// Dragging a file into the folder has to work as well as using the UI, for
 		// the same reason an agent's own Edit tool has to work on pages: the

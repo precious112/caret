@@ -250,9 +250,12 @@ export const TOOLS: ToolDefinition[] = [
 			// Caret cannot ask whether images will be honoured and gets no signal
 			// when they are not — without this the agent receives an empty result
 			// and answers plausibly from context instead of saying it saw nothing.
+			const caution = result.warning
+				? ` CAUTION: ${result.warning}. Whatever those images show is MISSING from this frame — before concluding something "isn't rendering", check that the asset path resolves and screenshot again.`
+				: ""
 			return {
 				content: [
-					{ type: "text", text: `Screenshot of page "${pageId}", captured just now at 1440x900 CSS pixels.` },
+					{ type: "text", text: `Screenshot of page "${pageId}", captured just now at 1440x900 CSS pixels.${caution}` },
 					{ type: "image", data, mimeType },
 				],
 			}

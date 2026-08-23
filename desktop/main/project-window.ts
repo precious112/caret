@@ -390,13 +390,27 @@ export class ProjectWindow {
 
 		try {
 			await capture.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
-			await this.settle(capture)
+			const visuals = await this.settle(capture)
 
 			const image = await capture.webContents.capturePage()
 			if (image.isEmpty()) {
 				return { ok: false, reason: `page "${pageId}" rendered nothing — does it exist, and does it render at 1440x900?` }
 			}
-			return { ok: true, dataUrl: image.toDataURL() }
+
+			// A frame with a hole in it must say so. A freshly accepted mark whose
+			// <img> raced this capture screenshotted as "the mark isn't showing",
+			// and the agent went off debugging an SVG that rendered fine on the
+			// canvas the whole time.
+			const problems: string[] = []
+			if (visuals.broken.length > 0) problems.push(`failed to load: ${visuals.broken.join(", ")}`)
+			if (visuals.pending.length > 0) {
+				problems.push(`still loading when the frame was captured: ${visuals.pending.join(", ")}`)
+			}
+			return {
+				ok: true,
+				dataUrl: image.toDataURL(),
+				...(problems.length > 0 ? { warning: `image(s) ${problems.join("; ")}` } : {}),
+			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)
 			Logger.error(`[window] screenshot of "${pageId}" failed:`, err)
@@ -417,9 +431,14 @@ export class ProjectWindow {
 	 *
 	 * Capped, because a page with an infinite animation or a never-resolving image
 	 * would otherwise block forever. A late capture beats no capture.
+	 *
+	 * Returns what did NOT settle. An image that errors counts as "settled" for
+	 * the wait — blocking forever on a 404 helps nobody — but the capture that
+	 * follows has a hole in it, and only this report stands between that hole
+	 * and an agent concluding its own work failed to render.
 	 */
-	private async settle(capture: BrowserWindow): Promise<void> {
-		await capture.webContents
+	private async settle(capture: BrowserWindow): Promise<{ broken: string[]; pending: string[] }> {
+		return await capture.webContents
 			.executeJavaScript(
 				`(async () => {
 					const deadline = new Promise((r) => setTimeout(r, 4000))
@@ -433,9 +452,14 @@ export class ProjectWindow {
 						await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 					})()
 					await Promise.race([ready, deadline])
+					const relative = (src) => { try { return new URL(src, location.href).pathname } catch { return src } }
+					return {
+						broken: [...document.images].filter((img) => img.complete && img.naturalWidth === 0).map((img) => relative(img.src)),
+						pending: [...document.images].filter((img) => !img.complete).map((img) => relative(img.src)),
+					}
 				})()`,
 			)
-			.catch(() => {})
+			.catch(() => ({ broken: [], pending: [] }))
 	}
 
 	private layout(): void {
