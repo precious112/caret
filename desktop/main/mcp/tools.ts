@@ -50,7 +50,7 @@ import {
 	writePageMeta,
 } from "../../../src/core/design"
 import { runExclusive, writeFileAtomic } from "../../../src/core/design/file-mutation-queue"
-import { mutateFlowDefinition } from "../../../src/core/design/flow-meta"
+import { mutateFlowDefinition, writeFlowDefinition } from "../../../src/core/design/flow-meta"
 import { resolveParamsFor, spliceParamEdit } from "../../../src/core/design/param/edit"
 import { PANEL_PROPERTIES } from "../../../src/core/design/param/params"
 import { recordEdit } from "../../../src/core/design/provenance"
@@ -480,10 +480,14 @@ export const TOOLS: ToolDefinition[] = [
 
 	{
 		name: "write_flow",
-		title: "Update a flow",
-		description: "Replaces the steps of an existing flow definition.",
+		title: "Write a flow",
+		description:
+			"Creates or replaces a flow definition — the user-journey arrows drawn between pages on the canvas. " +
+			"Steps name pages by id; `next` lists the step pages an arrow leads to. " +
+			"Always use this rather than writing .caret/flows/ files yourself: the file format is Caret's to own.",
 		inputSchema: {
-			flowId: z.string(),
+			flowId: z.string().describe("Flow id, kebab-case; also the filename"),
+			name: z.string().optional().describe('Human title shown on the canvas, e.g. "First launch". Required to create.'),
 			steps: z.array(
 				z.object({
 					page: z.string(),
@@ -493,13 +497,30 @@ export const TOOLS: ToolDefinition[] = [
 				}),
 			),
 		},
-		async handler(ctx, args: { flowId: string; steps: FlowDefinition["steps"] }) {
+		async handler(ctx, args: { flowId: string; name?: string; steps: FlowDefinition["steps"] }) {
+			// Update-or-create, deliberately. The first shipped version only
+			// updated, and an agent asked by its own plan to define flows was
+			// refused twice, hand-wrote the files, and guessed the format one
+			// field wrong — a red "invalid flow files" banner over otherwise good
+			// design work. A missing `name` in an existing file is healed for the
+			// same reason: that IS the one field the hand-rolled files got wrong.
 			const found = await mutateFlowDefinition(ctx.projectPath, args.flowId, (flow) => {
 				flow.steps = args.steps
+				if (args.name) flow.name = args.name
+				if (!flow.name) flow.name = args.name ?? humanizeFlowId(args.flowId)
 			})
-			if (!found) return fail(`No flow "${args.flowId}" in this design layer.`)
+			if (!found) {
+				if (!args.name) {
+					return fail(`No flow "${args.flowId}" exists yet — pass \`name\` to create it.`)
+				}
+				await writeFlowDefinition(ctx.projectPath, args.flowId, {
+					id: args.flowId,
+					name: args.name,
+					steps: args.steps,
+				})
+			}
 			await recordEdit(ctx.projectPath, { actor: "agent", action: "write", file: `flows/${args.flowId}.flow.json` })
-			return reply(ctx, { ok: true, flowId: args.flowId })
+			return reply(ctx, { ok: true, flowId: args.flowId, created: !found })
 		},
 	},
 
@@ -774,6 +795,12 @@ function summarisePage(page: PageMeta) {
 		tags: page.tags ?? [],
 		source: `.caret/pages/${page.id}/index.tsx`,
 	}
+}
+
+/** `daily-logging` → `Daily logging`, for a healed flow whose name was never given. */
+function humanizeFlowId(flowId: string): string {
+	const words = flowId.replace(/[-_]+/g, " ").trim()
+	return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
 function summariseFlow(flow: FlowDefinition) {
