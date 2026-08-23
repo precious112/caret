@@ -867,10 +867,15 @@ class OpencodeSessionHandle implements BackendSession {
 /**
  * Server events → {@link BackendEvent}.
  *
- * Stateful because the server re-sends whole parts as they grow: text arrives as
- * a part that gets longer, not as deltas the chat can simply append. Emitting
- * only the suffix beyond what was already emitted makes the mapping idempotent,
- * which matters because the same part can be re-sent after a tool call.
+ * Stateful because the stream is two-voiced (measured on the pinned server):
+ * `message.part.updated` fires at a part's creation (empty) and completion (the
+ * whole text), and every token in between arrives as a `message.part.delta`
+ * append. Both must be handled — deltas are the only live signal (a reasoning
+ * part can grow for minutes before its completing `updated`, and a cancelled
+ * turn never gets one), while the completing re-send is the catch-up if any
+ * delta was missed. Emitting only the suffix beyond what was already emitted
+ * keeps the two voices from double-speaking, and stays idempotent when the same
+ * part is re-sent after a tool call.
  *
  * Parts are mapped only for messages the bus has announced as `role:
  * "assistant"` — the server emits `message.updated` before any of a message's
@@ -887,6 +892,14 @@ export class EventMapper {
 	private toolStarted = new Set<string>()
 	private toolFinished = new Set<string>()
 	private assistantMessages = new Set<string>()
+	/**
+	 * What kind of stream each part id carries, learned from its creating
+	 * `part.updated`. Deltas name neither a type nor a role, so this map is also
+	 * the delta gate: a part that never passed the assistant-role check above
+	 * never gets an entry, and its deltas stay off-screen (the user's own prompt
+	 * streams over the same bus).
+	 */
+	private partKinds = new Map<string, "text" | "thinking">()
 
 	constructor(private readonly sessionId: string) {}
 
@@ -909,6 +922,20 @@ export class EventMapper {
 				if (properties.sessionID !== this.sessionId) return
 				if (!this.assistantMessages.has(properties.part.messageID)) return
 				yield* this.mapPart(properties.part)
+				return
+			}
+
+			case "message.part.delta": {
+				const properties = event.properties as { sessionID: string; partID: string; field: string; delta: string }
+				if (properties.sessionID !== this.sessionId) return
+				if (properties.field !== "text" || !properties.delta) return
+				const kind = this.partKinds.get(properties.partID)
+				if (!kind) return
+				this.emittedLength.set(
+					properties.partID,
+					(this.emittedLength.get(properties.partID) ?? 0) + properties.delta.length,
+				)
+				yield { type: kind, text: properties.delta }
 				return
 			}
 
@@ -967,6 +994,9 @@ export class EventMapper {
 
 	private *mapPart(part: OpencodePart): Iterable<BackendEvent> {
 		if (part.type === "text" || part.type === "reasoning") {
+			// Registered before the length check on purpose: the creating
+			// `part.updated` is empty, and it is what entitles the deltas to stream.
+			this.partKinds.set(part.id, part.type === "text" ? "text" : "thinking")
 			const text = (part as { text?: string }).text ?? ""
 			const already = this.emittedLength.get(part.id) ?? 0
 			if (text.length <= already) return

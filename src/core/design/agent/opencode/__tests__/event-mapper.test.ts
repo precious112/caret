@@ -36,6 +36,20 @@ function textPart(messageId: string, text: string, partId = `prt_${messageId}`):
 	} as OpencodeEvent
 }
 
+function reasoningPart(messageId: string, text: string, partId = `prt_${messageId}`): OpencodeEvent {
+	return {
+		type: "message.part.updated",
+		properties: { sessionID: SESSION, part: { type: "reasoning", id: partId, messageID: messageId, text } },
+	} as OpencodeEvent
+}
+
+function delta(partId: string, messageId: string, text: string, sessionID = SESSION): OpencodeEvent {
+	return {
+		type: "message.part.delta",
+		properties: { sessionID, messageID: messageId, partID: partId, field: "text", delta: text },
+	} as OpencodeEvent
+}
+
 describe("EventMapper", () => {
 	it("replays nothing of a message never announced as the assistant's", () => {
 		// The user's own prompt coming back over the bus, exactly as the server
@@ -77,6 +91,80 @@ describe("EventMapper", () => {
 			{ type: "text", text: "Hello" },
 			{ type: "text", text: ", world" },
 		])
+	})
+
+	// The delta contract, measured on the pinned server: `part.updated` fires
+	// only at a part's creation (empty) and completion (whole text); every token
+	// in between is a `message.part.delta`. A five-minute reasoning turn showed
+	// "Working…" the whole way because the mapper only read `updated` — and a
+	// cancelled turn never even gets the completing one.
+	it("streams reasoning deltas as thinking, live", () => {
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			announced("msg_a", "assistant"),
+			reasoningPart("msg_a", "", "prt_r"),
+			delta("prt_r", "msg_a", "Let me plan"),
+			delta("prt_r", "msg_a", " the pages."),
+		])
+		assert.deepEqual(events, [
+			{ type: "thinking", text: "Let me plan" },
+			{ type: "thinking", text: " the pages." },
+		])
+	})
+
+	it("does not re-speak deltas when the completing part re-sends the whole text", () => {
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			announced("msg_a", "assistant"),
+			textPart("msg_a", "", "prt_t"),
+			delta("prt_t", "msg_a", "Hello"),
+			delta("prt_t", "msg_a", ", world"),
+			// Completion: the server re-sends the part whole, as measured.
+			textPart("msg_a", "Hello, world", "prt_t"),
+		])
+		assert.deepEqual(events, [
+			{ type: "text", text: "Hello" },
+			{ type: "text", text: ", world" },
+		])
+	})
+
+	it("still catches up from the completing part if deltas were missed", () => {
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			announced("msg_a", "assistant"),
+			textPart("msg_a", "", "prt_t"),
+			delta("prt_t", "msg_a", "Hello"),
+			textPart("msg_a", "Hello, world", "prt_t"),
+		])
+		assert.deepEqual(events, [
+			{ type: "text", text: "Hello" },
+			{ type: "text", text: ", world" },
+		])
+	})
+
+	it("drops deltas of the user's own prompt echo and of unknown parts", () => {
+		// The user's message streams over the same bus with the same shapes; its
+		// `part.updated` never passes the role gate, so its part id earns no kind
+		// and its deltas must stay off-screen. A delta for a part never announced
+		// at all is the same case.
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			announced("msg_user", "user"),
+			textPart("msg_user", "", "prt_u"),
+			delta("prt_u", "msg_user", "make the header blue"),
+			delta("prt_never_seen", "msg_user", "ghost"),
+		])
+		assert.deepEqual(events, [])
+	})
+
+	it("drops deltas from another session", () => {
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			announced("msg_a", "assistant"),
+			textPart("msg_a", "", "prt_t"),
+			delta("prt_t", "msg_a", "spoken elsewhere", "ses_other"),
+		])
+		assert.deepEqual(events, [])
 	})
 
 	it("maps session.idle for this session to done, and ignores other sessions'", () => {

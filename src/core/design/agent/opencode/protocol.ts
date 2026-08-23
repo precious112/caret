@@ -74,7 +74,15 @@ export interface OpencodePromptResponse {
  */
 export type OpencodeEvent =
 	| { type: "message.part.updated"; properties: { sessionID: string; part: OpencodePart } }
-	| { type: "message.part.delta"; properties: { sessionID: string; partID: string; field: string; delta: string } }
+	// How a part actually GROWS. `message.part.updated` fires only at a part's
+	// creation (empty) and completion (the whole text); every token in between
+	// arrives here, as an append to `field` (`"text"` for text and reasoning
+	// alike). A mapper that only reads `updated` shows nothing until a part
+	// finishes — which for a five-minute reasoning part is the whole turn.
+	| {
+			type: "message.part.delta"
+			properties: { sessionID: string; messageID: string; partID: string; field: string; delta: string }
+	  }
 	// Announces a message's existence and role, always before its parts. The
 	// mapper leans on that ordering to tell the assistant's parts from the echo
 	// of the user's own prompt.
