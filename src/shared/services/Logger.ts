@@ -50,8 +50,24 @@ export class Logger {
 	static #output(level: string, message: string, error: Error | undefined, args: any[]) {
 		try {
 			let fullMessage = message
-			if (Logger.isVerbose && args.length > 0) {
-				fullMessage += ` ${args.map((arg) => JSON.stringify(arg)).join(" ")}`
+			// ERROR and WARN always carry their arguments. They used to be
+			// verbose-only, so in any non-dev build `Logger.error("uncaught
+			// exception:", err)` logged a bare label — a full certification run
+			// died with that as its entire evidence. And an Error must not go
+			// through JSON.stringify, which yields "{}": it gets its stack.
+			const attach = args.length > 0 && (Logger.isVerbose || level === "ERROR" || level === "WARN")
+			if (attach) {
+				fullMessage += ` ${args
+					.map((arg) => {
+						if (arg instanceof Error) return arg.stack ?? String(arg)
+						if (typeof arg === "string") return arg
+						try {
+							return JSON.stringify(arg)
+						} catch {
+							return String(arg)
+						}
+					})
+					.join(" ")}`
 			}
 			const errorSuffix = error?.message ? ` ${error.message}` : ""
 			Logger.output(`${level} ${fullMessage}${errorSuffix}`.trimEnd())
