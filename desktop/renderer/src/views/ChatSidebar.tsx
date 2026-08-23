@@ -214,16 +214,16 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 			style={{ width: CHAT_SIDEBAR_WIDTH }}>
 			<header className="flex h-10 shrink-0 items-center gap-2 border-b border-shell-border px-3">
 				<span className="truncate text-[12px] font-medium" data-testid="chat-title">
-					{state?.activity?.title ?? "Chat"}
+					{sessions ? "Chat history" : (state?.activity?.title ?? "Chat")}
 				</span>
-				{state?.activity?.mode === "read-only" && (
+				{!sessions && state?.activity?.mode === "read-only" && (
 					<span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-shell-muted">plan only</span>
 				)}
 
 				<div className="flex-1" />
 
 				<IconButton
-					label="Earlier sessions"
+					label={sessions ? "Back to the chat" : "Earlier sessions"}
 					onClick={() => {
 						if (sessions) {
 							setSessions(null)
@@ -231,7 +231,7 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 						}
 						void invoke("agent:sessions", project.path).then(setSessions)
 					}}>
-					<History size={13} />
+					<History className={cn(sessions && "text-caret-accent")} size={13} />
 				</IconButton>
 				<IconButton
 					label="New chat"
@@ -246,7 +246,11 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 				</IconButton>
 			</header>
 
-			{sessions && (
+			{/* History is its OWN view, not a strip pushed onto the conversation.
+			    The first version squeezed the list above a still-live transcript,
+			    which read as clutter and hid most of both. Open, it replaces the
+			    chat entirely; picking a session (or going back) returns to it. */}
+			{sessions ? (
 				<SessionList
 					onPick={(id) => {
 						setSessions(null)
@@ -254,79 +258,85 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 					}}
 					sessions={sessions}
 				/>
-			)}
+			) : (
+				<>
+					<div className="flex-1 overflow-y-auto px-3.5 py-4" data-testid="chat-transcript" ref={scrollRef}>
+						{!state?.ready && <NoBackend detail={state?.blocked} onOpenBackendSetup={onOpenBackendSetup} />}
 
-			<div className="flex-1 overflow-y-auto px-3.5 py-4" data-testid="chat-transcript" ref={scrollRef}>
-				{!state?.ready && <NoBackend detail={state?.blocked} onOpenBackendSetup={onOpenBackendSetup} />}
+						{entries.length === 0 && state?.ready && (
+							<p className="px-1 py-8 text-center text-[12px] leading-relaxed text-shell-muted">
+								Ask for a change, or describe what you want to build.
+								<br />
+								Caret can see this project's foundations and assets.
+							</p>
+						)}
 
-				{entries.length === 0 && state?.ready && (
-					<p className="px-1 py-8 text-center text-[12px] leading-relaxed text-shell-muted">
-						Ask for a change, or describe what you want to build.
-						<br />
-						Caret can see this project's foundations and assets.
-					</p>
-				)}
-
-				{turns.map((turn, index) => (
-					// The gap between turns is six times the gap inside one. That ratio
-					// is the whole reason a long transcript stays readable.
-					<div className={cn("flex flex-col gap-1.5", index > 0 && "mt-7")} key={turn[0]?.id ?? index}>
-						{turn.map((entry) => (
-							<Entry
-								assetTags={assetTags}
-								entry={entry}
-								key={entry.id}
-								onRespond={(requestId, decision) =>
-									void invoke("agent:permission", project.path, requestId, decision)
-								}
-								onViewAsset={onViewAsset}
-							/>
+						{turns.map((turn, index) => (
+							// The gap between turns is six times the gap inside one. That ratio
+							// is the whole reason a long transcript stays readable.
+							<div className={cn("flex flex-col gap-1.5", index > 0 && "mt-7")} key={turn[0]?.id ?? index}>
+								{turn.map((entry) => (
+									<Entry
+										assetTags={assetTags}
+										entry={entry}
+										key={entry.id}
+										onRespond={(requestId, decision) =>
+											void invoke("agent:permission", project.path, requestId, decision)
+										}
+										onViewAsset={onViewAsset}
+									/>
+								))}
+							</div>
 						))}
+
+						{state?.streaming && <WorkingRow />}
+
+						<FileChanges files={state?.transcript.files ?? []} />
 					</div>
-				))}
 
-				{state?.streaming && <WorkingRow />}
+					{docked?.kind === "asset-options" && (
+						<AssetOptionsBlock
+							canvasUrl={project.canvasUrl}
+							onDismiss={() => resolveDocked(null)}
+							onPick={(tag) => resolveDocked(tag)}
+							onView={onViewAsset}
+							prompt={docked}
+						/>
+					)}
+					{docked?.kind === "question" && (
+						<QuestionBlock onAnswer={resolveDocked} onDismiss={() => resolveDocked(null)} prompt={docked} />
+					)}
+					{docked?.kind === "takes" && (
+						<TakesBlock onDismiss={() => resolveDocked(null)} onPick={resolveDocked} prompt={docked} />
+					)}
 
-				<FileChanges files={state?.transcript.files ?? []} />
-			</div>
+					{state?.pendingApproval && (
+						<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-approval">
+							<p className="mb-2.5 leading-relaxed">{state.pendingApproval.question}</p>
+							<div className="flex gap-2">
+								<button
+									className="rounded-lg bg-caret-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-caret-accent-hover"
+									onClick={() =>
+										void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", true)
+									}
+									type="button">
+									{state.pendingApproval.confirmLabel}
+								</button>
+								<button
+									className="rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"
+									onClick={() =>
+										void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", false)
+									}
+									type="button">
+									{state.pendingApproval.cancelLabel}
+								</button>
+							</div>
+						</div>
+					)}
 
-			{docked?.kind === "asset-options" && (
-				<AssetOptionsBlock
-					canvasUrl={project.canvasUrl}
-					onDismiss={() => resolveDocked(null)}
-					onPick={(tag) => resolveDocked(tag)}
-					onView={onViewAsset}
-					prompt={docked}
-				/>
+					<Composer {...composer} />
+				</>
 			)}
-			{docked?.kind === "question" && (
-				<QuestionBlock onAnswer={resolveDocked} onDismiss={() => resolveDocked(null)} prompt={docked} />
-			)}
-			{docked?.kind === "takes" && (
-				<TakesBlock onDismiss={() => resolveDocked(null)} onPick={resolveDocked} prompt={docked} />
-			)}
-
-			{state?.pendingApproval && (
-				<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-approval">
-					<p className="mb-2.5 leading-relaxed">{state.pendingApproval.question}</p>
-					<div className="flex gap-2">
-						<button
-							className="rounded-lg bg-caret-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-caret-accent-hover"
-							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", true)}
-							type="button">
-							{state.pendingApproval.confirmLabel}
-						</button>
-						<button
-							className="rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"
-							onClick={() => void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", false)}
-							type="button">
-							{state.pendingApproval.cancelLabel}
-						</button>
-					</div>
-				</div>
-			)}
-
-			<Composer {...composer} />
 		</aside>
 	)
 }
@@ -894,20 +904,34 @@ function NoBackend({ detail, onOpenBackendSetup }: { detail?: string | null; onO
  */
 const HIDDEN_SESSION_TITLES = new Set(["Edit", "AI edit"])
 
+/** "14:32" for today, "Aug 21" for anything older — enough to tell sessions apart. */
+function sessionWhen(updatedAt: number): string {
+	const then = new Date(updatedAt)
+	const now = new Date()
+	const sameDay =
+		then.getFullYear() === now.getFullYear() && then.getMonth() === now.getMonth() && then.getDate() === now.getDate()
+	return sameDay
+		? then.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+		: then.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
 function SessionList({ sessions: allSessions, onPick }: { sessions: AgentSessionWire[]; onPick(id: string): void }) {
 	const sessions = allSessions.filter((session) => !HIDDEN_SESSION_TITLES.has(session.title))
 	return (
-		<div className="max-h-56 overflow-y-auto border-b border-shell-border" data-testid="chat-sessions">
+		<div className="flex-1 overflow-y-auto py-1.5" data-testid="chat-sessions">
 			{sessions.length === 0 ? (
-				<p className="px-3 py-3 text-shell-muted">Nothing here yet.</p>
+				<p className="px-3.5 py-8 text-center text-[12px] leading-relaxed text-shell-muted">
+					Nothing here yet. Conversations you have with Caret will be listed here to reopen.
+				</p>
 			) : (
 				sessions.map((session) => (
 					<button
-						className="block w-full truncate px-3 py-2 text-left transition-colors hover:bg-white/5"
+						className="flex w-full items-baseline gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-white/5"
 						key={session.id}
 						onClick={() => onPick(session.id)}
 						type="button">
-						{session.title}
+						<span className="min-w-0 flex-1 truncate">{session.title}</span>
+						<span className="shrink-0 text-[11px] text-shell-muted">{sessionWhen(session.updatedAt)}</span>
 					</button>
 				))
 			)}

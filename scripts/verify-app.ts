@@ -3941,6 +3941,30 @@ export default function CatalogDemo() {
 		return `bundled backend selected, chat enabled${model ? `, model ${model.id} (${model.source})` : ""}`
 	})
 
+	await scenario("de. chat history is its own view, not a strip on top of the conversation", async () => {
+		// The first version pushed the session list above a still-live
+		// transcript — clutter that hid most of both. Open, history must
+		// REPLACE the chat; back must restore it. Asserted on presence of the
+		// transcript element, which is the whole point of the swap.
+		await ensureChatOpen(chrome)
+		await chrome.click('[data-testid="chat-sidebar"] button[title="Earlier sessions"]')
+		await chrome.waitForSelector('[data-testid="chat-sessions"]', { timeout: 10_000 })
+		assert(
+			(await chrome.locator('[data-testid="chat-transcript"]').count()) === 0,
+			"the transcript is still rendered underneath the history view",
+		)
+		const title = await chrome.textContent('[data-testid="chat-title"]')
+		assert(title?.includes("Chat history"), `the header does not say where you are: ${title}`)
+
+		await chrome.click('[data-testid="chat-sidebar"] button[title="Back to the chat"]')
+		await chrome.waitForSelector('[data-testid="chat-transcript"]', { timeout: 10_000 })
+		assert(
+			(await chrome.locator('[data-testid="chat-sessions"]').count()) === 0,
+			"the history list survived returning to the chat",
+		)
+		return "history replaced the chat, and back restored it"
+	})
+
 	await scenario("ce. an overlay move edit gets measured geometry and lands centered, verified by re-measure", async () => {
 		// The spatial feedback loop end to end: two images, one askew; the overlay
 		// edit carries the rects the canvas measured (so the model can subtract
