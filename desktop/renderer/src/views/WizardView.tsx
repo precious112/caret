@@ -494,11 +494,14 @@ function OptionsWidget({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selected])
 
-	const columns = options.length === 2 ? "md:grid-cols-2" : "md:grid-cols-3"
-
 	return (
 		<div>
-			<div className={cn("grid gap-4", columns)}>
+			{/* One option per row, on purpose. Three-across looked tidy and lied:
+			    these options differ by a spacing unit or a radius step — a few
+			    pixels — and at a third of the column the specimens read as
+			    identical, so the user chose by label instead of by looking. A
+			    full-width tall specimen is the difference, made visible. */}
+			<div className="grid gap-4">
 				{options.map((option) => (
 					<OptionCard
 						key={option.id}
@@ -506,7 +509,7 @@ function OptionsWidget({
 						option={option}
 						recommended={option.id === question.recommendedId}
 						selected={option.id === selected}>
-						<Specimen spec={{ ...base, ...option.spec }} />
+						<Specimen spec={{ ...base, ...option.spec }} tall />
 					</OptionCard>
 				))}
 			</div>
@@ -675,7 +678,10 @@ function FontWidget({
 
 	return (
 		<div>
-			<div className="grid gap-4 md:grid-cols-3">
+			{/* Stacked like the options widget, and for the same reason: a type
+			    specimen at a third of the column is a swatch of grey. Full width,
+			    the heading sets at display size and the faces stop looking alike. */}
+			<div className="grid gap-4">
 				{options.map((option) => (
 					<OptionCard
 						key={option.id}
@@ -687,7 +693,7 @@ function FontWidget({
 						recommended={option.id === question.recommendedId && !customFamily}
 						selected={option.id === selected && !customFamily}>
 						{/* The option's label IS the family — the card renders in it. */}
-						<Specimen spec={{ ...base, ...option.spec, displayFamily: option.label }} />
+						<Specimen spec={{ ...base, ...option.spec, displayFamily: option.label }} tall />
 					</OptionCard>
 				))}
 			</div>
