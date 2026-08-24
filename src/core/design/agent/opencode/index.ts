@@ -31,8 +31,10 @@ import {
 	type StructuredRequest,
 	type StructuredResult,
 } from "../backend"
+import { EventQueue } from "../stream-utils"
 import { resolveOpencodeBinary } from "./binary"
 import { openEventStream, request } from "./http"
+import { watchStreamErrors } from "./log-tail"
 import type {
 	OpencodeCatalogueModel,
 	OpencodeCatalogueResponse,
@@ -822,6 +824,34 @@ class OpencodeSessionHandle implements BackendSession {
 		// re-run forever. The mapper recognises the user's message by role instead.
 		const mapper = new EventMapper(this.id)
 
+		// The bus and the server's own log feed one queue. The pinned server
+		// retries a failed provider stream without emitting anything (see
+		// log-tail.ts), so the tailer reads the log line the server DOES write
+		// and synthesizes the `session.retry.scheduled` event a newer server
+		// would have sent — one mapping path either way, and the tailer deletes
+		// cleanly when the pin bump makes the real event arrive.
+		const queue = new EventQueue<OpencodeEvent>()
+		const pump = (async () => {
+			try {
+				for await (const event of events) queue.push(event)
+			} catch {
+				// The abort in finally lands here; the queue just closes.
+			} finally {
+				queue.close()
+			}
+		})()
+		let retriesSeen = 0
+		const tail = watchStreamErrors({
+			sessionId: this.id,
+			onError: (message) => {
+				retriesSeen += 1
+				queue.push({
+					type: "session.retry.scheduled",
+					properties: { sessionID: this.id, attempt: retriesSeen, error: { message } },
+				})
+			},
+		})
+
 		try {
 			await request(this.server, `/session/${this.id}/prompt_async`, {
 				method: "POST",
@@ -844,14 +874,16 @@ class OpencodeSessionHandle implements BackendSession {
 				},
 			})
 
-			for await (const event of events) {
+			for await (const event of queue) {
 				for (const mapped of mapper.map(event)) {
 					yield mapped
 					if (mapped.type === "done") return
 				}
 			}
 		} finally {
+			tail.stop()
 			controller.abort()
+			await pump.catch(() => {})
 		}
 	}
 
