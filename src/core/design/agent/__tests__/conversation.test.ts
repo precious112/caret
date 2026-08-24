@@ -69,6 +69,44 @@ describe("AgentConversation.run", () => {
 		assert.equal(outcome.ok, false, "an empty turn was reported as a success")
 	})
 
+	it("fails a turn whose only 'activity' was usage bookkeeping — an empty model step", async () => {
+		// Observed on a free alpha model: the loop ran one step, emitted only
+		// its token count, and exited. The usage event counted as activity and
+		// the user was shown literally nothing.
+		const conversation = new AgentConversation(
+			deps(
+				stubBackend([
+					{ type: "usage", inputTokens: 100, outputTokens: 0 },
+					{ type: "done", text: "" },
+				]),
+			),
+		)
+
+		const outcome = await conversation.run(REQUEST)
+
+		assert.equal(outcome.ok, false, "a usage-only turn was reported as a success")
+		const error = conversation.getState().transcript.entries.find((entry) => entry.kind === "error")
+		assert(error && error.kind === "error" && /empty response/.test(error.message), "the error does not say what happened")
+	})
+
+	it("notes a turn that did tool work and then said nothing", async () => {
+		const conversation = new AgentConversation(
+			deps(
+				stubBackend([
+					{ type: "tool-start", callId: "c1", name: "caret_get_screenshot", summary: "home" },
+					{ type: "tool-end", callId: "c1", name: "caret_get_screenshot", ok: true },
+					{ type: "done", text: "" },
+				]),
+			),
+		)
+
+		const outcome = await conversation.run(REQUEST)
+
+		assert.equal(outcome.ok, true, "a tool-only turn is still a completed turn")
+		const note = conversation.getState().transcript.entries.find((entry) => entry.kind === "note")
+		assert(note && note.kind === "note" && /without a reply/.test(note.text), "the silence went unremarked")
+	})
+
 	it("keeps a turn with assistant activity a success", async () => {
 		const conversation = new AgentConversation(
 			deps(

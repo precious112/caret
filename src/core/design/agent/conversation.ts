@@ -281,13 +281,25 @@ export class AgentConversation {
 		// the prompt, its own loop finds nothing to do, and a perfectly real idle
 		// arrives over an otherwise empty stream. That is a failed turn, not a
 		// quiet success — reporting it `ok` is how a broken sync spent days being
-		// blamed on the model. `done` alone is not activity.
-		let sawActivity = false
+		// blamed on the model. `done` alone is not activity — and neither is a
+		// usage event: an EMPTY model step still reports its token count, and
+		// that bookkeeping once counted as "activity" and let a turn end showing
+		// the user literally nothing.
+		let sawAnyEvent = false
+		let sawVisible = false
 
 		try {
 			for await (const event of session.send({ text: request.prompt, images: request.images })) {
 				this.lastEventAt = Date.now()
-				if (event.type !== "done") sawActivity = true
+				if (event.type !== "done") sawAnyEvent = true
+				if (
+					event.type === "text" ||
+					event.type === "thinking" ||
+					event.type === "tool-start" ||
+					event.type === "permission"
+				) {
+					sawVisible = true
+				}
 				if (event.type === "text") text += event.text
 				if (event.type === "error") ok = false
 
@@ -312,14 +324,21 @@ export class AgentConversation {
 		} finally {
 			// A user's Stop can also end a turn before its first event; that is
 			// their call, not a backend fault.
-			if (ok && !sawActivity && !this.stopRequested) {
+			if (ok && !sawVisible && !this.stopRequested) {
 				ok = false
 				applyEvent(this.transcript, {
 					type: "error",
-					message:
-						"The backend accepted the prompt but never ran it — nothing was done. This is a Caret↔backend fault, not the model.",
+					message: sawAnyEvent
+						? "The model returned an empty response — it ran, and generated nothing. Send again, or switch model."
+						: "The backend accepted the prompt but never ran it — nothing was done. This is a Caret↔backend fault, not the model.",
 					recoverable: true,
 				})
+			}
+			// The other half-empty ending: the model did real work (tools ran)
+			// and then closed its mouth. The user asked a question; "nothing"
+			// is not an answer they should have to infer from silence.
+			if (ok && sawVisible && text.trim() === "" && !this.stopRequested) {
+				addNote(this.transcript, "The model ended its turn without a reply.")
 			}
 			this.streaming = false
 			this.push(true)
