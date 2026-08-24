@@ -124,12 +124,13 @@ export function applyEvent(state: TranscriptState, event: BackendEvent): void {
 		}
 
 		case "retry":
-			// Caret's own voice, kept in the record: a turn that limped through
-			// five provider retries should read that way when replayed.
+			// An error entry, not a muted note — it IS an error, and it renders
+			// red. The turn stays alive (the backend is retrying), which is why
+			// this is a transcript entry and not a turn failure.
 			state.entries.push({
-				kind: "note",
-				id: nextId("note"),
-				text: `The provider errored${event.message ? ` ("${event.message}")` : ""} — the backend is retrying${
+				kind: "error",
+				id: nextId("error"),
+				message: `The provider errored${event.message ? `: "${event.message}"` : ""} — the backend is retrying${
 					event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""
 				}.`,
 			})
