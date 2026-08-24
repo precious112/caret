@@ -123,6 +123,18 @@ export function applyEvent(state: TranscriptState, event: BackendEvent): void {
 			return
 		}
 
+		case "retry":
+			// Caret's own voice, kept in the record: a turn that limped through
+			// five provider retries should read that way when replayed.
+			state.entries.push({
+				kind: "note",
+				id: nextId("note"),
+				text: `The provider errored${event.message ? ` ("${event.message}")` : ""} — the backend is retrying${
+					event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""
+				}.`,
+			})
+			return
+
 		case "usage":
 			state.usage = {
 				inputTokens: state.usage.inputTokens + (event.inputTokens ?? 0),

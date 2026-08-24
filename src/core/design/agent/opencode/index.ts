@@ -990,6 +990,24 @@ export class EventMapper {
 				return
 			}
 
+			case "session.retry.scheduled": {
+				// Armed for the future: the pinned server never emits this (see
+				// protocol.ts), but the first one that does turns seven silent
+				// minutes into "the provider errored — retrying" in the chat.
+				const retry = event.properties as {
+					sessionID?: string
+					attempt?: number
+					error?: { name?: string; message?: string; data?: { message?: string } }
+				}
+				if (retry.sessionID && retry.sessionID !== this.sessionId) return
+				yield {
+					type: "retry",
+					...(retry.attempt !== undefined ? { attempt: retry.attempt } : {}),
+					...(retry.error ? { message: retry.error.data?.message ?? retry.error.message ?? retry.error.name } : {}),
+				}
+				return
+			}
+
 			case "session.error": {
 				const properties = event.properties as {
 					sessionID?: string

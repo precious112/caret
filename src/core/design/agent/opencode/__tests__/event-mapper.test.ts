@@ -167,6 +167,35 @@ describe("EventMapper", () => {
 		assert.deepEqual(events, [])
 	})
 
+	// Armed for the future: the pinned server (1.18.11) never emits this — its
+	// own /doc has no session.retry — but newer servers do, and the mapping is
+	// what turns seven silent minutes into "the provider errored — retrying".
+	it("maps session.retry.scheduled to a retry event with the provider's words", () => {
+		const mapper = new EventMapper(SESSION)
+		const events = collect(mapper, [
+			{
+				type: "session.retry.scheduled",
+				properties: {
+					sessionID: SESSION,
+					attempt: 2,
+					error: { name: "AI_APICallError", data: { message: "Endpoint is unavailable." } },
+				},
+			} as OpencodeEvent,
+		])
+		assert.deepEqual(events, [{ type: "retry", attempt: 2, message: "Endpoint is unavailable." }])
+	})
+
+	it("drops another session's retry, and tolerates one with no detail", () => {
+		const mapper = new EventMapper(SESSION)
+		const foreign = collect(mapper, [
+			{ type: "session.retry.scheduled", properties: { sessionID: "ses_other", attempt: 1 } } as OpencodeEvent,
+		])
+		assert.deepEqual(foreign, [])
+
+		const bare = collect(mapper, [{ type: "session.retry.scheduled", properties: {} } as OpencodeEvent])
+		assert.deepEqual(bare, [{ type: "retry" }])
+	})
+
 	it("maps session.idle for this session to done, and ignores other sessions'", () => {
 		const mapper = new EventMapper(SESSION)
 		const foreign = collect(mapper, [{ type: "session.idle", properties: { sessionID: "ses_other" } }])

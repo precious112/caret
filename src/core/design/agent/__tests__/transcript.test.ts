@@ -61,3 +61,24 @@ describe("transcript permissions", () => {
 		assert.equal(e.automatic, undefined)
 	})
 })
+
+describe("transcript retries", () => {
+	it("a backend retry lands as a note in Caret's voice, with the provider's words", () => {
+		const state = emptyTranscript()
+		applyEvent(state, { type: "retry", attempt: 2, message: "Endpoint is unavailable." })
+
+		const note = state.entries[0]
+		assert.equal(note?.kind, "note")
+		assert(note.kind === "note" && note.text.includes("Endpoint is unavailable."), "the provider's words are missing")
+		assert(note.kind === "note" && note.text.includes("attempt 2"), "the attempt count is missing")
+	})
+
+	it("a bare retry still says what is happening", () => {
+		const state = emptyTranscript()
+		applyEvent(state, { type: "retry" })
+
+		const note = state.entries[0]
+		assert.equal(note?.kind, "note")
+		assert(note.kind === "note" && /retrying/.test(note.text))
+	})
+})

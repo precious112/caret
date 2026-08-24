@@ -91,6 +91,22 @@ export type OpencodeEvent =
 	// Ignored: `session.idle` is the turn boundary. Listed so nobody mistakes it
 	// for an undocumented completion signal — the pinned binary emits both.
 	| { type: "session.status"; properties: { sessionID: string; status?: { type?: string } } }
+	// NOT emitted by the pinned server (1.18.11 — absent from its own /doc,
+	// which does list every event measured live). Newer servers broadcast it
+	// when a failed provider stream is scheduled for retry, and the bundled
+	// client half of this very binary already consumes it. Declared and mapped
+	// now so the pin bump lights it up instead of needing to rediscover it;
+	// the shape mirrors that client's reads (attempt, at, error.message).
+	| {
+			type: "session.retry.scheduled"
+			properties: {
+				sessionID?: string
+				assistantMessageID?: string
+				attempt?: number
+				at?: number
+				error?: { name?: string; message?: string; data?: { message?: string } }
+			}
+	  }
 	| { type: "session.idle"; properties: { sessionID: string } }
 	| { type: "session.error"; properties: { sessionID?: string; error?: { name?: string; data?: { message?: string } } } }
 	| { type: "file.edited"; properties: { file: string } }

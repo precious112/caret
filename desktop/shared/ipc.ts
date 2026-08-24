@@ -383,6 +383,8 @@ export interface AgentStateWire {
 	blocked: string | null
 	activity: { id: string; kind: string; title: string; mode: "read-only" | "write"; sessionId: string } | null
 	streaming: boolean
+	/** When the backend last said anything during this turn. Null outside one. */
+	lastEventAt: number | null
 	transcript: {
 		entries: TranscriptEntryWire[]
 		files: string[]

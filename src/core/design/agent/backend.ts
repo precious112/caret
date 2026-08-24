@@ -176,6 +176,15 @@ export type BackendEvent =
 	 */
 	| { type: "permission-resolved"; requestId: string; allowed: boolean }
 	| { type: "usage"; inputTokens?: number; outputTokens?: number; costUsd?: number }
+	/**
+	 * The backend's provider call failed and the backend is retrying on its
+	 * own. Not an error: the turn is still alive, and marking it failed would
+	 * be wrong. What it is, is the difference between "thinking" and "banging
+	 * on a dead door" — a user watched Working… for seven minutes while the
+	 * provider said "Endpoint is unavailable" twice where only a log could
+	 * hear it.
+	 */
+	| { type: "retry"; attempt?: number; message?: string }
 	| { type: "done"; text: string }
 	| { type: "error"; message: string; recoverable: boolean }
 

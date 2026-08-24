@@ -52,6 +52,19 @@ export interface ConversationState {
 	blocked: string | null
 	activity: Activity | null
 	streaming: boolean
+	/**
+	 * When the backend last said anything at all during the current turn —
+	 * a token, a thought, a tool event. The renderer computes the silence from
+	 * this on its own clock, which is what lets "Working…" distinguish a model
+	 * that is thinking (reasoning deltas keep this fresh) from a provider that
+	 * is failing and being silently retried. The PINNED server (1.18.11) emits
+	 * no event for a retried stream — measured against its own API doc — so
+	 * silence is the only version-proof signal; newer servers emit
+	 * `session.retry.scheduled`, which the mapper already understands and which
+	 * refreshes this clock with a transcript note when the pin catches up.
+	 * Null outside a turn.
+	 */
+	lastEventAt: number | null
 	transcript: TranscriptState
 	pendingApproval: PendingApproval | null
 	/** Whether app-path writes still prompt in this project. */
@@ -147,6 +160,7 @@ export class AgentConversation {
 	private activity: Activity | null = null
 	private session: BackendSession | null = null
 	private streaming = false
+	private lastEventAt: number | null = null
 	private pendingApproval: PendingApproval | null = null
 	private approvalResolver: ((ok: boolean) => void) | null = null
 	private backendId: BackendId | null = null
@@ -169,6 +183,7 @@ export class AgentConversation {
 			blocked: this.blocked,
 			activity: this.activity,
 			streaming: this.streaming,
+			lastEventAt: this.lastEventAt,
 			transcript: this.transcript,
 			pendingApproval: this.pendingApproval,
 			appWrites: this.deps.appWrites(),
@@ -220,6 +235,9 @@ export class AgentConversation {
 		if (request.note) addNote(this.transcript, request.note)
 		addUserMessage(this.transcript, request.displayPrompt ?? request.prompt)
 		this.streaming = true
+		// The turn's own start counts as the last sign of life, so the silence
+		// clock starts honestly even if the very first token never comes.
+		this.lastEventAt = Date.now()
 		this.push(true)
 
 		// The session title is what the History panel shows, and a list reading
@@ -268,6 +286,7 @@ export class AgentConversation {
 
 		try {
 			for await (const event of session.send({ text: request.prompt, images: request.images })) {
+				this.lastEventAt = Date.now()
 				if (event.type !== "done") sawActivity = true
 				if (event.type === "text") text += event.text
 				if (event.type === "error") ok = false

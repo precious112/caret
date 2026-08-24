@@ -289,7 +289,7 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 							</div>
 						))}
 
-						{state?.streaming && <WorkingRow />}
+						{state?.streaming && <WorkingRow lastEventAt={state.lastEventAt} />}
 
 						<FileChanges files={state?.transcript.files ?? []} />
 					</div>
@@ -1287,7 +1287,12 @@ function elapsedLabel(seconds: number): string {
 	return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`
 }
 
-function WorkingRow() {
+/** True silence before this reads as a problem. A thinking model streams
+ *  reasoning and keeps `lastEventAt` fresh; only a stream dying upstream (and
+ *  being silently retried) leaves nothing for minutes. */
+const QUIET_WORRY_SECONDS = 60
+
+function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
 	const [startedAt] = useState(() => Date.now())
 	const [, tick] = useState(0)
 
@@ -1297,12 +1302,21 @@ function WorkingRow() {
 	}, [])
 
 	const seconds = Math.floor((Date.now() - startedAt) / 1000)
+	const quiet = lastEventAt ? Math.floor((Date.now() - lastEventAt) / 1000) : 0
 
 	return (
-		<div className="mt-3 flex items-center gap-2.5 text-[12px] text-shell-muted" data-testid="chat-working">
-			<ThinkingOrb size={20} state="working" theme="dark" />
-			<span>Working…</span>
-			{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
+		<div className="mt-3" data-testid="chat-working">
+			<div className="flex items-center gap-2.5 text-[12px] text-shell-muted">
+				<ThinkingOrb size={20} state="working" theme="dark" />
+				<span>Working…</span>
+				{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
+			</div>
+			{quiet >= QUIET_WORRY_SECONDS && (
+				<p className="mt-1.5 pl-[30px] text-[11.5px] leading-relaxed text-shell-muted/80" data-testid="chat-quiet">
+					Nothing has arrived from the model in {elapsedLabel(quiet)}. It may be waiting on a failing provider —
+					stopping and switching model is safe.
+				</p>
+			)}
 		</div>
 	)
 }
