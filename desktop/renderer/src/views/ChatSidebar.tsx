@@ -1287,10 +1287,14 @@ function elapsedLabel(seconds: number): string {
 	return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`
 }
 
-/** True silence before this reads as a problem. A thinking model streams
- *  reasoning and keeps `lastEventAt` fresh; only a stream dying upstream (and
- *  being silently retried) leaves nothing for minutes. */
-const QUIET_WORRY_SECONDS = 60
+/**
+ * How long since the LAST backend event — not since the turn began — before
+ * the label softens to "Working for longer…". A long turn full of activity
+ * stays plain "Working…" forever; only genuine quiet changes the words. When
+ * the provider actually errors, the transcript shows the provider's own words
+ * (see log-tail.ts); the label never diagnoses.
+ */
+const QUIET_LABEL_SECONDS = 60
 
 function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
 	const [startedAt] = useState(() => Date.now())
@@ -1305,23 +1309,10 @@ function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
 	const quiet = lastEventAt ? Math.floor((Date.now() - lastEventAt) / 1000) : 0
 
 	return (
-		<div className="mt-3" data-testid="chat-working">
-			<div className="flex items-center gap-2.5 text-[12px] text-shell-muted">
-				<ThinkingOrb size={20} state="working" theme="dark" />
-				<span>Working…</span>
-				{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
-			</div>
-			{quiet >= QUIET_WORRY_SECONDS && (
-				// Fact only, no diagnosis. A slow model earns "still waiting" and
-				// nothing more — the first version speculated about failing
-				// providers while the model was merely slow, which is a false
-				// alarm dressed as help. When the provider actually errors, the
-				// transcript shows the provider's own words (see log-tail.ts);
-				// this line's only job is to say the wait is real.
-				<p className="mt-1.5 pl-[30px] text-[11.5px] leading-relaxed text-shell-muted/80" data-testid="chat-quiet">
-					Still waiting — nothing from the model in {elapsedLabel(quiet)}.
-				</p>
-			)}
+		<div className="mt-3 flex items-center gap-2.5 text-[12px] text-shell-muted" data-testid="chat-working">
+			<ThinkingOrb size={20} state="working" theme="dark" />
+			<span>{quiet >= QUIET_LABEL_SECONDS ? "Working for longer than usual…" : "Working…"}</span>
+			{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
 		</div>
 	)
 }
