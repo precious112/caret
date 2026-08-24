@@ -5330,6 +5330,11 @@ export default function CatalogDemo() {
 		skipPaid("bk. a mark is drawn, watched converging, and indexed")
 	} else if (!claudeReady) {
 		skip("bk. a mark is drawn, watched converging, and indexed", "the Claude CLI is not signed in on this machine")
+	} else if (!process.env.GEMINI_API_KEY && !process.env.CARET_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
+		skip(
+			"bk. a mark is drawn, watched converging, and indexed",
+			"the mark lane draws from a generated target image and needs Gemini or Vertex credentials",
+		)
 	} else {
 		await scenario("bk. a mark is drawn, watched converging, and indexed", async () => {
 			// The loop needs a model that accepts images, and the fixture's selected
@@ -5363,9 +5368,10 @@ export default function CatalogDemo() {
 			)
 			await flow.getByTestId("mark-generate").click()
 
-			// The vision probe plus three rounds of a real model. Minutes.
+			// The vision probe, a target image, and up to six rounds of a real
+			// model closing the gap. Minutes.
 			const result = flow.getByTestId("mark-result")
-			await result.waitFor({ timeout: 480_000 })
+			await result.waitFor({ timeout: 720_000 })
 
 			// The convergence was streamed, not just claimed: at least one round's
 			// render arrived as an image that actually decodes.

@@ -1,40 +1,65 @@
 /**
- * Logos and marks: a model authoring SVG inside a look-again loop.
+ * Logos and marks: an image model authors the look, a coding model traces it.
  *
  * Two different tasks hide under "can a model draw vector", and only one of
  * them works. **Emitting paths from a description alone** is the case where
  * "models are bad at SVG" is simply true — there is no ground truth, so nothing
- * corrects the first guess. **Reproducing something it can see** converges,
- * because each round has a reference to be wrong about.
+ * corrects the first guess, and three rounds of self-critique refine a mediocre
+ * first idea into a polished mediocre idea. **Reproducing something it can see**
+ * converges, because every round has a reference to be wrong about.
  *
- * So the loop is the product, not the first emission: the model emits SVG,
- * Caret renders it in isolation and screenshots it, and sends that picture back
- * into the same session beside the brief. The model sees what it actually drew
- * — usually for the first time — and corrects.
+ * So the lane is split along what each model is actually good at. The image
+ * model (the raster lane's Gemini adapter) is good at logo *aesthetics* — shape
+ * language, proportion, balance — and authors the target as a flat two-colour
+ * picture. The coding model is good at *structure* — it decomposes the target
+ * into primitives and emits semantic SVG (a <circle>, a symmetric path), which
+ * is why the result stays small, editable and token-recolourable where a
+ * bitmap tracer would emit path soup. Its one goal, stated in the system
+ * prompt and enforced by the loop, is to make its render IDENTICAL to the
+ * target: each round it is shown TARGET and YOURS side by side in one
+ * composite, names the differences, and corrects.
  *
- * **Caret decides when to stop, not the model.** Three rounds: emit, look,
- * correct, look, correct. Most of the gain is in the first two, and a model
- * asked "is it good yet?" will say yes.
+ * **Caret decides when to stop, not the model.** A model asked "is it close
+ * enough yet?" says yes; a pixel comparison does not. Caret measures the
+ * similarity of each render against the target and stops on convergence, on
+ * plateau, or at the round cap — and keeps the *most similar* renderable SVG,
+ * not the most recent one.
  *
  * A backend whose adapter cannot pass images cannot run this lane, and is told
- * so rather than being allowed to loop blind. That check is not a formality —
- * one of Caret's own adapters was silently discarding every image it was given,
- * which would have made this loop three rounds of a model critiquing a
- * screenshot it never saw while looking exactly like it was working.
+ * so rather than being allowed to loop blind. Likewise a project with no image
+ * lane: the target IS the design here, so its absence is a stated failure, not
+ * a silent fall-back to drawing from words.
  */
-import { BrowserWindow } from "electron"
+import { BrowserWindow, nativeImage } from "electron"
 
 import type { BackendSession, FoundationTokens } from "../../src/core/design"
-import { derivePalette, foundationWords, getBackend, SLOP_TELLS } from "../../src/core/design"
+import { derivePalette, foundationWords, GeminiImages, getBackend, NO_RASTER_REASON } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { rasterConfig } from "./generate-assets"
+import { bitmapSimilarity } from "./pixel-similarity"
 import { getPrefs } from "./prefs"
 import { canSeeImages } from "./vision-cache"
 
-/** Emit, look, correct, look, correct. Agreed rather than tuned. */
-export const MARK_ROUNDS = 3
+/**
+ * The round cap. Reproduction needs more looks than invention did (the old
+ * loop's three), and the similarity stops below usually end it earlier.
+ */
+export const MAX_MARK_ROUNDS = 6
+
+/** Similar enough to stop: further rounds polish pixels nobody can see. */
+const SIMILARITY_DONE = 0.97
+
+/**
+ * Two consecutive rendered rounds that fail to beat the best by this much are
+ * a plateau — the model has stopped finding differences it can fix.
+ */
+const PLATEAU_EPSILON = 0.005
 
 /** The frame a mark is rendered into for review. Square, because marks are. */
 const REVIEW_SIZE = 512
+
+/** The label strip above each panel of the comparison composite. */
+const LABEL_HEIGHT = 40
 
 export interface MarkRequest {
 	projectPath: string
@@ -52,15 +77,15 @@ export interface MarkRequest {
 }
 
 export type MarkResult =
-	| { ok: true; svg: string; rounds: number; model: string; transcript: string[]; previewPng: Buffer }
+	| { ok: true; svg: string; rounds: number; similarity: number; model: string; transcript: string[]; previewPng: Buffer }
 	| { ok: false; reason: string; needsAnotherModel?: boolean }
 
 /**
- * Runs the loop and returns the last SVG that rendered.
+ * Runs the loop and returns the SVG that came closest to the target.
  *
- * "That rendered" is load-bearing: a later round that emits something broken
- * must not replace an earlier round that worked. The loop keeps the best
- * *renderable* answer rather than the most recent one.
+ * "Closest" is load-bearing: a later round that drifts must not replace an
+ * earlier round that matched better, and a later round that emits something
+ * broken must not replace one that rendered at all.
  */
 export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 	const prefs = getPrefs()
@@ -74,8 +99,8 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 
 	const model = request.modelOverride?.trim() || prefs.backendModel || ""
 
-	// Checked before a session is started, so a model that cannot see costs one
-	// tiny probe rather than three rounds of pretending.
+	// Checked before anything is spent, so a model that cannot see costs one
+	// tiny probe rather than a target image and six rounds of pretending.
 	const vision = await canSeeImages(backendId, model, request.projectPath)
 	if (!vision.sees) return { ok: false, reason: vision.reason, needsAnotherModel: true }
 
@@ -83,29 +108,41 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 	if (!backend) return { ok: false, reason: `No backend called "${backendId}" is available.` }
 
 	const palette = derivePalette(request.tokens)
-	const transcript: string[] = []
 	const progress = request.onProgress ?? (() => {})
+
+	// The target comes first: it IS the mark, aesthetically. Everything after
+	// this is tracing.
+	progress({ stage: "Generating the target image" })
+	const target = await generateTarget(request.brief, palette)
+	if (!target.ok) return { ok: false, reason: target.reason }
+	progress({ stage: "Target ready — asking the model to reproduce it as vector", previewPng: target.png })
+
+	const transcript: string[] = []
 	let session: BackendSession | null = null
 	let best = ""
 	let bestPng: Buffer | null = null
+	let bestSimilarity = -1
 	let rounds = 0
+	let sinceImprovement = 0
 
 	try {
-		progress({ stage: "Asking the model for a first attempt" })
 		session = await backend.startSession({
 			workingDirectory: request.projectPath,
 			// It draws; it does not touch the repository. Read-only is the boundary
-			// that makes "let a model run three turns unattended" reasonable at all.
+			// that makes "let a model run six turns unattended" reasonable at all.
 			mode: "read-only",
 			model: model || undefined,
 			title: "caret mark",
 			systemPrompt: SYSTEM_PROMPT,
 		})
 
-		let reply = await turn(session, { text: openingPrompt(request.brief, palette) })
+		let reply = await turn(session, {
+			text: openingPrompt(request.brief, palette),
+			images: [`data:${target.mime};base64,${target.png.toString("base64")}`],
+		})
 		transcript.push(reply)
 
-		for (let round = 1; round <= MARK_ROUNDS; round++) {
+		for (let round = 1; round <= MAX_MARK_ROUNDS; round++) {
 			const svg = extractSvg(reply)
 			if (!svg) {
 				progress({ stage: `Round ${round}: the reply had no SVG — asking again` })
@@ -124,16 +161,32 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 				continue
 			}
 
-			best = svg
-			bestPng = png
 			rounds = round
-			progress({ stage: `Round ${round} rendered`, round, previewPng: png })
-			if (round === MARK_ROUNDS) break
+			const score = similarity(target.png, png)
+			if (score > bestSimilarity + PLATEAU_EPSILON) {
+				sinceImprovement = 0
+			} else {
+				sinceImprovement++
+			}
+			if (score > bestSimilarity) {
+				best = svg
+				bestPng = png
+				bestSimilarity = score
+			}
+			progress({ stage: `Round ${round}: ${percent(score)} match`, round, previewPng: png })
 
-			progress({ stage: `Showing the model its own round ${round}` })
+			if (score >= SIMILARITY_DONE) break
+			if (sinceImprovement >= 2) break
+			if (round === MAX_MARK_ROUNDS) break
+
+			progress({ stage: `Showing the model the differences (best so far ${percent(bestSimilarity)})` })
+			const composite = await renderComposite(target.png, target.mime, png, palette.surface)
 			reply = await turn(session, {
-				text: critiquePrompt(request.brief, round),
-				images: [`data:image/png;base64,${png.toString("base64")}`],
+				text: differencePrompt(score, round),
+				// The composite is one image on purpose: models compare far more
+				// reliably within a single frame than across attachments, and it
+				// sidesteps any adapter that mishandles multi-image turns.
+				images: [`data:image/png;base64,${(composite ?? png).toString("base64")}`],
 			})
 			transcript.push(reply)
 		}
@@ -145,55 +198,114 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 	}
 
 	if (!best || !bestPng) return { ok: false, reason: "The model never produced an SVG that rendered." }
-	return { ok: true, svg: best, rounds, model: model || "(backend default)", transcript, previewPng: bestPng }
+	return {
+		ok: true,
+		svg: best,
+		rounds,
+		similarity: bestSimilarity,
+		model: model || "(backend default)",
+		transcript,
+		previewPng: bestPng,
+	}
 }
 
-const SYSTEM_PROMPT = `You are drawing a single vector mark — a logo, monogram or symbol — as SVG, inside a design tool.
+/**
+ * The target: a flat two-colour picture of the mark, from the raster lane.
+ *
+ * The prompt pins the things the SVG constraints will need to be true later —
+ * exactly two colours, flat shapes, no text — so the tracer is never asked to
+ * reproduce something the vector rules forbid.
+ */
+async function generateTarget(
+	brief: string,
+	palette: ReturnType<typeof derivePalette>,
+): Promise<{ ok: true; png: Buffer; mime: string } | { ok: false; reason: string }> {
+	const config = rasterConfig()
+	if (!config) return { ok: false, reason: NO_RASTER_REASON }
+
+	const client = new GeminiImages(config)
+	const ask = () =>
+		client.generate({
+			prompt: targetPrompt(brief, palette),
+			avoid: TARGET_AVOID,
+			aspect: "1:1",
+		})
+
+	let result = await ask()
+	if (!result.ok && result.retryable) {
+		await new Promise((resolve) => setTimeout(resolve, 6000))
+		result = await ask()
+	}
+	if (!result.ok) return { ok: false, reason: `The target image could not be generated: ${result.reason}` }
+	return { ok: true, png: result.bytes, mime: result.mime }
+}
+
+function targetPrompt(brief: string, palette: ReturnType<typeof derivePalette>): string {
+	return [
+		`A flat vector-style logo mark: ${brief.trim()}.`,
+		`Exactly two solid colours — ${palette.brand} and ${palette.ink} — on a plain ${palette.surface} background.`,
+		"Flat solid shapes with clean, confident edges: the look of a finished SVG, not a photograph or a render.",
+		"Centred in a square frame, the mark filling about two thirds of it, with generous even margins.",
+		"Simple enough to stay legible at 24 pixels: no detail thinner than a bold stroke.",
+		foundationWords(palette),
+	].join(" ")
+}
+
+/**
+ * The mark-specific negative constraints. SLOP_TELLS is for photographs; a
+ * logo target has its own failure modes, and they are these.
+ */
+const TARGET_AVOID = [
+	"no gradients, no shadows, no highlights, no bevels, no texture or grain",
+	"no 3D rendering, no photorealism, no paper or business-card mockup",
+	"no letters, no words, no typography of any kind",
+	"no more than two colours besides the background",
+	"no thin hairlines or fussy detail that would vanish at small sizes",
+]
+
+const SYSTEM_PROMPT = `You are reproducing a picture of a logo mark as SVG, inside a design tool. Your one goal is that your SVG, rendered, is IDENTICAL to the target picture — same shapes, same proportions, same positions, same colours. You are tracing, not designing: where your render and the target disagree, the target is right.
 
 Rules that are not negotiable:
-- Reply with the SVG element and nothing else. No prose, no code fence, no explanation.
+- Every working reply ENDS with the complete <svg> element. Nothing after the closing tag.
 - A square viewBox, no wider than 512.
 - Paths and basic shapes only. No <image>, no <foreignObject>, no external references, no scripts.
 - No text elements. A font you name will not be present when this renders, and the mark would silently become the fallback face.
 - Two colours at most, both from the palette you are given.
-- It must read at 24px. That is the size it will actually be used at most often.
+- Prefer semantic primitives — <circle>, <rect>, symmetric paths — over freeform point soup. The SVG will be edited by hand later.
 
-You will be shown a picture of what you drew and asked to correct it. Look at the picture, not at your intentions for it.`
+You will be shown the target beside a render of what you drew and asked to close the gap. Look at the pictures, not at your intentions.`
 
 function openingPrompt(brief: string, palette: ReturnType<typeof derivePalette>): string {
 	return [
-		`Draw a mark for: ${brief.trim()}`,
+		"The attached picture is the target mark. Reproduce it as SVG, identically.",
 		"",
-		`Palette — use only these: ${palette.brand} (the brand colour), ${palette.ink} (ink), ${palette.surface} (the surface it sits on).`,
-		foundationWords(palette),
+		"First, in a few lines, decompose the target's geometry: which primitive shapes make it up, their proportions, and how they sit relative to each other. Getting the structure right in words first is what makes the paths come out right.",
 		"",
-		`Avoid: ${SLOP_TELLS.join("; ")}.`,
+		`Colours — the target uses these and so must you: ${palette.brand} (the brand colour), ${palette.ink} (ink), on ${palette.surface} (the surface it sits on).`,
 		"",
-		"Send the SVG only.",
+		`For context, the mark is for: ${brief.trim()}`,
+		"",
+		"Then send the SVG. End with it — nothing after the closing tag.",
 	].join("\n")
 }
 
 /**
- * The correction prompt.
- *
- * Names what to look at rather than asking "is it good?", because a model asked
- * to judge its own work says yes. The listed faults are the ones that actually
- * turn up in emitted marks: strokes that vanish at small sizes, shapes that
- * nearly-but-don't align, and accidental symmetry breaks.
+ * The correction prompt. Names the job — eliminate differences — rather than
+ * asking "is it good?", because a model judging its own work says yes, and
+ * good was the image model's job anyway.
  */
-function critiquePrompt(brief: string, round: number): string {
+function differencePrompt(score: number, round: number): string {
 	return [
-		`This is a picture of the SVG you just sent, rendered at ${REVIEW_SIZE}px. Round ${round} of ${MARK_ROUNDS - 1}.`,
+		`The attached picture shows the TARGET on the left and YOUR current render on the right. They match ${percent(score)}; round ${round} of at most ${MAX_MARK_ROUNDS}.`,
 		"",
-		"Look at the image and answer honestly: what is wrong with it?",
-		"- Is anything clipped by the viewBox, or floating off-centre?",
-		"- Would the thinnest stroke survive being shown at 24px?",
-		"- Are shapes that should align actually aligned, or out by a pixel or two?",
-		"- Does it read as the thing it is meant to be, or only as an abstract shape?",
-		`- Does it still serve the brief: ${brief.trim()}`,
+		"Name the concrete differences, shape by shape: proportion, position, curvature, stroke weight, colour. Ignore nothing you can see — the differences you do not name are the ones that survive.",
 		"",
-		"Then send a corrected SVG. Only the SVG.",
+		"Then send a corrected SVG that eliminates them. End with the SVG, nothing after it.",
 	].join("\n")
+}
+
+function percent(score: number): string {
+	return `${Math.round(Math.max(0, score) * 100)}%`
 }
 
 async function turn(session: BackendSession, input: { text: string; images?: string[] }): Promise<string> {
@@ -208,10 +320,9 @@ async function turn(session: BackendSession, input: { text: string; images?: str
 /**
  * The first `<svg>…</svg>` in a reply.
  *
- * Tolerant of the fence and the preamble the system prompt asked it not to
- * send, because refusing a good mark over a stray "Here you go:" would be
- * pedantry — and strict about what it extracts, so nothing after the closing
- * tag ends up in the file.
+ * Tolerant of the decomposition prose the opening prompt asks for and the
+ * fences models add anyway — and strict about what it extracts, so nothing
+ * after the closing tag ends up in the file.
  */
 export function extractSvg(reply: string): string | null {
 	const match = /<svg[\s\S]*?<\/svg>/i.exec(reply)
@@ -227,6 +338,22 @@ export function extractSvg(reply: string): string | null {
 }
 
 /**
+ * How alike two pictures are, in [0, 1].
+ *
+ * Both are resized to 64px and compared channel-wise; that scale keeps the
+ * comparison about shapes and colour areas rather than anti-aliasing. The
+ * stop thresholds above are calibrated to THIS measure and move with it.
+ * The arithmetic lives in `pixel-similarity.ts`, where the unit suite can
+ * reach it without electron.
+ */
+export function similarity(aPng: Buffer, bPng: Buffer): number {
+	const size = { width: 64, height: 64 }
+	const a = nativeImage.createFromBuffer(aPng).resize(size).toBitmap()
+	const b = nativeImage.createFromBuffer(bPng).resize(size).toBitmap()
+	return bitmapSimilarity(a, b)
+}
+
+/**
  * Renders an SVG offscreen and screenshots it.
  *
  * On the project's surface colour, because a mark judged on white and used on a
@@ -234,20 +361,51 @@ export function extractSvg(reply: string): string | null {
  * the SVG as a document — it goes into an `<img>`, so nothing inside it can
  * execute even if the extraction check above ever missed something.
  */
-async function renderSvg(svg: string, surface: string): Promise<Buffer | null> {
+export async function renderSvg(svg: string, surface: string): Promise<Buffer | null> {
+	const html =
+		`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:${REVIEW_SIZE}px;height:${REVIEW_SIZE}px;` +
+		`background:${surface};display:grid;place-items:center}img{width:70%;height:70%;object-fit:contain}</style>` +
+		`<img src="data:image/svg+xml;base64,${Buffer.from(svg, "utf-8").toString("base64")}">`
+	return capture(html, REVIEW_SIZE, REVIEW_SIZE)
+}
+
+/**
+ * The side-by-side the model corrects against: TARGET left, YOURS right, both
+ * panels at the same scale on the same surface, labelled in the picture itself
+ * so the instruction survives any image-handling quirk between here and the
+ * model.
+ */
+export async function renderComposite(
+	targetPng: Buffer,
+	targetMime: string,
+	yoursPng: Buffer,
+	surface: string,
+): Promise<Buffer | null> {
+	const width = REVIEW_SIZE * 2
+	const height = REVIEW_SIZE + LABEL_HEIGHT
+	const html =
+		`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:${width}px;height:${height}px;background:#ffffff;` +
+		`font:600 18px system-ui,sans-serif;color:#111}` +
+		`.row{display:flex}.cell{width:${REVIEW_SIZE}px}` +
+		`.label{height:${LABEL_HEIGHT}px;display:grid;place-items:center;letter-spacing:0.1em}` +
+		`img{display:block;width:${REVIEW_SIZE}px;height:${REVIEW_SIZE}px;object-fit:contain;background:${surface}}</style>` +
+		`<div class="row">` +
+		`<div class="cell"><div class="label">TARGET</div><img src="data:${targetMime};base64,${targetPng.toString("base64")}"></div>` +
+		`<div class="cell"><div class="label">YOURS</div><img src="data:image/png;base64,${yoursPng.toString("base64")}"></div>` +
+		`</div>`
+	return capture(html, width, height)
+}
+
+/** Loads static HTML in a sandboxed offscreen window and screenshots it. */
+async function capture(html: string, width: number, height: number): Promise<Buffer | null> {
 	let window: BrowserWindow | null = null
 	try {
 		window = new BrowserWindow({
 			show: false,
-			width: REVIEW_SIZE,
-			height: REVIEW_SIZE,
+			width,
+			height,
 			webPreferences: { offscreen: true, nodeIntegration: false, contextIsolation: true, javascript: false },
 		})
-
-		const html =
-			`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:${REVIEW_SIZE}px;height:${REVIEW_SIZE}px;` +
-			`background:${surface};display:grid;place-items:center}img{width:70%;height:70%;object-fit:contain}</style>` +
-			`<img src="data:image/svg+xml;base64,${Buffer.from(svg, "utf-8").toString("base64")}">`
 
 		await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
 		// Decoding is asynchronous and there is no load event to await through a
@@ -256,11 +414,11 @@ async function renderSvg(svg: string, surface: string): Promise<Buffer | null> {
 
 		const image = await window.webContents.capturePage()
 		const png = image.toPNG()
-		// A blank capture means the SVG drew nothing — malformed, or entirely
-		// outside its own viewBox. Either way it is not a mark.
+		// A blank capture means nothing was drawn — malformed, or entirely
+		// outside its own viewBox. Either way it is not a picture.
 		return isBlank(image.getBitmap()) ? null : png
 	} catch (err) {
-		Logger.warn(`[marks] could not render an emitted SVG: ${err}`)
+		Logger.warn(`[marks] could not render for review: ${err}`)
 		return null
 	} finally {
 		window?.destroy()
@@ -293,7 +451,7 @@ export async function acceptMark(projectPath: string, tag: string): Promise<{ ok
 		tag: tag.trim() || "mark",
 		extension: ".svg",
 		bytes: Buffer.from(held.svg, "utf-8"),
-		description: `A mark: ${held.subject}. Authored by ${held.model} in ${held.rounds} render-compare round(s).`,
+		description: `A mark: ${held.subject}. Traced from a generated target by ${held.model} in ${held.rounds} render-compare round(s).`,
 		alt: held.subject,
 		origin: {
 			type: "generated",

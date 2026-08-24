@@ -52,7 +52,7 @@ import { getSecret } from "./secrets"
  * than cached, so entering a key makes the lane work without a restart — the
  * alternative is a settings field that appears to do nothing.
  */
-function rasterConfig() {
+export function rasterConfig() {
 	const prefs = getPrefs()
 	return resolveRasterConfig({
 		apiKey: getSecret("geminiApiKey"),
