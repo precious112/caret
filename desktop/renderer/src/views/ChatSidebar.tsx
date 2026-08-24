@@ -1312,9 +1312,14 @@ function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
 				{seconds >= 3 && <span className="tabular-nums text-shell-muted/70">{elapsedLabel(seconds)}</span>}
 			</div>
 			{quiet >= QUIET_WORRY_SECONDS && (
+				// Fact only, no diagnosis. A slow model earns "still waiting" and
+				// nothing more — the first version speculated about failing
+				// providers while the model was merely slow, which is a false
+				// alarm dressed as help. When the provider actually errors, the
+				// transcript shows the provider's own words (see log-tail.ts);
+				// this line's only job is to say the wait is real.
 				<p className="mt-1.5 pl-[30px] text-[11.5px] leading-relaxed text-shell-muted/80" data-testid="chat-quiet">
-					Nothing has arrived from the model in {elapsedLabel(quiet)}. It may be waiting on a failing provider —
-					stopping and switching model is safe.
+					Still waiting — nothing from the model in {elapsedLabel(quiet)}.
 				</p>
 			)}
 		</div>
