@@ -637,8 +637,12 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		},
 	)
 
-	ipcMain.handle("agent:approval", (_event, projectPath: string, id: string, ok: boolean) => {
-		windows.get(projectPath)?.getAgent().conversation.respondToApproval(id, ok)
+	ipcMain.handle("agent:setMode", (_event, projectPath: string, mode: "read-only" | "write", steering?: string) => {
+		return windows.get(projectPath)?.getAgent().setChatMode(mode, steering) ?? { executed: false }
+	})
+
+	ipcMain.handle("agent:discardPlan", (_event, projectPath: string) => {
+		windows.get(projectPath)?.getAgent().discardPlan()
 	})
 
 	ipcMain.handle("agent:reset", (_event, projectPath: string) => {

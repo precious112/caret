@@ -202,7 +202,8 @@ ${
 		? `RIGHT NOW YOU ARE PLANNING, NOT CHANGING ANYTHING. Read whatever you need and write the plan
 as your reply: which app files you would change, and what each change is. Do not edit a single
 application file in this turn — the user reviews the plan first, and any write you attempt will be
-refused. If they accept, you will be asked to carry it out.
+refused. If they accept, you will be asked to carry it out. The user may reply with revisions;
+answer each with the complete updated plan, restated in full — your latest reply IS the plan.
 
 Do NOT edit .caret/sync-state.json. Caret records the sync itself once the changes are applied.`
 		: `As you translate, call \`report_sync_mapping\` on the Caret MCP server once per design file, at the moment its app files are written — you know which app files a design file's content landed in right now, and Caret cannot infer it later. The mapping is what makes the NEXT sync incremental and app-side drift visible; skip it and both are lost.

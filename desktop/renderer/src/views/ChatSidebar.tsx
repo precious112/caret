@@ -185,6 +185,20 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 		)
 	}, [])
 
+	// The Plan/Act flip. Flipping to Act sends the current draft along as
+	// steering — the user's last word on how to proceed — and clears it only
+	// when main reports it actually started executing; a flip that was just a
+	// mode change must not eat a half-written message.
+	const flipMode = (mode: "read-only" | "write") => {
+		const steering = mode === "write" ? draft.trim() : ""
+		void invoke("agent:setMode", project.path, mode, steering || undefined).then((result) => {
+			if (result?.executed) {
+				setDraft("")
+				setAttached([])
+			}
+		})
+	}
+
 	const composer = {
 		draft,
 		setDraft,
@@ -193,6 +207,8 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 		attachFiles,
 		send,
 		streaming,
+		mode: state?.mode ?? "write",
+		flipMode,
 		ready: state?.ready ?? false,
 		model: describeModel(state?.model ?? "", state?.providerName),
 		modelId: state?.model ?? "",
@@ -216,9 +232,6 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 				<span className="truncate text-[12px] font-medium" data-testid="chat-title">
 					{sessions ? "Chat history" : (state?.activity?.title ?? "Chat")}
 				</span>
-				{!sessions && state?.activity?.mode === "read-only" && (
-					<span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-shell-muted">plan only</span>
-				)}
 
 				<div className="flex-1" />
 
@@ -280,6 +293,8 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 										assetTags={assetTags}
 										entry={entry}
 										key={entry.id}
+										livePlan={state?.plan ?? null}
+										onDiscardPlan={() => void invoke("agent:discardPlan", project.path)}
 										onRespond={(requestId, decision) =>
 											void invoke("agent:permission", project.path, requestId, decision)
 										}
@@ -310,30 +325,6 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 						<TakesBlock onDismiss={() => resolveDocked(null)} onPick={resolveDocked} prompt={docked} />
 					)}
 
-					{state?.pendingApproval && (
-						<div className="border-t border-caret-accent/40 px-3.5 py-3" data-testid="chat-approval">
-							<p className="mb-2.5 leading-relaxed">{state.pendingApproval.question}</p>
-							<div className="flex gap-2">
-								<button
-									className="rounded-lg bg-caret-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-caret-accent-hover"
-									onClick={() =>
-										void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", true)
-									}
-									type="button">
-									{state.pendingApproval.confirmLabel}
-								</button>
-								<button
-									className="rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"
-									onClick={() =>
-										void invoke("agent:approval", project.path, state.pendingApproval?.id ?? "", false)
-									}
-									type="button">
-									{state.pendingApproval.cancelLabel}
-								</button>
-							</div>
-						</div>
-					)}
-
 					<Composer {...composer} />
 				</>
 			)}
@@ -351,6 +342,9 @@ interface ComposerProps {
 	attachFiles(files: File[]): void
 	send(): void
 	streaming: boolean
+	/** The conversation's Plan/Act position, from main. */
+	mode: "read-only" | "write"
+	flipMode(mode: "read-only" | "write"): void
 	ready: boolean
 	/** For the pill: the model named the way a person would say it. */
 	model: string
@@ -434,13 +428,20 @@ function Composer(props: ComposerProps) {
 						event.preventDefault()
 						props.attachFiles(files)
 					}}
-					placeholder={props.ready ? PLACEHOLDER : "No backend connected"}
+					placeholder={
+						props.ready
+							? props.mode === "read-only"
+								? "Refine the plan, or switch to Act to apply it…"
+								: PLACEHOLDER
+							: "No backend connected"
+					}
 					ref={props.inputRef}
 					rows={1}
 					value={props.draft}
 				/>
 				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
 					<AttachMenu {...props} />
+					<ModeToggle disabled={!props.ready} flipMode={props.flipMode} mode={props.mode} />
 					<ModelPicker {...props} />
 					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
 					<div className="flex-1" />
@@ -448,6 +449,56 @@ function Composer(props: ComposerProps) {
 				</div>
 			</div>
 		</footer>
+	)
+}
+
+/**
+ * The Plan/Act toggle — Cline's gesture, deliberately.
+ *
+ * In Plan the conversation's turns run read-only and the reply is a plan; in
+ * Act they edit. Flipping to Act with a settled plan IS the approval — no
+ * separate Apply button — which is why this control sits in the composer where
+ * the decision is made, not in the header where a chip merely reported it.
+ * Stays clickable while a turn streams (changing mode mid-turn is legitimate);
+ * main's settled-plan guard is what makes a mid-stream flip execute nothing.
+ */
+function ModeToggle({
+	mode,
+	flipMode,
+	disabled,
+}: {
+	mode: "read-only" | "write"
+	flipMode(mode: "read-only" | "write"): void
+	disabled: boolean
+}) {
+	const segment = (active: boolean) =>
+		cn(
+			"rounded-md px-2 py-0.5 text-[11px] transition-colors",
+			active ? "bg-white/10 font-medium" : "text-shell-muted hover:text-shell-fg",
+		)
+	return (
+		<div className="flex items-center gap-0.5 rounded-lg border border-shell-border p-0.5">
+			<button
+				aria-pressed={mode === "read-only"}
+				className={segment(mode === "read-only")}
+				data-testid="chat-mode-plan"
+				disabled={disabled}
+				onClick={() => mode !== "read-only" && flipMode("read-only")}
+				title="Plan: discuss and refine — nothing is written"
+				type="button">
+				Plan
+			</button>
+			<button
+				aria-pressed={mode === "write"}
+				className={segment(mode === "write")}
+				data-testid="chat-mode-act"
+				disabled={disabled}
+				onClick={() => mode !== "write" && flipMode("write")}
+				title="Act: make the changes — flipping with a plan applies it"
+				type="button">
+				Act
+			</button>
+		</div>
 	)
 }
 
@@ -944,11 +995,16 @@ function Entry({
 	onRespond,
 	assetTags,
 	onViewAsset,
+	livePlan,
+	onDiscardPlan,
 }: {
 	entry: TranscriptEntryWire
 	onRespond(requestId: string, decision: "allow" | "deny" | "allow-always"): void
 	assetTags: ReadonlySet<string>
 	onViewAsset(tag: string): void
+	/** The settled plan, if any — names which entry renders as the live card. */
+	livePlan: { kind: string; entryId: string } | null
+	onDiscardPlan(): void
 }) {
 	switch (entry.kind) {
 		case "user":
@@ -958,10 +1014,42 @@ function Entry({
 				</div>
 			)
 
-		case "assistant":
+		case "assistant": {
+			// A plan is not chat prose. The LIVE plan — the one a flip to Act
+			// would execute — gets the card; superseded or consumed plans keep
+			// their flag but demote to dimmed prose, so the transcript still
+			// reads as history without two things claiming to be "the plan".
+			if (entry.plan && entry.id === livePlan?.entryId) {
+				return (
+					<div
+						className="fade-in rounded-xl border border-shell-border bg-white/[0.03] px-3 py-2.5"
+						data-testid="chat-plan">
+						<p className="mb-1.5 text-[10px] font-medium tracking-widest text-shell-muted uppercase">Plan</p>
+						<Markdown assetTags={assetTags} className="leading-relaxed" onAssetTag={onViewAsset} text={entry.text} />
+						<div className="mt-2 flex items-center justify-between border-t border-shell-border pt-2 text-[11px] text-shell-muted">
+							<span>Reply to revise it, or switch to Act to apply.</span>
+							{livePlan.kind === "sync-plan" && (
+								<button
+									className="shrink-0 transition-colors hover:text-shell-fg"
+									data-testid="chat-plan-discard"
+									onClick={onDiscardPlan}
+									type="button">
+									Discard plan
+								</button>
+							)}
+						</div>
+					</div>
+				)
+			}
 			return (
-				<Markdown assetTags={assetTags} className="fade-in leading-relaxed" onAssetTag={onViewAsset} text={entry.text} />
+				<Markdown
+					assetTags={assetTags}
+					className={cn("fade-in leading-relaxed", entry.plan && "opacity-60")}
+					onAssetTag={onViewAsset}
+					text={entry.text}
+				/>
 			)
+		}
 
 		case "thinking":
 			return <Thinking text={entry.text} />

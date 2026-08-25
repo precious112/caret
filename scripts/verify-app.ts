@@ -4588,9 +4588,19 @@ export default function CatalogDemo() {
 		// The plan completing is the *model's* job. What `ff` certifies is what
 		// Caret does given a plan, so a model that never produces one makes the
 		// scenario inconclusive rather than failed — the same distinction gg draws.
-		await chrome.waitForSelector('[data-testid="chat-approval"]', { timeout: 300_000 }).catch(() => {
+		// The card appearing is the settled plan: a turn that ended without plan
+		// text FAILS in the conversation and no card ever shows, so this wait
+		// also holds down the empty-plan rule end to end.
+		await chrome.waitForSelector('[data-testid="chat-plan"]', { timeout: 300_000 }).catch(() => {
 			throw new Inconclusive("the model did not finish a plan within five minutes")
 		})
+
+		// The sync lane opens with the composer toggle on Plan — the mode is the
+		// surface now, not a header chip.
+		assert(
+			(await chrome.getByTestId("chat-mode-plan").getAttribute("aria-pressed")) === "true",
+			"the sync conversation did not open in Plan mode",
+		)
 	}
 
 	await inference("ff. a plan writes nothing, and discarding it leaves the bookmark alone", async () => {
@@ -4613,13 +4623,14 @@ export default function CatalogDemo() {
 			"the plan phase wrote to the app — the read-only boundary did not hold",
 		)
 
-		await chrome.getByTestId("chat-approval").getByRole("button", { name: "Discard" }).click()
+		await chrome.getByTestId("chat-plan-discard").click()
 
 		// Discarding has to leave *everything* alone, including the bookmark —
 		// otherwise the design change is recorded as synced and never offered again.
+		// The Discard affordance leaving the card is the plan demoting to history.
 		await waitFor(
-			"the approval to clear",
-			async () => ((await chrome.getByTestId("chat-approval").count()) ? null : true),
+			"the discard to land",
+			async () => ((await chrome.getByTestId("chat-plan-discard").count()) ? null : true),
 			30_000,
 		)
 		assert((await readTree(appSourcePath)) === before, "discarding a plan still changed the app")
@@ -4634,7 +4645,9 @@ export default function CatalogDemo() {
 		// The discarded change is still pending, which is itself the claim: a
 		// discarded sync is offered again rather than quietly lost.
 		await planASync()
-		await chrome.getByTestId("chat-approval").getByRole("button", { name: "Apply" }).click()
+		// The flip IS the Apply: switching the composer toggle to Act with a
+		// settled plan starts the apply turn — no separate confirm button.
+		await chrome.getByTestId("chat-mode-act").click()
 
 		// Applying is where writes to the user's *own* source happen, and those ask
 		// by default — accepting a plan is not the same as consenting to each file.

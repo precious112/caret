@@ -13,7 +13,13 @@ export type PermissionStatus = "pending" | "allowed" | "denied"
 
 export type TranscriptEntry =
 	| { kind: "user"; id: string; text: string }
-	| { kind: "assistant"; id: string; text: string }
+	/**
+	 * `plan` marks an entry that was the reply of a completed plan-mode turn.
+	 * The flag is permanent history — which entry is the LIVE plan is decided
+	 * by `ConversationState.plan.entryId`, so a discarded or superseded plan
+	 * demotes without rewriting the transcript.
+	 */
+	| { kind: "assistant"; id: string; text: string; plan?: true }
 	| { kind: "thinking"; id: string; text: string }
 	| { kind: "tool"; id: string; callId: string; name: string; summary: string; status: ToolStatus }
 	| {
@@ -169,6 +175,24 @@ export function resolvePermission(state: TranscriptState, requestId: string, sta
 		entry.status = status
 		if (automatic) entry.automatic = automatic
 	}
+}
+
+/**
+ * Flags the last assistant entry as a plan and returns its id.
+ *
+ * Called by the conversation when a plan-mode turn completes with a reply; the
+ * reducer itself never sets the flag, because replayed history arrives without
+ * turn modes and an "Earlier session" rendering plans as prose is correct.
+ */
+export function markPlanEntry(state: TranscriptState): string | null {
+	for (let i = state.entries.length - 1; i >= 0; i--) {
+		const entry = state.entries[i]
+		if (entry.kind === "assistant") {
+			entry.plan = true
+			return entry.id
+		}
+	}
+	return null
 }
 
 export function addNote(state: TranscriptState, text: string): void {

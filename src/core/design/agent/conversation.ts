@@ -22,7 +22,15 @@ import {
 	type SessionMode,
 } from "./backend"
 import { type AppWritePolicy, rulePermission } from "./permissions"
-import { addNote, addUserMessage, applyEvent, emptyTranscript, resolvePermission, type TranscriptState } from "./transcript"
+import {
+	addNote,
+	addUserMessage,
+	applyEvent,
+	emptyTranscript,
+	markPlanEntry,
+	resolvePermission,
+	type TranscriptState,
+} from "./transcript"
 
 export type ActivityKind = "chat" | "edit" | "sync-plan" | "sync-apply" | "flow-sync"
 
@@ -34,12 +42,23 @@ export interface Activity {
 	sessionId: string
 }
 
-/** A yes/no Caret is waiting on before it does the next thing. */
-export interface PendingApproval {
-	id: string
-	question: string
-	confirmLabel: string
-	cancelLabel: string
+/**
+ * A plan the user can act on: the reply of the last completed plan-mode turn.
+ *
+ * "Settled" is the load-bearing word — a plan exists only when its turn is over
+ * and its text is non-empty. A turn that read and thought and never replied
+ * settles nothing (that turn FAILS, see `run`), and `settledPlan()` returns
+ * null while a turn streams, so flipping the Plan/Act toggle mid-stream can
+ * only ever change the mode. The user's flip can never execute a plan they
+ * did not read.
+ */
+export interface SettledPlan {
+	/** Which continuation the flip runs: "sync-plan" applies the sync, anything else continues generically. */
+	kind: ActivityKind
+	sessionId: string
+	/** The transcript entry that is the live plan card. */
+	entryId: string
+	text: string
 }
 
 export interface ConversationState {
@@ -66,7 +85,14 @@ export interface ConversationState {
 	 */
 	lastEventAt: number | null
 	transcript: TranscriptState
-	pendingApproval: PendingApproval | null
+	/**
+	 * The conversation's Plan/Act position. Sends run in this mode; the composer
+	 * toggle reads and flips it. Per-conversation and in-memory on purpose —
+	 * plan mode is a stance taken for one conversation, not a preference.
+	 */
+	mode: SessionMode
+	/** The renderer's slice of the settled plan: which entry is the live card. */
+	plan: { kind: ActivityKind; entryId: string } | null
 	/** Whether app-path writes still prompt in this project. */
 	appWrites: AppWritePolicy
 	/**
@@ -147,6 +173,19 @@ export interface RunOutcome {
 /** State pushes are coalesced to this interval so token streaming isn't one IPC per character. */
 const PUSH_INTERVAL_MS = 60
 
+/**
+ * The generic act-on-plan prompt. It opens by revoking the planning framing —
+ * the same lesson the sync APPLY_PROMPT carries: the plan turn's "you are
+ * planning, writes will be refused" is still in the resumed session's context,
+ * and a model told to edit while an earlier instruction forbids it lets the
+ * two fight. Withdraw first, then instruct.
+ */
+const ACT_PROMPT = `The planning phase is over and its restrictions no longer apply — the user has read
+your plan and approved it. This turn is in write mode and your edits will be accepted.
+Make the changes now, exactly as planned, using your edit tools. Producing another plan,
+re-reading what you already read, or asking for confirmation is a failure; if something in
+the plan turns out to be wrong once you open the file, say so and stop rather than improvising.`
+
 /** A prompt's first line, sized for a list row. */
 function firstLine(text: string): string {
 	const line = text.trim().split("\n")[0] ?? ""
@@ -161,8 +200,8 @@ export class AgentConversation {
 	private session: BackendSession | null = null
 	private streaming = false
 	private lastEventAt: number | null = null
-	private pendingApproval: PendingApproval | null = null
-	private approvalResolver: ((ok: boolean) => void) | null = null
+	private conversationMode: SessionMode = "write"
+	private plan: SettledPlan | null = null
 	private backendId: BackendId | null = null
 	private stopRequested = false
 	private backendName: string | null = null
@@ -185,7 +224,8 @@ export class AgentConversation {
 			streaming: this.streaming,
 			lastEventAt: this.lastEventAt,
 			transcript: this.transcript,
-			pendingApproval: this.pendingApproval,
+			mode: this.conversationMode,
+			plan: this.plan ? { kind: this.plan.kind, entryId: this.plan.entryId } : null,
 			appWrites: this.deps.appWrites(),
 			model: this.deps.model() ?? null,
 			effort: this.deps.effort() ?? null,
@@ -196,7 +236,8 @@ export class AgentConversation {
 	reset(): void {
 		this.transcript = emptyTranscript()
 		this.activity = null
-		this.pendingApproval = null
+		this.plan = null
+		this.conversationMode = "write"
 		this.push(true)
 	}
 
@@ -232,6 +273,14 @@ export class AgentConversation {
 			mode: request.mode,
 			sessionId: request.resumeSessionId ?? "",
 		}
+		// The turn's mode becomes the conversation's: this is how a sync opens
+		// with the toggle already on Plan without the sync module knowing the
+		// toggle exists, and how the toggle reads honestly after the apply turn.
+		this.conversationMode = request.mode
+		// Execution consumes the plan. Callers that continue FROM the plan read
+		// `settledPlan()` before running the write turn; clearing here is what
+		// makes a consumed plan's card demote to history.
+		if (request.mode === "write") this.plan = null
 		if (request.note) addNote(this.transcript, request.note)
 		addUserMessage(this.transcript, request.displayPrompt ?? request.prompt)
 		this.streaming = true
@@ -335,12 +384,43 @@ export class AgentConversation {
 				})
 			}
 			// The other half-empty ending: the model did real work (tools ran)
-			// and then closed its mouth. The user asked a question; "nothing"
-			// is not an answer they should have to infer from silence.
+			// and then closed its mouth. In a write turn that can be legitimate —
+			// edits without prose — so it stays a muted note. In a plan turn the
+			// reply IS the deliverable: a turn that read, and possibly thought,
+			// and never wrote the plan is a failure, or an Apply gate ships with
+			// nothing behind it — which is exactly how it shipped once. The
+			// reasoning-only case lands here too (thinking sets `sawVisible`);
+			// no auto-retry, because recovery is one keypress — every plan-mode
+			// send is another plan turn — and a silent re-prompt spends money
+			// invisibly.
 			if (ok && sawVisible && text.trim() === "" && !this.stopRequested) {
-				addNote(this.transcript, "The model ended its turn without a reply.")
+				if (request.mode === "read-only") {
+					ok = false
+					applyEvent(this.transcript, {
+						type: "error",
+						message:
+							"The model finished the planning turn without writing a plan — it read, and possibly thought, but never replied. Send again to ask for the plan, or switch model.",
+						recoverable: true,
+					})
+				} else {
+					addNote(this.transcript, "The model ended its turn without a reply.")
+				}
 			}
 			this.streaming = false
+			this.push(true)
+		}
+
+		// A completed plan turn settles its reply as THE plan; a failed one
+		// un-arms whatever was settled before, because the safe reading of a
+		// broken revision is "there is no approved intent anymore", never
+		// "execute the previous version".
+		if (request.mode === "read-only") {
+			if (ok && text.trim() !== "") {
+				const entryId = markPlanEntry(this.transcript)
+				if (entryId) this.plan = { kind: request.kind, sessionId: session.id, entryId, text }
+			} else {
+				this.plan = null
+			}
 			this.push(true)
 		}
 
@@ -380,7 +460,10 @@ export class AgentConversation {
 		return this.run({
 			kind: current?.kind ?? "chat",
 			title: current?.title ?? "Chat",
-			mode: current?.mode ?? "write",
+			// The toggle's mode, not the last activity's. The old inherit meant
+			// typing while a sync plan was current silently ran read-only with
+			// nothing on screen saying so; now the composer toggle IS the truth.
+			mode: this.conversationMode,
 			prompt,
 			displayPrompt: prompt === text ? undefined : text,
 			...(images && images.length > 0 ? { images } : {}),
@@ -391,10 +474,6 @@ export class AgentConversation {
 	async abort(): Promise<void> {
 		this.stopRequested = true
 		await this.session?.abort()
-		// A pending approval outlives the turn it belongs to unless it is cleared,
-		// and a stop button that leaves a dead question on screen is worse than no
-		// stop button.
-		this.resolveApproval(false)
 		this.streaming = false
 		this.push(true)
 	}
@@ -407,20 +486,53 @@ export class AgentConversation {
 		this.push(true)
 	}
 
-	/** Asks the user a yes/no and waits. Used by sync between plan and apply. */
-	requestApproval(approval: PendingApproval): Promise<boolean> {
-		this.resolveApproval(false)
-		this.pendingApproval = approval
+	/**
+	 * Flips the Plan/Act position. A pure state change — the decision to
+	 * EXECUTE on a flip belongs to the host (AgentService), which is the only
+	 * caller that knows which continuation a plan's kind demands.
+	 */
+	setMode(mode: SessionMode): void {
+		this.conversationMode = mode
 		this.push(true)
-		return new Promise<boolean>((resolve) => {
-			this.approvalResolver = resolve
-		})
 	}
 
-	respondToApproval(id: string, ok: boolean): void {
-		if (this.pendingApproval?.id !== id) return
-		this.resolveApproval(ok)
+	/**
+	 * The settled plan, or null — and null WHILE A TURN STREAMS, uncondition-
+	 * ally. This is the guard that makes a Plan→Act flip landing mid-turn a
+	 * mode change and nothing else, enforced here in main rather than trusted
+	 * to the renderer's timing.
+	 */
+	settledPlan(): SettledPlan | null {
+		return this.streaming ? null : this.plan
+	}
+
+	/** Drops the settled plan without running anything. The card demotes to history. */
+	clearPlan(): void {
+		this.plan = null
 		this.push(true)
+	}
+
+	/**
+	 * The generic Plan→Act continuation for non-sync plans: one write turn in
+	 * the same session. The steering text is the user's composer draft at flip
+	 * time — their last words on how to proceed — else a canned go-ahead that
+	 * revokes the planning framing first, because a model still wearing the
+	 * plan instruction will happily produce a second plan instead of edits.
+	 */
+	async actOnPlan(steering?: string): Promise<RunOutcome | null> {
+		const plan = this.settledPlan()
+		if (!plan) return null
+		const instruction = steering?.trim() || ""
+		return this.run({
+			kind: plan.kind,
+			title: this.activity?.title ?? "Chat",
+			mode: "write",
+			prompt: instruction
+				? `${ACT_PROMPT}\n\nThe user added this instruction when approving — honour it:\n${instruction}`
+				: ACT_PROMPT,
+			displayPrompt: instruction || "Go ahead — make the changes.",
+			resumeSessionId: plan.sessionId,
+		})
 	}
 
 	/** Re-pushes state after something outside the conversation changed it. */
@@ -448,13 +560,14 @@ export class AgentConversation {
 		for (const event of events) applyEvent(this.transcript, event)
 		this.activity = { id: `replay-${sessionId}`, kind: "chat", title: "Earlier session", mode: "write", sessionId }
 		this.streaming = false
+		this.plan = null
+		this.conversationMode = "write"
 		this.push(true)
 		return true
 	}
 
 	async close(): Promise<void> {
 		if (this.pushTimer) clearTimeout(this.pushTimer)
-		this.resolveApproval(false)
 		await this.session?.close().catch(() => {})
 	}
 
@@ -532,13 +645,6 @@ export class AgentConversation {
 		const entry = this.transcript.entries.find((e) => e.kind === "permission" && e.requestId === event.requestId)
 		if (entry && entry.kind === "permission") entry.summary = ruling.summary
 		this.push(true)
-	}
-
-	private resolveApproval(ok: boolean): void {
-		const resolver = this.approvalResolver
-		this.approvalResolver = null
-		this.pendingApproval = null
-		resolver?.(ok)
 	}
 
 	/**

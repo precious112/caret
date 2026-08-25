@@ -28,9 +28,9 @@ export {
 	AgentConversation,
 	type ConversationDeps,
 	type ConversationState,
-	type PendingApproval,
 	type RunOutcome,
 	type RunRequest,
+	type SettledPlan,
 } from "./agent/conversation"
 export { EditLaneBridge, type EditStatus } from "./agent/edit-lane"
 export { setBundledBackendDirectory } from "./agent/opencode/binary"
@@ -318,6 +318,7 @@ export { computeDrift, type DriftEntry, type DriftReport } from "./sync/drift"
 export { type MappingEntry, pruneManifest, readManifest, recordMappings, type SyncManifest } from "./sync/mapping-manifest"
 export { startReverseSyncProposal } from "./sync/reverse-sync"
 export { createSyncWatcher, runSyncInteractive } from "./sync/SyncWatcher"
+export { discardSyncPlan, runSyncApply } from "./sync/sync-backend"
 export {
 	type CompleteSyncOutcome,
 	clearPendingSync,

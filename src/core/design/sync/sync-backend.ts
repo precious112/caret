@@ -7,9 +7,14 @@
  *
  * 1. **Plan** in a `read-only` session. App writes are denied at Caret's own
  *    permission boundary no matter what the agent config says, so "review before
- *    anything changes" is a guarantee rather than an instruction.
- * 2. **Review.** The plan streams into the chat and the user accepts or discards
- *    it. Discarding ends the session with nothing written.
+ *    anything changes" is a guarantee rather than an instruction. A plan turn
+ *    that produced no plan TEXT fails outright — the Apply affordance once
+ *    shipped with literally nothing behind it, because only `ok` was checked.
+ * 2. **Review, by conversation.** The plan settles on the conversation and
+ *    renders as the plan card; the user revises it by typing (each send is
+ *    another read-only turn) and approves it by flipping the composer toggle
+ *    to Act — which calls `runSyncApply` below. Discarding is the card's own
+ *    affordance (`discardSyncPlan`), and ends things with nothing written.
  * 3. **Apply** in the same session, switched to `write`. App-path permissions
  *    follow the user's own toggle.
  * 4. **Caret advances the bookmark**, in this file, in its own code. The model is
@@ -69,14 +74,17 @@ correspondence right now and Caret cannot infer it later — the mapping is what
 sync incremental and app-side drift visible to the design layer.`
 
 /**
- * Runs the whole two-phase sync. Long-lived — the caller starts it and returns.
+ * Runs the plan half of a sync. Long-lived — the caller starts it and returns.
  *
- * Every exit path clears the pending record. A pending sync that outlives its
- * conversation would let a later `complete_sync` advance the bookmark past work
- * nobody applied, which is the one failure that silently loses design changes.
+ * The apply half is `runSyncApply`, invoked when the user flips the composer
+ * toggle to Act; between the two, the settled plan lives on the conversation
+ * and the pending record on disk. Every failing exit clears the pending
+ * record. A pending sync that outlives its conversation would let a later
+ * `complete_sync` advance the bookmark past work nobody applied, which is the
+ * one failure that silently loses design changes.
  */
 export async function runBackendSync(conversation: AgentConversation, request: BackendSyncRequest): Promise<void> {
-	const { cwd, syncId, changedCount } = request
+	const { cwd, changedCount } = request
 
 	try {
 		const plan = await conversation.run({
@@ -94,34 +102,62 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 					: `Planning from ${changedCount} changed design file${changedCount === 1 ? "" : "s"}. Nothing in your app is written yet.`,
 		})
 
-		if (!plan.ok) {
+		// Belt and braces with the conversation's own rule (a plan turn ending
+		// empty is already a failed turn): whatever `ok` claims, an empty plan
+		// must never leave a pending sync armed behind it.
+		if (!plan.ok || plan.text.trim() === "") {
 			conversation.note("The plan didn't finish, so nothing was applied. Your design layer is untouched.")
 			await clearPendingSync(cwd)
 			return
 		}
 
-		const approved = await conversation.requestApproval({
-			id: syncId,
-			question: "Apply this to your app?",
-			confirmLabel: "Apply",
-			cancelLabel: "Discard",
-		})
+		// No gate here. The settled plan is on the conversation; the user
+		// revises by typing and approves by flipping to Act, which is the
+		// host's cue to call `runSyncApply`.
+	} catch (err) {
+		Logger.error("[sync] backend sync failed:", err)
+		conversation.note(`Sync stopped: ${err instanceof Error ? err.message : String(err)}`)
+		await clearPendingSync(cwd).catch(() => {})
+	}
+}
 
-		if (!approved) {
-			conversation.note("Discarded. Nothing was written, and this design change will be offered again next sync.")
-			await clearPendingSync(cwd)
+/**
+ * The apply half, run when the user approves the plan by flipping to Act.
+ *
+ * The syncId comes from the durable pending record, not from memory — the
+ * record survives an app restart mid-review, and it is also how this function
+ * learns the plan was rolled back or discarded in the meantime.
+ */
+export async function runSyncApply(
+	conversation: AgentConversation,
+	{ cwd, steering }: { cwd: string; steering?: string },
+): Promise<void> {
+	try {
+		const pendingAtStart = await readPendingSync(cwd)
+		if (!pendingAtStart) {
+			conversation.note("There is no sync waiting to be applied — it was discarded or rolled back. Run Sync again.")
+			conversation.clearPlan()
 			return
 		}
+		const syncId = pendingAtStart.syncId
+
+		// Read before the write turn starts: running consumes the settled plan.
+		const sessionId = conversation.settledPlan()?.sessionId
+		const instruction = steering?.trim() || ""
 
 		const applied = await conversation.run({
 			kind: "sync-apply",
 			title: "Sync design → app",
 			mode: "write",
-			prompt: APPLY_PROMPT,
-			displayPrompt: "Apply the plan.",
+			prompt: instruction
+				? `${APPLY_PROMPT}\n\nThe user added this instruction when approving — honour it:\n${instruction}`
+				: APPLY_PROMPT,
+			// The chat shows the user's own words when they steered, and a plain
+			// go-ahead otherwise — never the instruction block above.
+			displayPrompt: instruction || "Apply the plan.",
 			// Same session: the plan is the context that makes the apply correct,
 			// and re-sending it as text would be both wasteful and lossy.
-			resumeSessionId: plan.sessionId ?? undefined,
+			resumeSessionId: sessionId,
 		})
 
 		if (!applied.ok) {
@@ -160,8 +196,21 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 				: `Applied, but the sync bookmark didn't advance (${outcome}). The next sync will re-report these files.`,
 		)
 	} catch (err) {
-		Logger.error("[sync] backend sync failed:", err)
+		Logger.error("[sync] apply failed:", err)
 		conversation.note(`Sync stopped: ${err instanceof Error ? err.message : String(err)}`)
 		await clearPendingSync(cwd).catch(() => {})
 	}
+}
+
+/**
+ * Abandons a settled sync plan: the pending record and its snapshot go, the
+ * plan card demotes, and — deliberately — `sync-state.json` is never touched,
+ * so the same design changes are offered again on the next sync rather than
+ * silently dropped. The conversation stays in Plan mode; discarding a plan is
+ * not a decision to act.
+ */
+export async function discardSyncPlan(conversation: AgentConversation, cwd: string): Promise<void> {
+	conversation.note("Discarded. Nothing was written, and this design change will be offered again next sync.")
+	await clearPendingSync(cwd).catch(() => {})
+	conversation.clearPlan()
 }

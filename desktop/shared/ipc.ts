@@ -361,7 +361,8 @@ export interface BackendReportWire {
 
 export type TranscriptEntryWire =
 	| { kind: "user"; id: string; text: string }
-	| { kind: "assistant"; id: string; text: string }
+	/** `plan` marks the reply of a completed plan-mode turn; the LIVE one is named by `AgentStateWire.plan.entryId`. */
+	| { kind: "assistant"; id: string; text: string; plan?: boolean }
 	| { kind: "thinking"; id: string; text: string }
 	| { kind: "tool"; id: string; callId: string; name: string; summary: string; status: "running" | "ok" | "failed" }
 	| {
@@ -390,7 +391,10 @@ export interface AgentStateWire {
 		files: string[]
 		usage: { inputTokens: number; outputTokens: number; costUsd: number }
 	}
-	pendingApproval: { id: string; question: string; confirmLabel: string; cancelLabel: string } | null
+	/** The conversation's Plan/Act position — the composer toggle reads this. */
+	mode: "read-only" | "write"
+	/** The settled plan's card: which transcript entry it is, and which continuation a flip runs. */
+	plan: { kind: string; entryId: string } | null
 	appWrites: "ask" | "allow"
 	model: string | null
 	effort: string | null
@@ -853,7 +857,15 @@ export interface IpcRequests {
 	"chat:pickImages": () => ComposerImage[]
 	"agent:abort": (projectPath: string) => void
 	"agent:permission": (projectPath: string, requestId: string, decision: "allow" | "deny" | "allow-always") => void
-	"agent:approval": (projectPath: string, id: string, ok: boolean) => void
+	/**
+	 * The Plan/Act toggle. Flipping to "write" with a settled plan starts
+	 * executing it — `steering` is the composer draft at flip time, the user's
+	 * last word on how to proceed. `executed` says whether that happened, so
+	 * the composer only clears the draft it actually spent.
+	 */
+	"agent:setMode": (projectPath: string, mode: "read-only" | "write", steering?: string) => { executed: boolean }
+	/** The plan card's Discard. Sync plans also clear their pending record. */
+	"agent:discardPlan": (projectPath: string) => void
 	"agent:reset": (projectPath: string) => void
 	/** Availability of every backend, for the setup screen. Probed live. */
 	"agent:backends": () => BackendReportWire[]

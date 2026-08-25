@@ -16,11 +16,13 @@ import {
 	BackendBridge,
 	type CodingBackend,
 	type ConversationState,
+	discardSyncPlan,
 	EditLaneBridge,
 	type EditStatus,
 	getBackend,
 	type RunOutcome,
 	type RunRequest,
+	runSyncApply,
 	setProjectBridge,
 	setProjectConversation,
 	setProjectEditLane,
@@ -97,6 +99,45 @@ export class AgentService {
 
 	async start(): Promise<void> {
 		await this.conversation.refreshBackend()
+	}
+
+	/**
+	 * The Plan/Act toggle's landing point, and where a flip becomes an approval.
+	 *
+	 * Flipping to Act with a settled plan IS the user saying "do it" — Cline's
+	 * semantics, chosen deliberately over an extra confirm button. The two
+	 * guards that keep that safe both live in `settledPlan()`: it is null while
+	 * a turn streams (a flip racing a turn's end can only change mode), and a
+	 * plan only settles off a completed read-only turn with a real reply. In
+	 * every other case the flip is a mode change and nothing more.
+	 */
+	setChatMode(mode: "read-only" | "write", steering?: string): { executed: boolean } {
+		const conversation = this.conversation
+		if (mode === "read-only") {
+			conversation.setMode(mode)
+			return { executed: false }
+		}
+		const plan = conversation.settledPlan()
+		conversation.setMode("write")
+		if (!plan) return { executed: false }
+		if (plan.kind === "sync-plan") {
+			// Long-lived, reports into the chat itself — same contract as the
+			// sync orchestrator's fire-and-forget.
+			void runSyncApply(conversation, { cwd: this.options.projectPath, steering })
+		} else {
+			void conversation.actOnPlan(steering)
+		}
+		return { executed: true }
+	}
+
+	/** The plan card's Discard. Sync plans also clear their pending record. */
+	discardPlan(): void {
+		const plan = this.conversation.settledPlan()
+		if (plan?.kind === "sync-plan") {
+			void discardSyncPlan(this.conversation, this.options.projectPath)
+		} else {
+			this.conversation.clearPlan()
+		}
 	}
 
 	async close(): Promise<void> {
