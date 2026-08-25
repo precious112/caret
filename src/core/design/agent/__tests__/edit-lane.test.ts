@@ -14,7 +14,7 @@ import { EditLaneBridge, type EditStatus } from "../edit-lane"
 
 function stubConversation(behaviour: { run?: () => Promise<RunOutcome>; onAbort?: () => void }): AgentConversation {
 	return {
-		run: behaviour.run ?? (async () => ({ ok: true, sessionId: "s", text: "", filesChanged: [] })),
+		run: behaviour.run ?? (async () => ({ ok: true, sessionId: "s", text: "", closingText: "", filesChanged: [] })),
 		abort: async () => behaviour.onAbort?.(),
 		respondToPermission: async () => {},
 	} as unknown as AgentConversation
@@ -49,7 +49,7 @@ describe("EditLaneBridge", () => {
 	it("narrates failed when the turn does not finish, and still throws", async () => {
 		const statuses: EditStatus[] = []
 		const bridge = lane(
-			stubConversation({ run: async () => ({ ok: false, sessionId: "s", text: "", filesChanged: [] }) }),
+			stubConversation({ run: async () => ({ ok: false, sessionId: "s", text: "", closingText: "", filesChanged: [] }) }),
 			statuses,
 		)
 
@@ -68,7 +68,7 @@ describe("EditLaneBridge", () => {
 			stubConversation({
 				run: async () => {
 					await gate
-					return { ok: true, sessionId: "s", text: "", filesChanged: [] }
+					return { ok: true, sessionId: "s", text: "", closingText: "", filesChanged: [] }
 				},
 			}),
 			statuses,
@@ -98,7 +98,7 @@ describe("EditLaneBridge", () => {
 				// nothing written — which must not read as "Edit applied".
 				run: async () => {
 					await gate
-					return { ok: true, sessionId: "s", text: "", filesChanged: [] }
+					return { ok: true, sessionId: "s", text: "", closingText: "", filesChanged: [] }
 				},
 				onAbort: () => release(),
 			}),
@@ -121,7 +121,7 @@ describe("EditLaneBridge", () => {
 		const conversation = stubConversation({
 			run: async () => {
 				await gate
-				return { ok: true, sessionId: "s", text: "", filesChanged: [] }
+				return { ok: true, sessionId: "s", text: "", closingText: "", filesChanged: [] }
 			},
 		})
 		const bridge = lane(conversation, statuses)
@@ -153,7 +153,7 @@ describe("EditLaneBridge", () => {
 			stubConversation({
 				run: async () => {
 					await gate
-					return { ok: true, sessionId: "s", text: "", filesChanged: [] }
+					return { ok: true, sessionId: "s", text: "", closingText: "", filesChanged: [] }
 				},
 			}),
 			statuses,

@@ -223,10 +223,59 @@ describe("AgentConversation plan mode", () => {
 		assert.equal(outcome.ok, false, "a plan turn with no plan was reported as a success")
 		const error = conversation.getState().transcript.entries.find((entry) => entry.kind === "error")
 		assert(
-			error && error.kind === "error" && /without writing a plan/.test(error.message),
+			error && error.kind === "error" && /without writing the plan/.test(error.message),
 			"the error does not name the failure",
 		)
 		assert.equal(conversation.getState().plan, null, "an empty plan settled anyway")
+	})
+
+	it("fails a read-only turn whose only text was a preamble before the tool work", async () => {
+		// The field case, second edition: "I'll inventory the routes…" then tools
+		// for the rest of the turn and no reply at the end. The whole-turn text
+		// is NON-empty, which is how the first guard blessed a status sentence
+		// as a plan. Only the closing reply counts.
+		const conversation = new AgentConversation(
+			deps(
+				stubBackend([
+					{ type: "text", text: "I'll inventory the current application routes without modifying anything." },
+					{ type: "tool-start", callId: "c1", name: "glob", summary: "src/**" },
+					{ type: "tool-end", callId: "c1", name: "glob", ok: true },
+					{ type: "done", text: "" },
+				]),
+			),
+		)
+
+		const outcome = await conversation.run(PLAN_REQUEST)
+
+		assert.equal(outcome.ok, false, "a preamble-only plan turn was reported as a success")
+		assert.equal(outcome.closingText.trim(), "")
+		assert.equal(conversation.getState().plan, null, "the preamble settled as a plan")
+	})
+
+	it("settles the closing reply when a preamble came first", async () => {
+		const conversation = new AgentConversation(
+			deps(
+				stubBackend([
+					{ type: "text", text: "I'll look at the routes first." },
+					{ type: "tool-start", callId: "c1", name: "glob", summary: "src/**" },
+					{ type: "tool-end", callId: "c1", name: "glob", ok: true },
+					{ type: "text", text: "1. Change checkout-view.tsx" },
+					{ type: "done", text: "" },
+				]),
+			),
+		)
+
+		const outcome = await conversation.run(PLAN_REQUEST)
+
+		assert.equal(outcome.ok, true)
+		assert.equal(outcome.closingText, "1. Change checkout-view.tsx")
+		const state = conversation.getState()
+		const entry = state.transcript.entries.find((e) => e.id === state.plan?.entryId)
+		// The card must wrap the reply, not the preamble.
+		assert(
+			entry && entry.kind === "assistant" && entry.text === "1. Change checkout-view.tsx",
+			"the card marks the wrong entry",
+		)
 	})
 
 	it("fails a read-only turn whose only output was reasoning", async () => {

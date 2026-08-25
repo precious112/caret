@@ -102,10 +102,13 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 					: `Planning from ${changedCount} changed design file${changedCount === 1 ? "" : "s"}. Nothing in your app is written yet.`,
 		})
 
-		// Belt and braces with the conversation's own rule (a plan turn ending
-		// empty is already a failed turn): whatever `ok` claims, an empty plan
-		// must never leave a pending sync armed behind it.
-		if (!plan.ok || plan.text.trim() === "") {
+		// Belt and braces with the conversation's own rule (a plan turn with no
+		// closing reply is already a failed turn): whatever `ok` claims, a turn
+		// that didn't END with a plan must never leave a pending sync armed —
+		// and `closingText`, not `text`, is the check, because a preamble
+		// ("I'll inventory the routes…") followed by silent tool work once
+		// passed a whole-text guard and settled as "the plan".
+		if (!plan.ok || plan.closingText.trim() === "") {
 			conversation.note("The plan didn't finish, so nothing was applied. Your design layer is untouched.")
 			await clearPendingSync(cwd)
 			return

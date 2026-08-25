@@ -299,6 +299,7 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 											void invoke("agent:permission", project.path, requestId, decision)
 										}
 										onViewAsset={onViewAsset}
+										streaming={streaming}
 									/>
 								))}
 							</div>
@@ -439,14 +440,20 @@ function Composer(props: ComposerProps) {
 					rows={1}
 					value={props.draft}
 				/>
-				<div className="flex items-center gap-1 px-2 pt-0.5 pb-2">
+				<div className="flex items-center gap-1.5 px-2 pt-0.5 pb-2">
 					<AttachMenu {...props} />
-					<ModeToggle disabled={!props.ready} flipMode={props.flipMode} mode={props.mode} />
 					<ModelPicker {...props} />
 					{props.effort && <Pill label={props.effort} onClick={props.onOpenBackendSetup} />}
 					<div className="flex-1" />
 					<SendButton {...props} />
 				</div>
+			</div>
+			{/* Below the box, not in it: the mode is a stance for the conversation,
+			    and the in-box row is already spent on per-message controls. It also
+			    stopped fitting — the toggle inside the row squeezed the model pill
+			    into the effort pill at this width. */}
+			<div className="mt-1.5 flex items-center px-1">
+				<ModeToggle disabled={!props.ready} flipMode={props.flipMode} mode={props.mode} />
 			</div>
 		</footer>
 	)
@@ -584,7 +591,11 @@ function ModelPicker(props: ComposerProps) {
 	}
 
 	return (
-		<div className="relative min-w-0 flex-1" onPointerDown={(event) => event.stopPropagation()}>
+		// Sized by its content and allowed to shrink — NOT flex-1. A zero-basis
+		// flex-1 here split the row's free space equally with the spacer, so this
+		// container got ~106px no matter how long the model name was, and the
+		// un-shrinkable label span painted straight across the effort pill.
+		<div className="relative min-w-0 shrink" onPointerDown={(event) => event.stopPropagation()}>
 			<Pill
 				grow
 				label={probing ? "checking…" : props.model}
@@ -903,14 +914,20 @@ function Pill({
 	return (
 		<button
 			className={cn(
-				"flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition-colors hover:bg-white/5 hover:text-shell-text",
+				"flex items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition-colors hover:bg-white/5 hover:text-shell-text",
 				warn ? "text-amber-300" : "text-shell-muted",
-				grow && "shrink",
+				// The growing pill (the model name) truncates; a fixed pill (the
+				// effort) never shrinks — one long model id must not squeeze its
+				// neighbours into overlap, which is exactly what it did.
+				grow ? "min-w-0 shrink" : "shrink-0",
 			)}
 			data-testid={testId}
 			onClick={onClick}
 			type="button">
-			<span className="truncate">{label}</span>
+			{/* min-w-0 is what makes truncate real: a flex item's default
+			    min-width is its content, so without it the span never shrinks —
+			    it overflows the button and paints over whatever sits beside it. */}
+			<span className="min-w-0 truncate">{label}</span>
 			<ChevronDown className="shrink-0" size={10} />
 		</button>
 	)
@@ -996,6 +1013,7 @@ function Entry({
 	assetTags,
 	onViewAsset,
 	livePlan,
+	streaming,
 	onDiscardPlan,
 }: {
 	entry: TranscriptEntryWire
@@ -1004,6 +1022,8 @@ function Entry({
 	onViewAsset(tag: string): void
 	/** The settled plan, if any — names which entry renders as the live card. */
 	livePlan: { kind: string; entryId: string } | null
+	/** A turn is streaming: the card demotes, because its offers are inert until it ends. */
+	streaming: boolean
 	onDiscardPlan(): void
 }) {
 	switch (entry.kind) {
@@ -1019,7 +1039,10 @@ function Entry({
 			// would execute — gets the card; superseded or consumed plans keep
 			// their flag but demote to dimmed prose, so the transcript still
 			// reads as history without two things claiming to be "the plan".
-			if (entry.plan && entry.id === livePlan?.entryId) {
+			// While a turn streams the card demotes too: main's guard already
+			// makes a mid-stream flip inert, and a card promising "switch to
+			// Act to apply" during a revision would be promising a no-op.
+			if (entry.plan && entry.id === livePlan?.entryId && !streaming) {
 				return (
 					<div
 						className="fade-in rounded-xl border border-shell-border bg-white/[0.03] px-3 py-2.5"

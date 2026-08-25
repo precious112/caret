@@ -54,10 +54,12 @@ function stubConversation(options: StubOptions) {
 			if (request.kind === "sync-apply") await options.onApply?.()
 			// Deliberately always reports no files: the decision must not depend on
 			// what the transcript happened to notice.
+			const reply = request.kind === "sync-plan" ? (options.planText ?? "") : ""
 			return {
 				ok: request.kind === "sync-plan" ? (options.planOk ?? true) : true,
 				sessionId: "ses_stub",
-				text: request.kind === "sync-plan" ? (options.planText ?? "") : "",
+				text: reply,
+				closingText: reply,
 				filesChanged: [],
 			}
 		},

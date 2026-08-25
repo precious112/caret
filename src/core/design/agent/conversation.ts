@@ -167,6 +167,8 @@ export interface RunOutcome {
 	sessionId: string | null
 	/** Everything the assistant said this turn, concatenated. */
 	text: string
+	/** Only what it said after its last tool call — the turn's actual reply. */
+	closingText: string
 	filesChanged: string[]
 }
 
@@ -336,6 +338,15 @@ export class AgentConversation {
 		// the user literally nothing.
 		let sawAnyEvent = false
 		let sawVisible = false
+		// Text since the last tool event — the turn's CLOSING reply. `text` is
+		// everything the model said; this is only what it said after it stopped
+		// working, which is the only part that can be a plan. A model that
+		// narrates "I'll inventory the routes…" and then runs tools for the rest
+		// of the turn has a non-empty `text` and an empty closing reply — and
+		// treating that preamble as "the plan" is exactly how a one-sentence
+		// status line shipped inside a plan card with "switch to Act to apply"
+		// under it.
+		let closingText = ""
 
 		try {
 			for await (const event of session.send({ text: request.prompt, images: request.images })) {
@@ -349,7 +360,11 @@ export class AgentConversation {
 				) {
 					sawVisible = true
 				}
-				if (event.type === "text") text += event.text
+				if (event.type === "text") {
+					text += event.text
+					closingText += event.text
+				}
+				if (event.type === "tool-start" || event.type === "tool-end") closingText = ""
 				if (event.type === "error") ok = false
 
 				applyEvent(this.transcript, event)
@@ -386,23 +401,24 @@ export class AgentConversation {
 			// The other half-empty ending: the model did real work (tools ran)
 			// and then closed its mouth. In a write turn that can be legitimate —
 			// edits without prose — so it stays a muted note. In a plan turn the
-			// reply IS the deliverable: a turn that read, and possibly thought,
-			// and never wrote the plan is a failure, or an Apply gate ships with
-			// nothing behind it — which is exactly how it shipped once. The
+			// CLOSING reply is the deliverable: a turn that read, and possibly
+			// thought, and possibly narrated its intentions up front, but never
+			// wrote the plan at the end is a failure — or a status sentence ships
+			// inside a plan card, which is exactly how it shipped once. The
 			// reasoning-only case lands here too (thinking sets `sawVisible`);
 			// no auto-retry, because recovery is one keypress — every plan-mode
 			// send is another plan turn — and a silent re-prompt spends money
 			// invisibly.
-			if (ok && sawVisible && text.trim() === "" && !this.stopRequested) {
-				if (request.mode === "read-only") {
+			if (ok && !this.stopRequested) {
+				if (request.mode === "read-only" && sawVisible && closingText.trim() === "") {
 					ok = false
 					applyEvent(this.transcript, {
 						type: "error",
 						message:
-							"The model finished the planning turn without writing a plan — it read, and possibly thought, but never replied. Send again to ask for the plan, or switch model.",
+							"The model finished the planning turn without writing the plan — anything it said before its tool work does not count as one. Send again to ask for the plan, or switch model.",
 						recoverable: true,
 					})
-				} else {
+				} else if (request.mode === "write" && sawVisible && text.trim() === "") {
 					addNote(this.transcript, "The model ended its turn without a reply.")
 				}
 			}
@@ -410,21 +426,23 @@ export class AgentConversation {
 			this.push(true)
 		}
 
-		// A completed plan turn settles its reply as THE plan; a failed one
-		// un-arms whatever was settled before, because the safe reading of a
+		// A completed plan turn settles its CLOSING reply as THE plan; a failed
+		// one un-arms whatever was settled before, because the safe reading of a
 		// broken revision is "there is no approved intent anymore", never
-		// "execute the previous version".
+		// "execute the previous version". The closing reply is always the last
+		// assistant entry — text after a tool line starts a fresh entry — so the
+		// mark and the measure agree.
 		if (request.mode === "read-only") {
-			if (ok && text.trim() !== "") {
+			if (ok && closingText.trim() !== "") {
 				const entryId = markPlanEntry(this.transcript)
-				if (entryId) this.plan = { kind: request.kind, sessionId: session.id, entryId, text }
+				if (entryId) this.plan = { kind: request.kind, sessionId: session.id, entryId, text: closingText }
 			} else {
 				this.plan = null
 			}
 			this.push(true)
 		}
 
-		const outcome: RunOutcome = { ok, sessionId: session.id, text, filesChanged: [...this.transcript.files] }
+		const outcome: RunOutcome = { ok, sessionId: session.id, text, closingText, filesChanged: [...this.transcript.files] }
 		try {
 			this.deps.onTurnComplete?.(outcome, request)
 		} catch (err) {
