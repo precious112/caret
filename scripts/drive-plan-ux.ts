@@ -77,11 +77,28 @@ async function ensureChatOpen(page: Page): Promise<void> {
 	await page.waitForSelector('[data-testid="chat-transcript"]', { timeout: 15_000 })
 }
 
+/** A copy of the real project the sync failures happen in. DRIVE_SYNC mode. */
+async function copyTest2(): Promise<string> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-driveux-t2-"))
+	child_process.execSync(
+		`rsync -a --exclude node_modules --exclude .git --exclude .mcp.json /Users/apple/dev/test-frontend/test2/ ${dir}/`,
+		{ stdio: "ignore" },
+	)
+	const git = (args: string) => child_process.execSync(`git ${args}`, { cwd: dir, stdio: "ignore" })
+	git("init -q")
+	git("config user.email caret@local")
+	git("config user.name Caret")
+	git("config commit.gpgSign false")
+	git("add -A")
+	git('commit -q -m "fixture" --no-verify')
+	return dir
+}
+
 async function main(): Promise<void> {
 	await fs.rm(OUT, { recursive: true, force: true })
 	await fs.mkdir(OUT, { recursive: true })
 
-	const fixture = await buildFixture()
+	const fixture = process.env.DRIVE_SYNC ? await copyTest2() : await buildFixture()
 	const userData = await fs.mkdtemp(path.join(os.tmpdir(), "caret-driveux-profile-"))
 	console.log(`[drive] fixture ${fixture}`)
 
@@ -102,7 +119,8 @@ async function main(): Promise<void> {
 		await shot(chrome, "01-chat-no-backend")
 
 		// 2 — select the bundled backend and pin the verify model, as dd does.
-		const model = await resolveVerifyModel()
+		// DRIVE_MODEL overrides — the point of DRIVE_SYNC is the user's own route.
+		const model = process.env.DRIVE_MODEL ? { id: process.env.DRIVE_MODEL, source: "env" } : await resolveVerifyModel()
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Backend" }).click()
 		await chrome.waitForSelector('[data-testid="backend-opencode"]', { timeout: 90_000 })
 		const row = chrome.getByTestId("backend-opencode")
@@ -174,6 +192,27 @@ async function main(): Promise<void> {
 		}
 		if (await chrome.getByTestId("chat-input").isDisabled()) throw new Error("the chat never became usable")
 		await shot(chrome, "02-composer-ready-act")
+
+		// DRIVE_SYNC: the user's actual gesture — click Sync, wait for the plan
+		// card. This is the flow that failed every time on their route.
+		if (process.env.DRIVE_SYNC) {
+			await chrome.getByTestId("top-bar").getByRole("button", { name: "Sync" }).click()
+			const commit = chrome.getByTestId("notification-stack").getByRole("button", { name: "Commit .caret/ changes" })
+			await commit.waitFor({ timeout: 30_000 }).then(
+				() => commit.click(),
+				() => {},
+			)
+			console.log(`[drive] sync started, waiting for the plan card…`)
+			await chrome.waitForSelector('[data-testid="chat-plan"]', { timeout: 600_000 }).catch(async () => {
+				const tail = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+				await shot(chrome, "sync-no-plan")
+				throw new Error(`no plan card within 10 minutes; chat tail: …${tail.slice(-500)}`)
+			})
+			await shot(chrome, "sync-plan-card")
+			const cardText = (await chrome.textContent('[data-testid="chat-plan"]').catch(() => null)) ?? ""
+			console.log(`[drive] PLAN CARD SETTLED: ${cardText.trim().slice(0, 200)}…`)
+			return
+		}
 
 		// 3 — flip to Plan with nothing settled: mode change only.
 		await chrome.getByTestId("chat-mode-plan").click()

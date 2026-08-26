@@ -273,6 +273,39 @@ describe("AgentConversation stall watchdog", () => {
 		assert(error && error.kind === "error" && /went silent again/.test(error.message), "the failure does not name the stall")
 	})
 
+	it("nudges a plan turn that ended after tools with no reply, and the nudge can recover it", async () => {
+		// The measured ChatGPT-route failure: one refused tool call ends the
+		// whole turn 0.2s later, mid-read, no reply. The nudge asks for the plan
+		// directly; the model still holds everything it read.
+		const { backend } = stalledBackend([
+			() =>
+				(async function* (): AsyncGenerator<BackendEvent> {
+					yield { type: "tool-start", callId: "c1", name: "bash", summary: "git ls-tree" }
+					yield { type: "tool-end", callId: "c1", name: "bash", ok: false }
+					yield { type: "done", text: "" }
+				})(),
+			() =>
+				(async function* (): AsyncGenerator<BackendEvent> {
+					yield { type: "text", text: "1. Create src/App.tsx from the home page." }
+					yield { type: "done", text: "" }
+				})(),
+		])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 5_000 })
+
+		const outcome = await conversation.run({
+			kind: "sync-plan",
+			title: "Sync design → app",
+			mode: "read-only",
+			prompt: "plan",
+		})
+
+		assert.equal(outcome.ok, true, "a nudge-recovered plan turn was reported as a failure")
+		assert.equal(outcome.closingText, "1. Create src/App.tsx from the home page.")
+		assert(conversation.settledPlan(), "the recovered plan did not settle")
+		const note = conversation.getState().transcript.entries.find((entry) => entry.kind === "note")
+		assert(note && note.kind === "note" && /asking it to write/.test(note.text), "the nudge happened without saying so")
+	})
+
 	it("a stall never settles a plan", async () => {
 		const { backend } = stalledBackend([() => hangingAfter([{ type: "text", text: "I'll inventory the routes…" }])])
 		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })
@@ -317,7 +350,7 @@ describe("AgentConversation plan mode", () => {
 		assert.equal(outcome.ok, false, "a plan turn with no plan was reported as a success")
 		const error = conversation.getState().transcript.entries.find((entry) => entry.kind === "error")
 		assert(
-			error && error.kind === "error" && /without writing the plan/.test(error.message),
+			error && error.kind === "error" && /would not write the plan/.test(error.message),
 			"the error does not name the failure",
 		)
 		assert.equal(conversation.getState().plan, null, "an empty plan settled anyway")

@@ -193,6 +193,14 @@ const DEFAULT_STALL_MS = 4 * 60_000
 const STALL_CONTINUE_PROMPT =
 	"Your previous stream died mid-turn and was cut off — nothing you were told has changed. Pick up exactly where you stopped and finish the turn; if the work was already done, write your reply now."
 
+/**
+ * The empty-close recovery for plan turns. Blunt about refusals because a
+ * refusal is the measured killer: on the ChatGPT route the turn ends the
+ * moment a tool is denied, and the model needs telling that this is survivable.
+ */
+const NUDGE_PROMPT =
+	"You ended your turn without writing the plan. If any tool call was refused, that is expected in plan mode — work without it. Do not call any more tools. Using only what you have already read, write the complete plan as your reply now."
+
 /** Resolves "stall" if `promise` doesn't settle within `ms`. Timer never leaks. */
 function raceStall<T>(promise: Promise<T>, ms: number): Promise<T | "stall"> {
 	return new Promise<T | "stall">((resolve, reject) => {
@@ -395,10 +403,12 @@ export class AgentConversation {
 		// a second stall fails the turn with its name on it.
 		const stallMs = this.deps.stallMs ?? DEFAULT_STALL_MS
 		let stalled = false
+		let stallRetried = false
+		let nudged = false
 		try {
-			for (let attempt = 0; attempt < 2; attempt++) {
+			let input: { text: string; images?: string[] } = { text: request.prompt, images: request.images }
+			while (true) {
 				stalled = false
-				const input = attempt === 0 ? { text: request.prompt, images: request.images } : { text: STALL_CONTINUE_PROMPT }
 				const stream = session.send(input)[Symbol.asyncIterator]()
 				while (true) {
 					const step = await raceStall(stream.next(), stallMs)
@@ -441,16 +451,43 @@ export class AgentConversation {
 					if (event.type === "done") break
 				}
 
-				if (!stalled) break
-				// Kill the wedged request server-side before anything else — two
-				// live prompts on one session is how a retry becomes a duplicate.
-				await session.abort().catch(() => {})
-				if (this.stopRequested || attempt > 0) break
-				addNote(
-					this.transcript,
-					`The provider went silent for ${Math.round(stallMs / 60_000)} minutes — the stream likely died upstream, and the backend does not time out on its own. Retrying the turn.`,
-				)
-				this.push(true)
+				if (stalled) {
+					// Kill the wedged request server-side before anything else — two
+					// live prompts on one session is how a retry becomes a duplicate.
+					await session.abort().catch(() => {})
+					if (this.stopRequested || stallRetried) break
+					stallRetried = true
+					addNote(
+						this.transcript,
+						`The provider went silent for ${Math.round(stallMs / 60_000)} minutes — the stream likely died upstream, and the backend does not time out on its own. Retrying the turn.`,
+					)
+					this.push(true)
+					input = { text: STALL_CONTINUE_PROMPT }
+					continue
+				}
+
+				// The turn ended cleanly but a plan turn's deliverable — the closing
+				// reply — never came. Ask for it directly, once, before failing.
+				// Measured cause on the ChatGPT provider route: one REFUSED tool call
+				// ends the whole turn 0.2s later, so any plan turn that trips a
+				// refusal dies mid-read. The model still holds everything it read;
+				// one "write it now" almost always completes the plan. Auto-correct,
+				// not just detect.
+				if (
+					request.mode === "read-only" &&
+					ok &&
+					sawVisible &&
+					closingText.trim() === "" &&
+					!this.stopRequested &&
+					!nudged
+				) {
+					nudged = true
+					addNote(this.transcript, "The model stopped without writing the plan — asking it to write it now.")
+					this.push(true)
+					input = { text: NUDGE_PROMPT }
+					continue
+				}
+				break
 			}
 
 			if (stalled && !this.stopRequested) {
@@ -499,7 +536,7 @@ export class AgentConversation {
 					applyEvent(this.transcript, {
 						type: "error",
 						message:
-							"The model finished the planning turn without writing the plan — anything it said before its tool work does not count as one. Send again to ask for the plan, or switch model.",
+							"The model would not write the plan, even when asked directly after its tool work. Send again, or switch model.",
 						recoverable: true,
 					})
 				} else if (request.mode === "write" && sawVisible && text.trim() === "") {

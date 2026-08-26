@@ -150,7 +150,24 @@ const READ_ONLY_COMMANDS = new Set([
 	"which",
 ])
 
-const READ_ONLY_GIT_SUBCOMMANDS = new Set(["blame", "branch", "diff", "log", "ls-files", "show", "status"])
+// `ls-tree`, `rev-parse` and `cat-file` earned their places the hard way:
+// each is a pure read in every form, and refusing a read the model reasonably
+// reaches for is not a safety win — it is a landmine. On the ChatGPT provider
+// route a single refusal was measured killing the WHOLE turn 0.2s later
+// (probe: scripts/probe-plan-turn.ts), which made every sync plan die at
+// exactly "a plan may not run `git ls-tree`".
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+	"blame",
+	"branch",
+	"cat-file",
+	"diff",
+	"log",
+	"ls-files",
+	"ls-tree",
+	"rev-parse",
+	"show",
+	"status",
+])
 
 /** Anything that could chain, redirect, or substitute another command. */
 const SHELL_COMPOSITION = /[;&|><`$(){}]|\n/
