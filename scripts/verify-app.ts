@@ -708,6 +708,16 @@ async function main(): Promise<void> {
 
 	const chrome = await app.firstWindow()
 
+	// The chrome is not usable at first paint: the top bar renders only after
+	// project state lands, which follows the design session's boot — and on a
+	// cold fixture that includes installing `.caret` dependencies, which can
+	// take longer than any single click's timeout. In a full run fifty
+	// scenarios have passed before anything clicks the chrome; in an `--only`
+	// subset the first UI scenario races that boot and loses (cc failed
+	// exactly this way, twice, on two different builds). Gate once, here, so
+	// every scenario after this line starts from a mounted chrome.
+	await chrome.waitForSelector('[data-testid="top-bar"]', { timeout: 120_000 })
+
 	// Collected for the whole run, not just for mount. A React error thrown at any
 	// point unmounts the tree, and every scenario after it then fails as "selector
 	// not found" — which reads as a missing feature rather than a crash. Whatever
@@ -4590,9 +4600,27 @@ export default function CatalogDemo() {
 		// scenario inconclusive rather than failed — the same distinction gg draws.
 		// The card appearing is the settled plan: a turn that ended without plan
 		// text FAILS in the conversation and no card ever shows, so this wait
-		// also holds down the empty-plan rule end to end.
-		await chrome.waitForSelector('[data-testid="chat-plan"]', { timeout: 300_000 }).catch(() => {
-			throw new Inconclusive("the model did not finish a plan within five minutes")
+		// also holds down the empty-plan rule end to end. Ten minutes, not five:
+		// the stall watchdog may spend four minutes discovering a dead stream and
+		// retry the turn once, and the wait has to outlive that recovery.
+		await chrome.waitForSelector('[data-testid="chat-plan"]', { timeout: 600_000 }).catch(async () => {
+			// Say WHICH thing didn't happen. "The model did not finish" covered
+			// both a declining model and a dead provider stream, and the
+			// difference is the whole diagnosis — the transcript names it now
+			// that the watchdog writes its findings there.
+			const transcript = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+			if (transcript.includes("went silent again")) {
+				throw new Inconclusive("the provider stream died twice (stall watchdog gave up) — a provider fault, not Caret's")
+			}
+			if (transcript.includes("went silent")) {
+				throw new Inconclusive("the provider stream died and the retry was still running at the deadline")
+			}
+			if (transcript.includes("without writing the plan")) {
+				throw new Inconclusive(
+					"the model ended its turn without writing a plan — model behaviour, correctly failed by Caret",
+				)
+			}
+			throw new Inconclusive(`the model did not finish a plan within ten minutes; chat tail: …${transcript.slice(-400)}`)
 		})
 
 		// The sync lane opens with the composer toggle on Plan — the mode is the

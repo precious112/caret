@@ -196,6 +196,100 @@ describe("AgentConversation.run", () => {
 })
 
 /**
+ * The stall watchdog: a dead socket is not a working model.
+ *
+ * Measured in the field: the pinned server's agent loop logged a step and then
+ * nothing, forever — no stream error, no idle. Nothing in that stack times
+ * out, so without the watchdog the turn is "Working…" until a human gives up.
+ * One automatic retry, then an honest failure.
+ */
+describe("AgentConversation stall watchdog", () => {
+	function hangingAfter(events: BackendEvent[]): AsyncGenerator<BackendEvent> {
+		return (async function* () {
+			yield* events
+			await new Promise<never>(() => {})
+		})()
+	}
+
+	function stalledBackend(sends: Array<() => AsyncGenerator<BackendEvent>>): { backend: CodingBackend; aborts: () => number } {
+		let aborts = 0
+		let call = 0
+		const backend = {
+			id: "opencode",
+			displayName: "Stub",
+			providerName: "Stub",
+			async availability() {
+				return { ready: true, installed: true, detail: "" }
+			},
+			async startSession(options: { mode: SessionMode }) {
+				return {
+					id: "ses_stub",
+					mode: options.mode,
+					send() {
+						const make = sends[Math.min(call, sends.length - 1)]
+						call += 1
+						return make()
+					},
+					async respondToPermission() {},
+					async abort() {
+						aborts += 1
+					},
+					async close() {},
+				}
+			},
+		} as unknown as CodingBackend
+		return { backend, aborts: () => aborts }
+	}
+
+	it("aborts a silent stream, retries once, and the retry can finish the turn", async () => {
+		const { backend, aborts } = stalledBackend([
+			() => hangingAfter([{ type: "text", text: "half a reply, then the wire died" }]),
+			() =>
+				hangingAfter([
+					{ type: "text", text: " — finished after the retry" },
+					{ type: "done", text: "" },
+				]),
+		])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })
+
+		const outcome = await conversation.run(REQUEST)
+
+		assert.equal(outcome.ok, true, "a recovered turn was reported as a failure")
+		assert.equal(aborts(), 1, "the wedged request was not aborted before the retry")
+		assert.ok(outcome.text.includes("finished after the retry"))
+		const note = conversation.getState().transcript.entries.find((entry) => entry.kind === "note")
+		assert(note && note.kind === "note" && /went silent/.test(note.text), "the retry happened without saying why")
+	})
+
+	it("fails the turn with its name on it when the stream stalls twice", async () => {
+		const { backend, aborts } = stalledBackend([() => hangingAfter([{ type: "text", text: "start" }])])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })
+
+		const outcome = await conversation.run(REQUEST)
+
+		assert.equal(outcome.ok, false, "a twice-stalled turn was reported as a success")
+		assert.equal(aborts(), 2, "each stalled attempt must be aborted server-side")
+		const error = conversation.getState().transcript.entries.find((entry) => entry.kind === "error")
+		assert(error && error.kind === "error" && /went silent again/.test(error.message), "the failure does not name the stall")
+	})
+
+	it("a stall never settles a plan", async () => {
+		const { backend } = stalledBackend([() => hangingAfter([{ type: "text", text: "I'll inventory the routes…" }])])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })
+
+		const outcome = await conversation.run({
+			kind: "sync-plan",
+			title: "Sync design → app",
+			mode: "read-only",
+			prompt: "plan",
+		})
+
+		assert.equal(outcome.ok, false)
+		assert.equal(conversation.getState().plan, null, "a stalled plan turn left a plan armed")
+	})
+})
+
+/**
  * The plan-mode contract: the reply IS the deliverable.
  *
  * A read-only turn that read, and possibly thought, and never wrote the plan

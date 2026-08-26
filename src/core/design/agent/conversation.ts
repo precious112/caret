@@ -125,6 +125,8 @@ export interface ConversationDeps {
 	 * turn itself.
 	 */
 	onTurnComplete?(outcome: RunOutcome, request: RunRequest): void
+	/** Overrides the stall watchdog's threshold. Tests only. */
+	stallMs?: number
 }
 
 export interface RunRequest {
@@ -174,6 +176,39 @@ export interface RunOutcome {
 
 /** State pushes are coalesced to this interval so token streaming isn't one IPC per character. */
 const PUSH_INTERVAL_MS = 60
+
+/**
+ * True silence for this long trips the stall watchdog. Four minutes clears the
+ * slowest legitimate gap observed — a long-running tool emits nothing between
+ * tool-start and tool-end — while a dead socket, which emits nothing forever,
+ * cannot hide inside it.
+ */
+const DEFAULT_STALL_MS = 4 * 60_000
+
+/**
+ * What the retry says. Generic across modes on purpose: a plan turn should
+ * finish its plan, a write turn its edits, and the model — with the whole
+ * session still in context — knows which it was doing.
+ */
+const STALL_CONTINUE_PROMPT =
+	"Your previous stream died mid-turn and was cut off — nothing you were told has changed. Pick up exactly where you stopped and finish the turn; if the work was already done, write your reply now."
+
+/** Resolves "stall" if `promise` doesn't settle within `ms`. Timer never leaks. */
+function raceStall<T>(promise: Promise<T>, ms: number): Promise<T | "stall"> {
+	return new Promise<T | "stall">((resolve, reject) => {
+		const timer = setTimeout(() => resolve("stall"), ms)
+		promise.then(
+			(value) => {
+				clearTimeout(timer)
+				resolve(value)
+			},
+			(err) => {
+				clearTimeout(timer)
+				reject(err)
+			},
+		)
+	})
+}
 
 /**
  * The generic act-on-plan prompt. It opens by revoking the planning framing —
@@ -348,35 +383,84 @@ export class AgentConversation {
 		// under it.
 		let closingText = ""
 
+		// The stall watchdog. A provider connection can die without erroring —
+		// measured: the pinned server's agent loop logged step 3 of a sync plan
+		// and then nothing, ever; no stream error, no idle. Nothing in that stack
+		// has a timeout, so without this the turn shows "Working…" until the user
+		// gives up and presses Stop. Every event resets the clock — reasoning
+		// deltas keep a genuinely thinking model alive — so tripping requires
+		// TRUE silence. One automatic retry (abort the wedged request, tell the
+		// model its stream died, let it pick up in the same session), because a
+		// dead socket is transport weather, not a decision anyone needs to make;
+		// a second stall fails the turn with its name on it.
+		const stallMs = this.deps.stallMs ?? DEFAULT_STALL_MS
+		let stalled = false
 		try {
-			for await (const event of session.send({ text: request.prompt, images: request.images })) {
-				this.lastEventAt = Date.now()
-				if (event.type !== "done") sawAnyEvent = true
-				if (
-					event.type === "text" ||
-					event.type === "thinking" ||
-					event.type === "tool-start" ||
-					event.type === "permission"
-				) {
-					sawVisible = true
-				}
-				if (event.type === "text") {
-					text += event.text
-					closingText += event.text
-				}
-				if (event.type === "tool-start" || event.type === "tool-end") closingText = ""
-				if (event.type === "error") ok = false
+			for (let attempt = 0; attempt < 2; attempt++) {
+				stalled = false
+				const input = attempt === 0 ? { text: request.prompt, images: request.images } : { text: STALL_CONTINUE_PROMPT }
+				const stream = session.send(input)[Symbol.asyncIterator]()
+				while (true) {
+					const step = await raceStall(stream.next(), stallMs)
+					if (step === "stall") {
+						stalled = true
+						break
+					}
+					if (step.done) break
+					const event = step.value
+					this.lastEventAt = Date.now()
+					if (event.type !== "done") sawAnyEvent = true
+					if (
+						event.type === "text" ||
+						event.type === "thinking" ||
+						event.type === "tool-start" ||
+						event.type === "permission"
+					) {
+						sawVisible = true
+					}
+					if (event.type === "text") {
+						text += event.text
+						closingText += event.text
+					}
+					if (event.type === "tool-start" || event.type === "tool-end") closingText = ""
+					if (event.type === "error") ok = false
 
-				applyEvent(this.transcript, event)
+					applyEvent(this.transcript, event)
 
-				if (event.type === "permission") {
-					// Not awaited: the stream has to keep flowing while a decision is
-					// made, or a second permission request in the same turn deadlocks
-					// behind the first one's prompt.
-					void this.decide(session, event)
+					if (event.type === "permission") {
+						// Not awaited: the stream has to keep flowing while a decision is
+						// made, or a second permission request in the same turn deadlocks
+						// behind the first one's prompt.
+						void this.decide(session, event)
+					}
+
+					this.push(event.type === "done")
+					// `done` IS the end of the turn — the adapter returns right
+					// after emitting it. Waiting for the iterator to close as well
+					// would hand a stream that never closes to the stall timer.
+					if (event.type === "done") break
 				}
 
-				this.push(event.type === "done")
+				if (!stalled) break
+				// Kill the wedged request server-side before anything else — two
+				// live prompts on one session is how a retry becomes a duplicate.
+				await session.abort().catch(() => {})
+				if (this.stopRequested || attempt > 0) break
+				addNote(
+					this.transcript,
+					`The provider went silent for ${Math.round(stallMs / 60_000)} minutes — the stream likely died upstream, and the backend does not time out on its own. Retrying the turn.`,
+				)
+				this.push(true)
+			}
+
+			if (stalled && !this.stopRequested) {
+				ok = false
+				applyEvent(this.transcript, {
+					type: "error",
+					message:
+						"The provider went silent again after a retry — the turn is over. Send again, switch model, or try later.",
+					recoverable: true,
+				})
 			}
 		} catch (err) {
 			ok = false
