@@ -74,7 +74,7 @@
 		"electron-vite": "^5.0.0",
 		"lucide-react": "^0.469.0",
 		"mocha": "^11.0.1",
-		"opencode-ai": "1.18.11",
+		"opencode-ai": "1.18.23",
 		"playwright": "^1.58.1",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",

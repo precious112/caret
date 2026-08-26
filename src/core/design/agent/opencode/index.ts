@@ -888,22 +888,29 @@ class OpencodeSessionHandle implements BackendSession {
 	}
 
 	async respondToPermission(requestId: string, decision: PermissionDecision, feedback?: string): Promise<void> {
+		// Two generations of this endpoint exist. The V2 route
+		// (`/permission/{id}/reply`, body `{reply, message?}`) is the one whose
+		// reject handler is a CORRECTION — feedback reaches the model's tool
+		// result and the loop can continue. The legacy route
+		// (`/session/{id}/permissions/{id}`) treats a reject as a thrown error:
+		// the turn dies 0.2s later, unasked, and any feedback is dropped
+		// (both measured). Try V2 first; fall back when it is not mounted.
+		const reply = DECISION_TO_REPLY[decision]
+		const message = decision === "deny" && feedback ? { message: feedback } : {}
+		try {
+			await request(this.server, `/permission/${requestId}/reply`, {
+				method: "POST",
+				query: { directory: this.options.workingDirectory },
+				body: { reply, ...message },
+			})
+			return
+		} catch (err) {
+			Logger.info(`[backend] v2 permission reply unavailable (${err}) — using the legacy route`)
+		}
 		await request(this.server, `/session/${this.id}/permissions/${requestId}`, {
 			method: "POST",
 			query: { directory: this.options.workingDirectory },
-			// `message` on a reject is DESIGNED to become the model's tool error
-			// ("rejected … with the following feedback: {message}" — the server's
-			// PermissionCorrectedError), but MEASURED on the pinned 1.18.11
-			// server: the mounted route drops it, and the model gets the bare
-			// rejection either way. It is sent anyway, alongside both generations
-			// of the verdict key (`response` old, `reply` new PermissionReplyBody),
-			// so the feedback loop lights up at the pin bump with no code change.
-			// Until then the conversation's post-turn nudge carries the reasons.
-			body: {
-				response: DECISION_TO_REPLY[decision],
-				reply: DECISION_TO_REPLY[decision],
-				...(decision === "deny" && feedback ? { message: feedback } : {}),
-			},
+			body: { response: reply, ...message },
 		}).catch((err) => {
 			// A permission that has already been answered (by a timeout, or by the
 			// turn ending) is not worth failing the whole turn over.
