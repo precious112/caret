@@ -11,6 +11,9 @@
  * user is the one who stopped it.
  */
 import { strict as assert } from "assert"
+import * as fs from "fs/promises"
+import * as os from "os"
+import * as path from "path"
 
 import type { BackendEvent, CodingBackend, SessionMode } from "../backend"
 import { AgentConversation, type ConversationDeps } from "../conversation"
@@ -169,6 +172,80 @@ describe("AgentConversation.run", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50))
 		assert.equal(outcome.ok, true)
 		assert.deepEqual(decisions, [{ id: "per_1", decision: "deny" }], "the unattended turn did not auto-deny the ask")
+	})
+
+	it("a policy deny carries its reason to the model as feedback", async () => {
+		// The server formats reject+message as "rejected … with the following
+		// feedback: {message}". A bare reject reads as "the user said stop" —
+		// one provider route was measured ending the whole turn on it. The
+		// reason Caret shows the human must be the reason the model gets.
+		const replies: Array<{ decision: string; feedback?: string }> = []
+		const backend = stubBackend([
+			{ type: "permission", requestId: "per_3", tool: "bash", path: "npm install", summary: "Run npm install?" },
+			{ type: "text", text: "carrying on without it" },
+			{ type: "done", text: "" },
+		])
+		const original = backend.startSession.bind(backend)
+		backend.startSession = async (options) => {
+			const session = await original(options)
+			session.respondToPermission = async (_id: string, decision: string, feedback?: string) => {
+				replies.push({ decision, feedback })
+			}
+			return session
+		}
+		const conversation = new AgentConversation(deps(backend))
+
+		await conversation.run({ kind: "sync-plan", title: "Sync design → app", mode: "read-only", prompt: "plan" })
+		await new Promise((resolve) => setTimeout(resolve, 50))
+
+		assert.equal(replies.length, 1)
+		assert.equal(replies[0].decision, "deny")
+		assert.ok(replies[0].feedback?.includes("allowlist"), `the deny carried no usable feedback: ${replies[0].feedback}`)
+	})
+
+	it("tells the user when the agent is refused the same thing twice", async () => {
+		const backend = stubBackend([
+			{ type: "permission", requestId: "per_4", tool: "bash", path: "npm install", summary: "Run npm install?" },
+			{ type: "permission", requestId: "per_5", tool: "bash", path: "npm install", summary: "Run npm install?" },
+			{ type: "text", text: "fine, planning without it" },
+			{ type: "done", text: "" },
+		])
+		const conversation = new AgentConversation(deps(backend))
+
+		await conversation.run({ kind: "sync-plan", title: "Sync design → app", mode: "read-only", prompt: "plan" })
+		await new Promise((resolve) => setTimeout(resolve, 50))
+
+		const note = conversation
+			.getState()
+			.transcript.entries.find((entry) => entry.kind === "note" && /refused .* twice/.test(entry.text))
+		assert(note, "two refusals of the same command went unremarked to the user")
+	})
+
+	it("honours the project's own read-only allowlist from .caret/permissions.json", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-conv-perms-"))
+		await fs.mkdir(path.join(dir, ".caret"), { recursive: true })
+		await fs.writeFile(path.join(dir, ".caret", "permissions.json"), JSON.stringify({ readOnlyCommands: ["npm ls"] }))
+		const replies: string[] = []
+		const backend = stubBackend([
+			{ type: "permission", requestId: "per_6", tool: "bash", path: "npm ls --depth=1", summary: "Run npm ls?" },
+			{ type: "text", text: "the plan" },
+			{ type: "done", text: "" },
+		])
+		const original = backend.startSession.bind(backend)
+		backend.startSession = async (options) => {
+			const session = await original(options)
+			session.respondToPermission = async (_id: string, decision: string) => {
+				replies.push(decision)
+			}
+			return session
+		}
+		const conversation = new AgentConversation({ ...deps(backend), projectPath: dir })
+
+		await conversation.run({ kind: "sync-plan", title: "Sync design → app", mode: "read-only", prompt: "plan" })
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		await fs.rm(dir, { recursive: true, force: true })
+
+		assert.deepEqual(replies, ["allow"], "the user's own allowlist entry was not honoured")
 	})
 
 	it("leaves the same promptable permission pending on an attended turn", async () => {

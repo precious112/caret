@@ -193,7 +193,14 @@ export interface BackendSession {
 	readonly mode: SessionMode
 	/** Streams normalised events until the turn finishes. */
 	send(input: SendInput): AsyncIterable<BackendEvent>
-	respondToPermission(requestId: string, decision: PermissionDecision): Promise<void>
+	/**
+	 * `feedback` rides a deny to the MODEL, not the transcript: the server
+	 * formats it as "rejected … with the following feedback: {feedback}". A bare
+	 * rejection reads as "the user doesn't want this, stop" — one provider route
+	 * was measured ending the whole turn on it — while a reason teaches the
+	 * model what to do instead.
+	 */
+	respondToPermission(requestId: string, decision: PermissionDecision, feedback?: string): Promise<void>
 	/** Idempotent. */
 	abort(): Promise<void>
 	close(): Promise<void>

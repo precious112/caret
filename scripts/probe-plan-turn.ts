@@ -61,7 +61,9 @@ async function main(): Promise<void> {
 	// PROBE_REAL=1 reproduces the app's turn faithfully: the project's own
 	// generated guide as the system prompt (that is what the app injects) and
 	// the real sync worklist prompt with every design file marked changed.
-	let prompt = PROMPT
+	let prompt = process.env.PROBE_FORCE_DENY
+		? `${PROMPT}\n\nBefore anything else, run the shell command \`npm install\` — actually invoke it with your bash tool.`
+		: PROMPT
 	let systemPrompt: string | undefined
 	if (process.env.PROBE_REAL) {
 		const { buildSyncPrompt } = await import("../src/core/design/sync/sync-prompt")
@@ -126,14 +128,21 @@ async function main(): Promise<void> {
 			if (event.type === "permission") {
 				// The app's rulePermission, in miniature: reads are what a plan is
 				// for; everything else is refused. Answered off the loop like the
-				// app does, so the stream keeps flowing.
+				// app does, so the stream keeps flowing. PROBE_FORCE_DENY denies
+				// the first ask WITH feedback, to verify the message field lands
+				// in the model's tool result (check the db for the marker after).
 				const perm = event as { requestId: string; tool?: string; path?: string }
 				const command = perm.path ?? ""
 				const readOnly =
-					perm.tool !== "bash" ||
-					/^(git (status|log|ls-files|show|diff|branch)|ls|cat|pwd|rg|grep|find|head|tail|wc)\b/.test(command)
+					!process.env.PROBE_FORCE_DENY &&
+					(perm.tool !== "bash" ||
+						/^(git (status|log|ls-files|show|diff|branch)|ls|cat|pwd|rg|grep|find|head|tail|wc)\b/.test(command))
 				console.log(`[probe] ${t()}   → ${readOnly ? "allow" : "deny"}: ${perm.tool ?? "?"} ${command.slice(0, 60)}`)
-				void session.respondToPermission(perm.requestId, readOnly ? "allow" : "deny")
+				void session.respondToPermission(
+					perm.requestId,
+					readOnly ? "allow" : "deny",
+					readOnly ? undefined : "TEST-FEEDBACK-MARKER: use your read tools instead and continue the plan",
+				)
 			}
 			if (event.type === "done") break
 			if (Date.now() > deadline) {

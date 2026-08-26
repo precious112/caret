@@ -9,6 +9,9 @@
  * endless thread. The history panel then reads as a list of things the user did,
  * which is the only shape in which chat history is worth keeping at all.
  */
+import { readFile } from "fs/promises"
+import { join } from "path"
+
 import { Logger } from "@/shared/services/Logger"
 import { expandReferences, readAssetIndex } from "../assets"
 import {
@@ -195,11 +198,20 @@ const STALL_CONTINUE_PROMPT =
 
 /**
  * The empty-close recovery for plan turns. Blunt about refusals because a
- * refusal is the measured killer: on the ChatGPT route the turn ends the
- * moment a tool is denied, and the model needs telling that this is survivable.
+ * refusal is the measured killer: the turn ends the moment a tool is denied
+ * (both provider routes, measured), and the model needs telling that this is
+ * survivable. The denied commands are NAMED because the pinned server drops
+ * the feedback Caret attaches to the rejection itself — this prompt is the
+ * only channel the reasons actually reach the model through until the pin
+ * bump.
  */
-const NUDGE_PROMPT =
-	"You ended your turn without writing the plan. If any tool call was refused, that is expected in plan mode — work without it. Do not call any more tools. Using only what you have already read, write the complete plan as your reply now."
+function buildNudgePrompt(denied: string[]): string {
+	const refusals =
+		denied.length > 0
+			? `These tool calls were refused by plan-mode policy, which only permits reads: ${denied.map((d) => `\`${d}\``).join(", ")}. That is expected — plans read, the apply phase acts. `
+			: "If any tool call was refused, that is expected in plan mode — work without it. "
+	return `You ended your turn without writing the plan. ${refusals}Do not call any more tools. Using only what you have already read, write the complete plan as your reply now.`
+}
 
 /** Resolves "stall" if `promise` doesn't settle within `ms`. Timer never leaks. */
 function raceStall<T>(promise: Promise<T>, ms: number): Promise<T | "stall"> {
@@ -255,6 +267,9 @@ export class AgentConversation {
 	private pushTimer: NodeJS.Timeout | null = null
 	/** Whether the CURRENT turn runs unattended — see {@link RunRequest.unattended}. */
 	private unattendedTurn = false
+	/** Auto-denial counts for THIS turn, keyed tool:target — see noteRepeatedDenial. */
+	private denialsThisTurn = new Map<string, number>()
+	private allowlistCache: { at: number; commands: string[] } | null = null
 
 	constructor(private readonly deps: ConversationDeps) {}
 
@@ -298,6 +313,7 @@ export class AgentConversation {
 		// being opened is aimed at this turn.
 		this.stopRequested = false
 		this.unattendedTurn = request.unattended === true
+		this.denialsThisTurn = new Map()
 
 		if (!this.activity || this.activity.kind !== request.kind || request.resumeSessionId) {
 			this.transcript = request.resumeSessionId ? this.transcript : emptyTranscript()
@@ -484,7 +500,9 @@ export class AgentConversation {
 					nudged = true
 					addNote(this.transcript, "The model stopped without writing the plan — asking it to write it now.")
 					this.push(true)
-					input = { text: NUDGE_PROMPT }
+					input = {
+						text: buildNudgePrompt([...this.denialsThisTurn.keys()].map((key) => key.slice(key.indexOf(":") + 1))),
+					}
 					continue
 				}
 				break
@@ -621,8 +639,52 @@ export class AgentConversation {
 	async respondToPermission(requestId: string, decision: PermissionDecision): Promise<void> {
 		if (decision === "allow-always") await this.deps.setAppWrites("allow")
 		resolvePermission(this.transcript, requestId, decision === "deny" ? "denied" : "allowed")
-		await this.session?.respondToPermission(requestId, decision)
+		await this.session?.respondToPermission(
+			requestId,
+			decision,
+			decision === "deny" ? "the user declined this — do not retry it; find another way, or finish without it" : undefined,
+		)
 		this.push(true)
+	}
+
+	/**
+	 * The project's own additions to the plan-mode command allowlist, from
+	 * `.caret/permissions.json` (`{ "readOnlyCommands": ["npm ls", …] }`).
+	 * Read fresh with a short cache: permission events are rare, and a user
+	 * editing the file mid-conversation should not need a restart.
+	 */
+	private async userAllowlist(): Promise<string[]> {
+		const now = Date.now()
+		if (this.allowlistCache && now - this.allowlistCache.at < 5_000) return this.allowlistCache.commands
+		let commands: string[] = []
+		try {
+			const raw = await readFile(join(this.deps.projectPath, ".caret", "permissions.json"), "utf-8")
+			const parsed = JSON.parse(raw) as { readOnlyCommands?: unknown }
+			if (Array.isArray(parsed.readOnlyCommands)) {
+				commands = parsed.readOnlyCommands.filter((entry): entry is string => typeof entry === "string")
+			}
+		} catch {
+			// No file, or not JSON: the built-in allowlist stands alone.
+		}
+		this.allowlistCache = { at: now, commands }
+		return commands
+	}
+
+	/**
+	 * A model asking twice for something Caret refused is a model that needs
+	 * it. The refusals themselves are already in the transcript line by line;
+	 * this note is the step back — it tells the USER the agent is blocked and
+	 * names the ways out, instead of letting the pattern scroll past as noise.
+	 */
+	private noteRepeatedDenial(tool: string, target: string): void {
+		const key = `${tool}:${target}`
+		const count = (this.denialsThisTurn.get(key) ?? 0) + 1
+		this.denialsThisTurn.set(key, count)
+		if (count !== 2) return
+		addNote(
+			this.transcript,
+			`The agent has now been refused \`${target || tool}\` twice — it seems to need it. If it is safe, add it to .caret/permissions.json under "readOnlyCommands"; otherwise reply and tell the agent what to use instead.`,
+		)
 	}
 
 	/**
@@ -753,12 +815,25 @@ export class AgentConversation {
 	private async decide(session: BackendSession, event: Extract<BackendEvent, { type: "permission" }>): Promise<void> {
 		const ruling = rulePermission(
 			{ action: event.tool, patterns: event.path ? [event.path] : [] },
-			{ projectPath: this.deps.projectPath, mode: session.mode, appWrites: this.deps.appWrites() },
+			{
+				projectPath: this.deps.projectPath,
+				mode: session.mode,
+				appWrites: this.deps.appWrites(),
+				extraReadOnlyCommands: await this.userAllowlist(),
+			},
 		)
 
 		if (ruling.kind === "auto") {
 			resolvePermission(this.transcript, event.requestId, ruling.decision === "deny" ? "denied" : "allowed", ruling.reason)
-			await session.respondToPermission(event.requestId, ruling.decision)
+			// The reason rides the deny to the model as feedback. Without it the
+			// server sends only "the user rejected permission", which the model
+			// reads as "stop" — one route was measured ending the turn on it.
+			await session.respondToPermission(
+				event.requestId,
+				ruling.decision,
+				ruling.decision === "deny" ? ruling.reason : undefined,
+			)
+			if (ruling.decision === "deny") this.noteRepeatedDenial(event.tool, event.path ?? "")
 			this.push(true)
 			return
 		}
@@ -769,13 +844,10 @@ export class AgentConversation {
 		// `git status`. Denied with the reason on record; the agent works with
 		// the tools that need no permission.
 		if (this.unattendedTurn) {
-			resolvePermission(
-				this.transcript,
-				event.requestId,
-				"denied",
-				"this take runs unattended — anything that would ask for permission is denied; use your read and edit tools instead",
-			)
-			await session.respondToPermission(event.requestId, "deny")
+			const reason =
+				"this take runs unattended — anything that would ask for permission is denied; use your read and edit tools instead"
+			resolvePermission(this.transcript, event.requestId, "denied", reason)
+			await session.respondToPermission(event.requestId, "deny", reason)
 			this.push(true)
 			return
 		}

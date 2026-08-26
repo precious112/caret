@@ -31,6 +31,13 @@ export interface PermissionContext {
 	projectPath: string
 	mode: SessionMode
 	appWrites: AppWritePolicy
+	/**
+	 * Command prefixes the USER has vouched for as read-only, from the
+	 * project's `.caret/permissions.json`. The built-in allowlist is Caret's
+	 * best guess at "reads"; a project that needs `npm ls` or a bespoke report
+	 * script in its plans should not need a Caret release to get it.
+	 */
+	extraReadOnlyCommands?: readonly string[]
 }
 
 export type PermissionRuling =
@@ -75,9 +82,16 @@ export function rulePermission(request: PermissionRequest, context: PermissionCo
 		// the session is — and refuse everything else, including anything that
 		// could chain a second command onto a harmless first one.
 		if (context.mode === "read-only") {
-			return isReadOnlyCommand(command)
+			return isReadOnlyCommand(command, context.extraReadOnlyCommands)
 				? { kind: "auto", decision: "allow", reason: "reading is what a plan is for" }
-				: { kind: "auto", decision: "deny", reason: `a plan may not run \`${command}\`` }
+				: {
+						kind: "auto",
+						decision: "deny",
+						// The reason is written for the MODEL as much as the human —
+						// it rides the rejection as feedback. Name the alternative,
+						// because "no" alone was measured ending whole turns.
+						reason: `\`${command}\` is not on the plan-mode allowlist — plans may only read. Use your read tools (read, glob, grep, git log/diff/ls-files/ls-tree) instead, and carry on with the plan.`,
+					}
 		}
 
 		return { kind: "ask", summary: `Run \`${command}\`?` }
@@ -193,9 +207,15 @@ const HARMLESS_REDIRECTS = /\s*\d?>\s*\/dev\/null|\s*2>&1/g
 const SINGLE_QUOTED = /'[^']*'/g
 const DOUBLE_QUOTED = /"[^"$`]*"/g
 
-export function isReadOnlyCommand(command: string): boolean {
+export function isReadOnlyCommand(command: string, extra?: readonly string[]): boolean {
 	const bare = command.replace(HARMLESS_REDIRECTS, "").replace(SINGLE_QUOTED, "").replace(DOUBLE_QUOTED, "")
 	if (SHELL_COMPOSITION.test(bare)) return false
+
+	// The user's own entries, prefix-matched — but only AFTER the composition
+	// guard above. Vouching for `npm ls` must not vouch for `npm ls; rm -rf .`.
+	if (extra?.some((prefix) => prefix.trim() && (command === prefix.trim() || command.startsWith(`${prefix.trim()} `)))) {
+		return true
+	}
 
 	const [program, ...rest] = command.trim().split(/\s+/)
 	if (!program) return false
