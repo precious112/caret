@@ -625,6 +625,14 @@ export class OpencodeBackend implements CodingBackend {
 			.sort((a, b) => b.updatedAt - a.updatedAt)
 	}
 
+	async deleteSession(workingDirectory: string, sessionId: string): Promise<void> {
+		const server = await this.server()
+		await request(server, `/session/${sessionId}`, {
+			method: "DELETE",
+			query: { directory: workingDirectory },
+		})
+	}
+
 	/**
 	 * An old session as the events a live one would have emitted.
 	 *

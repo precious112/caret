@@ -87,6 +87,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"agent:disconnectProvider": true,
 	"agent:sessions": true,
 	"agent:replay": true,
+	"agent:deleteSession": true,
 	"prefs:get": true,
 	"prefs:set": true,
 	"canvas:message": true,

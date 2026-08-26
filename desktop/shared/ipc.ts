@@ -897,6 +897,8 @@ export interface IpcRequests {
 	"agent:disconnectProvider": (providerId: string) => boolean
 	"agent:sessions": (projectPath: string) => AgentSessionWire[]
 	"agent:replay": (projectPath: string, sessionId: string) => boolean
+	/** Deletes one past session and its transcript from the backend, permanently. */
+	"agent:deleteSession": (projectPath: string, sessionId: string) => void
 
 	"prefs:get": () => Record<string, unknown>
 	"prefs:set": (patch: Record<string, unknown>) => void

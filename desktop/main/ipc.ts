@@ -784,6 +784,12 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return (await windows.get(projectPath)?.getAgent().conversation.replay(sessionId)) ?? false
 	})
 
+	ipcMain.handle("agent:deleteSession", async (_event, projectPath: string, sessionId: string) => {
+		const id = getPrefs().backendId
+		if (!id) return
+		await getBackend(id).deleteSession?.(projectPath, sessionId)
+	})
+
 	// ── preferences ───────────────────────────────────────────────────────────
 
 	ipcMain.handle("prefs:get", () => getPrefs())

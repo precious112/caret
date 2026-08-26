@@ -33,6 +33,7 @@ import {
 	Plus,
 	Send,
 	Square,
+	Trash2,
 	Wrench,
 	X,
 } from "lucide-react"
@@ -265,6 +266,13 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 			    chat entirely; picking a session (or going back) returns to it. */}
 			{sessions ? (
 				<SessionList
+					onDelete={(id) => {
+						// Delete, then re-fetch rather than filtering locally: the list
+						// the user sees should always be what the backend actually holds.
+						void invoke("agent:deleteSession", project.path, id).then(() =>
+							invoke("agent:sessions", project.path).then(setSessions),
+						)
+					}}
 					onPick={(id) => {
 						setSessions(null)
 						void invoke("agent:replay", project.path, id)
@@ -983,7 +991,15 @@ function sessionWhen(updatedAt: number): string {
 		: then.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
-function SessionList({ sessions: allSessions, onPick }: { sessions: AgentSessionWire[]; onPick(id: string): void }) {
+function SessionList({
+	sessions: allSessions,
+	onPick,
+	onDelete,
+}: {
+	sessions: AgentSessionWire[]
+	onPick(id: string): void
+	onDelete(id: string): void
+}) {
 	const sessions = allSessions.filter((session) => !HIDDEN_SESSION_TITLES.has(session.title))
 	return (
 		<div className="flex-1 overflow-y-auto py-1.5" data-testid="chat-sessions">
@@ -992,15 +1008,29 @@ function SessionList({ sessions: allSessions, onPick }: { sessions: AgentSession
 					Nothing here yet. Conversations you have with Caret will be listed here to reopen.
 				</p>
 			) : (
+				// A row is a group, not one button: a delete control nested inside
+				// the pick button would be invalid HTML and misfire both handlers.
 				sessions.map((session) => (
-					<button
-						className="flex w-full items-baseline gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-white/5"
-						key={session.id}
-						onClick={() => onPick(session.id)}
-						type="button">
-						<span className="min-w-0 flex-1 truncate">{session.title}</span>
-						<span className="shrink-0 text-[11px] text-shell-muted">{sessionWhen(session.updatedAt)}</span>
-					</button>
+					<div
+						className="group flex items-center pr-2 transition-colors hover:bg-white/5"
+						data-testid="chat-session-row"
+						key={session.id}>
+						<button
+							className="flex min-w-0 flex-1 items-baseline gap-3 px-3.5 py-2.5 text-left"
+							onClick={() => onPick(session.id)}
+							type="button">
+							<span className="min-w-0 flex-1 truncate">{session.title}</span>
+							<span className="shrink-0 text-[11px] text-shell-muted">{sessionWhen(session.updatedAt)}</span>
+						</button>
+						<button
+							className="shrink-0 rounded-md p-1.5 text-shell-muted opacity-0 transition-opacity hover:text-red-300 focus-visible:opacity-100 group-hover:opacity-100"
+							data-testid="chat-session-delete"
+							onClick={() => onDelete(session.id)}
+							title="Delete this conversation"
+							type="button">
+							<Trash2 size={12} />
+						</button>
+					</div>
 				))
 			)}
 		</div>

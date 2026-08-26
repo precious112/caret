@@ -319,6 +319,8 @@ export interface CodingBackend {
 	disconnectProvider?(providerId: string): Promise<void>
 	/** Sessions previously run in this project, newest first. */
 	listSessions?(workingDirectory: string): Promise<BackendSessionSummary[]>
+	/** Deletes one past session and its transcript, permanently. */
+	deleteSession?(workingDirectory: string, sessionId: string): Promise<void>
 	/**
 	 * An old session replayed as the same events a live one emits, so the chat is
 	 * rebuilt by the reducer that built it the first time rather than by a second

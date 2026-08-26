@@ -193,6 +193,43 @@ async function main(): Promise<void> {
 		if (await chrome.getByTestId("chat-input").isDisabled()) throw new Error("the chat never became usable")
 		await shot(chrome, "02-composer-ready-act")
 
+		// DRIVE_HISTORY: create one session, then exercise the history list's
+		// delete control — icon appears on hover, click removes the row, and the
+		// refreshed list is the backend's truth.
+		if (process.env.DRIVE_HISTORY) {
+			await chrome.getByTestId("chat-input").fill("Reply with the single word: ready")
+			await chrome.getByTestId("chat-input").press("Enter")
+			// Two occurrences: the user's own bubble echoes the word instantly, so
+			// only the assistant's reply makes it two — matching one raced the turn.
+			const settled = Date.now() + 120_000
+			while (Date.now() < settled) {
+				const text = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+				if ((text.match(/ready/gi) ?? []).length >= 2) break
+				await new Promise((resolve) => setTimeout(resolve, 1000))
+			}
+			await chrome.click('[data-testid="chat-sidebar"] button[title="Earlier sessions"]')
+			await chrome.waitForSelector('[data-testid="chat-session-row"]', { timeout: 15_000 }).catch(async () => {
+				// The list is fetched once on open; a session that registered a beat
+				// late needs one re-open, which is also what a user would do.
+				await chrome.click('[data-testid="chat-sidebar"] button[title="Back to the chat"]')
+				await chrome.click('[data-testid="chat-sidebar"] button[title="Earlier sessions"]')
+				await chrome.waitForSelector('[data-testid="chat-session-row"]', { timeout: 15_000 })
+			})
+			const before = await chrome.locator('[data-testid="chat-session-row"]').count()
+			await chrome.locator('[data-testid="chat-session-row"]').first().hover()
+			await shot(chrome, "history-delete-icon")
+			await chrome.locator('[data-testid="chat-session-delete"]').first().click()
+			const gone = Date.now() + 15_000
+			while (Date.now() < gone) {
+				if ((await chrome.locator('[data-testid="chat-session-row"]').count()) < before) break
+				await new Promise((resolve) => setTimeout(resolve, 500))
+			}
+			const after = await chrome.locator('[data-testid="chat-session-row"]').count()
+			await shot(chrome, "history-after-delete")
+			console.log(`[drive] history rows: ${before} -> ${after} (${after < before ? "DELETED" : "STILL THERE"})`)
+			return
+		}
+
 		// DRIVE_SYNC: the user's actual gesture — click Sync, wait for the plan
 		// card. This is the flow that failed every time on their route.
 		if (process.env.DRIVE_SYNC) {
