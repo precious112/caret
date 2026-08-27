@@ -372,33 +372,52 @@ function TypeSection({ typography }: { typography: Record<string, any> }) {
 }
 
 function SpacingSection({ spacing }: { spacing: Record<string, any> }) {
-	const steps: number[] = (spacing?.scale ?? []).filter((v: number) => v > 0).slice(0, 9)
+	// Scale entries are px. Heights on a square-root curve: proportional bars
+	// either dwarf the small steps or need a cap — and a cap drew 24 through 64
+	// as four identical bars, which read as data and was noise.
+	const steps: number[] = (spacing?.scale ?? []).filter((v: number) => v > 0)
 	return (
 		<div className="flex flex-col gap-2">
-			<div className="flex items-end gap-1.5">
-				{steps.map((value) => (
-					<div className="flex flex-col items-center gap-1" key={value}>
-						<span className="w-3 rounded-sm bg-caret-accent/60" style={{ height: Math.min(value * (spacing.baseUnit ?? 4) * 0.5, 72) }} />
-						<span className="text-[9px] text-shell-muted">{value}</span>
+			<div className="flex items-end gap-2">
+				{steps.map((px) => (
+					<div className="flex flex-col items-center gap-1" key={px}>
+						<span className="w-3.5 rounded-sm bg-caret-accent/60" style={{ height: Math.round(Math.sqrt(px) * 7) }} />
+						<span className="text-[9px] text-shell-muted">{px}</span>
 					</div>
 				))}
 			</div>
-			<p className="text-[12px] text-shell-muted">Base unit {spacing?.baseUnit}px</p>
+			<p className="text-[12px] text-shell-muted">
+				The gaps pages are allowed to use, in px — nothing between them, so spacing never drifts. On{" "}
+				{spacing?.baseUnit === 8 ? "an 8px rhythm (the airier of the two)" : `a ${spacing?.baseUnit ?? 4}px rhythm`}.
+			</p>
 		</div>
 	)
 }
 
+/** Scale positions ↔ the utility names pages write. 0 is `none` and the last is `full`. */
+const RADIUS_STEP_NAMES = ["none", "sm", "md", "lg", "xl", "full"]
+
 function RadiusSection({ radius }: { radius: Record<string, any> }) {
-	const steps: number[] = (radius?.scale ?? []).filter((v: number) => v < 9999)
+	const steps: Array<{ px: number; name: string }> = (radius?.scale ?? [])
+		.map((px: number, index: number) => ({ px, name: RADIUS_STEP_NAMES[index] ?? String(index) }))
+		.filter((step: { px: number }) => step.px < 9999)
 	return (
-		<div className="flex items-center gap-3">
-			{steps.map((value, index) => (
-				<div className="flex flex-col items-center gap-1" key={index}>
-					<span className="size-9 border-2 border-caret-accent/60 bg-shell-panel" style={{ borderRadius: value }} />
-					<span className="text-[9px] text-shell-muted">{value}px</span>
-				</div>
-			))}
-			<span className="ml-2 text-[12px] capitalize text-shell-muted">{radius?.character}</span>
+		<div className="flex flex-col gap-2">
+			<div className="flex items-center gap-3">
+				{steps.map((step) => (
+					<div className="flex flex-col items-center gap-1" key={step.name}>
+						<span className="size-9 border-2 border-caret-accent/60 bg-shell-panel" style={{ borderRadius: step.px }} />
+						<span className="text-[9px] text-shell-muted">
+							{step.name} · {step.px}px
+						</span>
+					</div>
+				))}
+			</div>
+			<p className="text-[12px] text-shell-muted">
+				All of these are in play — small elements take the small steps, cards and dialogs the large ones (plus fully
+				round for pills). <span className="capitalize">"{radius?.character}"</span> is the character that set the
+				ladder.
+			</p>
 		</div>
 	)
 }

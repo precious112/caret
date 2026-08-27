@@ -35,10 +35,9 @@ export function tokensToCssVars(tokens: FoundationTokensDraft): Record<string, s
 		vars[`--font-size-${typLabels[i]}`] = `${size}px`
 	}
 
-	// Spacing
-	const spacingLabels = tokens.spacing.scale
-	for (const multiplier of spacingLabels) {
-		vars[`--space-${multiplier}`] = `${multiplier * tokens.spacing.baseUnit}px`
+	// Spacing — scale entries are px values; the base unit is the rhythm.
+	for (const px of tokens.spacing.scale) {
+		vars[`--space-${px}`] = `${px}px`
 	}
 
 	// Radius

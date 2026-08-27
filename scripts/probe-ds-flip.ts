@@ -94,6 +94,13 @@ async function main(): Promise<void> {
 			if (tick % 5 === 0 || flipped) console.log(`t+${tick + 1}s: ${now.slice(0, 200)}`)
 			if (flipped) {
 				console.log("FLIPPED — the entry screen yielded to the DS view")
+				// A picture for the eyes-on pass: scroll the lower sections into view.
+				await chrome.evaluate(() => {
+					document.querySelector('[data-testid="ds-section-spacing"]')?.scrollIntoView()
+				})
+				await chrome.waitForTimeout(500)
+				await chrome.screenshot({ path: "release/verify-shots/ds-spacing-corners.png" })
+				console.log("screenshot → release/verify-shots/ds-spacing-corners.png")
 				return
 			}
 		}
