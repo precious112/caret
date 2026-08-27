@@ -688,10 +688,12 @@ export const TOOLS: ToolDefinition[] = [
 		name: "start_sync",
 		title: "Start a design → app sync",
 		description:
-			"Asks Caret to hand you the design→app sync worklist. Normally the user starts this from Caret; call it only when they ask you to sync.",
+			"Hands YOU the design→app sync worklist: the returned `prompt` is the full task. Carry it out, call report_sync_mapping per design file as you write its app files, and finish with complete_sync. Call it only when the user asks you to sync.",
 		inputSchema: {},
 		async handler(ctx) {
-			const result = await runSync(ctx.projectPath)
+			// autoFix: an agent has no preflight buttons to click, and the fixes are
+			// .caret/-scoped commits Caret would have made for the user anyway.
+			const result = await runSync(ctx.projectPath, { audience: "mcp", autoFix: true })
 			return reply(ctx, result)
 		},
 	},

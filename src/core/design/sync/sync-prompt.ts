@@ -1,8 +1,32 @@
+import { readFile } from "fs/promises"
+import { join } from "path"
+
 import type { DesignChangedFile, DesignChangeStatus } from "@/utils/git"
 import { readAssetIndex } from "../assets"
 import { listFlows } from "../flow-meta"
 import { listPages } from "../page-meta"
 import { readFoundationTokens } from "../tokens"
+
+/**
+ * The ledger's cap when injected into the prompt. The file is model-written and
+ * could bloat over many syncs; past this, the head carries the stack decisions
+ * (written first) and the model can read the file itself for the tail.
+ */
+const SYNC_NOTES_PROMPT_CAP = 6_000
+
+/** The decisions-and-stubs ledger from earlier syncs, or null before the first apply. */
+async function readSyncNotes(workspacePath: string): Promise<string | null> {
+	try {
+		const raw = await readFile(join(workspacePath, ".caret", "sync-notes.md"), "utf-8")
+		const trimmed = raw.trim()
+		if (trimmed === "") return null
+		return trimmed.length > SYNC_NOTES_PROMPT_CAP
+			? `${trimmed.slice(0, SYNC_NOTES_PROMPT_CAP)}\n… (truncated — read .caret/sync-notes.md for the rest)`
+			: trimmed
+	} catch {
+		return null
+	}
+}
 
 export interface SyncPromptInput {
 	/** Net cumulative changed design files since the last sync (no file content). */
@@ -175,13 +199,15 @@ function buildWorklist(changedFiles: DesignChangedFile[], isFirstSync: boolean):
  * Fed into a plan-mode `initTask`.
  */
 export async function buildSyncPrompt(workspacePath: string, input: SyncPromptInput): Promise<string> {
-	const inventory = await buildInventory(workspacePath)
+	const [inventory, syncNotes] = await Promise.all([buildInventory(workspacePath), readSyncNotes(workspacePath)])
 	const worklist = buildWorklist(input.changedFiles, input.isFirstSync)
 
 	const header = `<explicit_instructions type="sync">
 You are syncing the DESIGN layer (.caret/) into the APPLICATION layer (the user's shipped app).
 
-The .caret/ design files are the SINGLE SOURCE OF TRUTH for how the app should look and behave. Below is ONLY the list of design files that changed since the last sync — NOT their contents. For EACH item you MUST:
+AUTHORITY IS SPLIT, AND EACH LAYER OWNS ITS HALF. The .caret/ design files are the SINGLE SOURCE OF TRUTH for how the app looks and flows: layout, styling, copy, navigation, which states exist. The APPLICATION is the source of truth for how things actually work: where data really comes from, API wiring, validation, auth — everything the design cannot know. When one file carries both (most pages do), apply the design's changes to the presentation and KEEP the app's wiring exactly as you found it — a hand-written fetch call, store, or handler survives a sync even where the design shows sample data, because the sample data was only ever a stand-in. When the two genuinely conflict (the design shows a field the app's data does not carry), do not silently pick a winner: name the conflict and your recommendation in your reply.
+
+Below is ONLY the list of design files that changed since the last sync — NOT their contents. For EACH item you MUST:
   1. READ the current .caret/ source in full (the desired state) — e.g. .caret/pages/<id>/index.tsx plus any shared components/tokens it imports.
   2. READ the corresponding current application source.
   3. Compare them yourself and infer + apply the changes that make the app match the design. Cover UI translation AND any business-logic, state, routing, API, or data-shape changes the design implies — a small design change can imply large app work.
@@ -195,6 +221,11 @@ TOKEN TRANSLATION. Design pages style with theme tokens that exist ONLY inside .
   2. If the app has no equivalent, carry the definitions across: copy the needed entries from .caret/caret-theme.css into the app's global stylesheet (as \`@theme\` entries if the app is on Tailwind v4, else as CSS variables or resolved values), so the classes you write actually resolve.
 Never ship a class that resolves to nothing — a \`bg-brand-500\` in an app whose Tailwind has no \`brand\` scale generates NO CSS and fails silently. After translating, verify every custom class you carried over is defined somewhere the app loads.
 
+PAGE COVERAGE. You cannot invent the user's business layer — you do not know their endpoints, their auth, or their rules — so track it instead of guessing. For EVERY page you reconcile, decide what it needs beyond UI (a data source, actions, auth) and which bucket it is in:
+  - SPECIFIED: the user has said how it works, or the app already carries real wiring for it. Use that, exactly.
+  - STUB: nothing specifies it. Build a working local placeholder (in-memory or local storage, seeded with the design's sample data) — never a broken screen, and never an invented API call.
+Keep the ledger at .caret/sync-notes.md up to date whenever you apply changes: a short markdown file recording the stack decisions made and, per page, what is real and what is stubbed — with one line on what making it real would take. When earlier notes appear below, honor the decisions recorded there instead of re-deciding them, and update any entry your changes make stale. The file is the user's map of what is still fake, and the next sync's memory.
+
 Completion criteria: every changed page and shared item listed below is reflected in the app, verified against its current design source.
 
 ${
@@ -205,6 +236,12 @@ application file in this turn — the user reviews the plan first, and any write
 refused. If they accept, you will be asked to carry it out. The user may reply with revisions;
 answer each with the complete updated plan, restated in full — your latest reply IS the plan.
 
+Shape the plan so ONE reply can settle it. Open with the questions that need the user's word —
+BATCHED (pages sharing an answer share one question), numbered, each with a default marked — then
+the coverage: one line per page with unmet needs naming its bucket, and the rest collapsed to a
+single line ("N pages are display-only"). Never interrogate page by page. If the user accepts the
+plan without answering, the marked defaults apply — the plan must say so.
+
 Do NOT edit .caret/sync-state.json. Caret records the sync itself once the changes are applied.`
 		: `As you translate, call \`report_sync_mapping\` on the Caret MCP server once per design file, at the moment its app files are written — you know which app files a design file's content landed in right now, and Caret cannot infer it later. The mapping is what makes the NEXT sync incremental and app-side drift visible; skip it and both are lost.
 
@@ -213,6 +250,21 @@ When you are done, call the \`complete_sync\` tool on the Caret MCP server with 
 </explicit_instructions>`
 
 	const sections = [header, "", "─".repeat(60), worklist]
+
+	// Injected rather than left for the model to discover: the ledger is what
+	// keeps sync N+1 consistent with the decisions of sync N, and a fresh
+	// session reliably reads what is in its prompt and only sometimes goes
+	// looking for what isn't.
+	if (syncNotes) {
+		sections.push(
+			"",
+			"─".repeat(60),
+			[
+				"SYNC NOTES FROM EARLIER SYNCS (.caret/sync-notes.md — the decisions already made and the current real-vs-stub ledger; honor these instead of re-deciding, and update the file as part of applying):",
+				syncNotes,
+			].join("\n"),
+		)
+	}
 
 	if (input.intentLog) {
 		sections.push(

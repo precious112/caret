@@ -84,6 +84,13 @@ async function copyTest2(): Promise<string> {
 		`rsync -a --exclude node_modules --exclude .git --exclude .mcp.json /Users/apple/dev/test-frontend/test2/ ${dir}/`,
 		{ stdio: "ignore" },
 	)
+	// The copy re-inits git, so a copied bookmark would point at a commit the
+	// fresh repo has never heard of and the sync would no-op. Stripping the sync
+	// records makes it a FIRST sync into an app that already carries wiring —
+	// which is exactly the case the authority split and coverage pass exist for.
+	for (const record of [".caret/sync-state.json", ".caret/sync-manifest.json", ".caret/.sync-pending.json"]) {
+		await fs.rm(path.join(dir, record), { force: true })
+	}
 	const git = (args: string) => child_process.execSync(`git ${args}`, { cwd: dir, stdio: "ignore" })
 	git("init -q")
 	git("config user.email caret@local")

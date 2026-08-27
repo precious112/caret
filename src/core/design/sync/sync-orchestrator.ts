@@ -41,11 +41,25 @@ export interface SyncResult {
 	conflicts?: string[]
 	/** Mapped files where only the APP moved — reverse-sync material, not forward work. */
 	appDrifted?: string[]
+	/**
+	 * The full sync worklist prompt. Present ONLY for `audience: "mcp"` — the
+	 * calling agent is the one doing the translation, so the prompt goes back to
+	 * it instead of into the bundled backend's conversation.
+	 */
+	prompt?: string
 }
 
 export interface SyncOptions {
 	/** When true, perform the git fix (init/commit) the preflight would otherwise prompt for. */
 	autoFix?: boolean
+	/**
+	 * Who carries the sync out. `backend` (default) hands it to the bundled
+	 * backend's conversation — the Sync button's path. `mcp` hands the worklist
+	 * BACK to the caller: an external agent working over Caret's MCP server does
+	 * the translation itself, reports mappings with `report_sync_mapping`, and
+	 * records the sync with `complete_sync`. No backend needs to be connected.
+	 */
+	audience?: "backend" | "mcp"
 }
 
 /**
@@ -63,7 +77,11 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 	}
 
 	// Fail before doing any git work if there is nobody to hand the sync to.
-	if (!bridgeFor(cwd).connected()) {
+	// Not for the MCP audience: the CALLER is the agent, and requiring the
+	// bundled backend would refuse exactly the user who runs Caret purely as a
+	// design tool and syncs with their own agent.
+	const audience = opts.audience ?? "backend"
+	if (audience === "backend" && !bridgeFor(cwd).connected()) {
 		return { status: "no-agent", message: new NoBackendError("sync").message }
 	}
 
@@ -159,7 +177,7 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 	const isFirstSync = lastSyncedCommit === null
 
 	const syncId = randomUUID()
-	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog, syncId, audience: "backend" })
+	const prompt = await buildSyncPrompt(cwd, { changedFiles, isFirstSync, intentLog, syncId, audience })
 
 	// Capture the rollback point BEFORE the agent touches anything. Ordered this
 	// way deliberately: an agent that starts editing the instant it receives the
@@ -172,6 +190,23 @@ export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<Sync
 		previousBookmark: lastSyncedCommit,
 		preSyncSnapshot,
 	})
+
+	if (audience === "mcp") {
+		// The caller does the work: hand the worklist back. `report_sync_mapping`
+		// and `complete_sync` are its half of the contract — the prompt says so.
+		Logger.info(
+			`[sync] Handed to MCP caller: ${changedFiles.length} changed design file(s), target ${targetCommit.slice(0, 8)}`,
+		)
+		return {
+			status: "started",
+			syncId,
+			changedCount: changedFiles.length,
+			prompt,
+			...(partition.conflicts.length > 0 ? { conflicts: partition.conflicts } : {}),
+			...(partition.appDrifted.length > 0 ? { appDrifted: partition.appDrifted } : {}),
+			message: `The sync worklist is in \`prompt\` — carry it out now, then record it with complete_sync (syncId "${syncId}").`,
+		}
+	}
 
 	const conversation = conversationFor(cwd)
 	if (!conversation) {

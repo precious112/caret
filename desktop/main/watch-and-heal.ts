@@ -64,6 +64,10 @@ const IGNORED_FILES = new Set([
 	// Mapping metadata Caret writes during sync — versioned, but not healable
 	// content, and waking the healer once per recorded mapping is noise.
 	"sync-manifest.json",
+	// The decisions-and-stubs ledger the sync apply maintains. Versioned like
+	// the manifest (it is the user's map of what is still fake), but markdown
+	// the model writes — nothing in it is healable.
+	"sync-notes.md",
 	".provenance.jsonl",
 	".mcp.json",
 	// Caret's own scratch, rewritten on every interview step. Not design content,

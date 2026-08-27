@@ -97,4 +97,58 @@ describe("buildSyncPrompt", () => {
 		expect(prompt).to.include("first sync")
 		expect(prompt).to.include("ENTIRE current design layer")
 	})
+
+	it("splits authority: design owns presentation, the app owns its wiring, conflicts get surfaced", async () => {
+		const prompt = await buildSyncPrompt(cwd, { syncId: "test-sync", changedFiles: [], isFirstSync: false })
+		expect(prompt).to.include("AUTHORITY IS SPLIT")
+		expect(prompt).to.include("KEEP the app's wiring exactly as you found it")
+		expect(prompt).to.include("do not silently pick a winner")
+	})
+
+	it("demands page coverage with the two buckets and the ledger, in both audience variants", async () => {
+		for (const audience of ["backend", "mcp"] as const) {
+			const prompt = await buildSyncPrompt(cwd, { syncId: "test-sync", changedFiles: [], isFirstSync: false, audience })
+			expect(prompt, audience).to.include("PAGE COVERAGE")
+			expect(prompt, audience).to.include("SPECIFIED:")
+			expect(prompt, audience).to.include("STUB:")
+			expect(prompt, audience).to.include("never an invented API call")
+			expect(prompt, audience).to.include(".caret/sync-notes.md")
+		}
+	})
+
+	it("shapes the backend plan: batched defaults-marked questions, no per-page interrogation", async () => {
+		const prompt = await buildSyncPrompt(cwd, {
+			syncId: "test-sync",
+			changedFiles: [],
+			isFirstSync: false,
+			audience: "backend",
+		})
+		expect(prompt).to.include("ONE reply can settle it")
+		expect(prompt).to.include("each with a default marked")
+		expect(prompt).to.include("Never interrogate page by page")
+		expect(prompt).to.include("the marked defaults apply")
+	})
+
+	it("injects existing sync notes into the prompt, and omits the section when there are none", async () => {
+		const os = await import("os")
+		const path = await import("path")
+		const fs = await import("fs/promises")
+		const noted = await fs.mkdtemp(path.join(os.tmpdir(), "caret-sync-notes-"))
+		await fs.mkdir(path.join(noted, ".caret"), { recursive: true })
+		await fs.writeFile(
+			path.join(noted, ".caret", "sync-notes.md"),
+			"## Decisions\n- Stack: Svelte 5\n\n## Pages\n- log-a-brew: STUB (localStorage)",
+		)
+		try {
+			const withNotes = await buildSyncPrompt(noted, { syncId: "s", changedFiles: [], isFirstSync: false })
+			expect(withNotes).to.include("SYNC NOTES FROM EARLIER SYNCS")
+			expect(withNotes).to.include("Stack: Svelte 5")
+			expect(withNotes).to.include("log-a-brew: STUB (localStorage)")
+
+			const without = await buildSyncPrompt(cwd, { syncId: "s", changedFiles: [], isFirstSync: false })
+			expect(without).to.not.include("SYNC NOTES FROM EARLIER SYNCS")
+		} finally {
+			await fs.rm(noted, { recursive: true, force: true })
+		}
+	})
 })

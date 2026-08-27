@@ -1101,7 +1101,9 @@ function Entry({
 						<p className="mb-1.5 text-[10px] font-medium tracking-widest text-shell-muted uppercase">Plan</p>
 						<Markdown assetTags={assetTags} className="leading-relaxed" onAssetTag={onViewAsset} text={entry.text} />
 						<div className="mt-2 flex items-center justify-between border-t border-shell-border pt-2 text-[11px] text-shell-muted">
-							<span>Reply to revise it, or switch to Act to apply.</span>
+							<span>
+								Reply to revise it, or switch to Act to apply — open questions fall to their marked defaults.
+							</span>
 							{livePlan.kind === "sync-plan" && (
 								<button
 									className="shrink-0 transition-colors hover:text-shell-fg"
