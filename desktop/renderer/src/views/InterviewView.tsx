@@ -213,7 +213,9 @@ function Specimen({ candidate, onPick }: { candidate: PresentedCandidateWire; on
 
 	return (
 		<button
-			className="group flex flex-col overflow-hidden rounded-xl border border-shell-border text-left transition-colors hover:border-caret-accent"
+			// items-stretch: the UA stylesheet gives <button> `align-items: flex-start`,
+			// which shrinks a column-flex button's children to content width.
+			className="group flex flex-col items-stretch overflow-hidden rounded-xl border border-shell-border text-left transition-colors hover:border-caret-accent"
 			data-testid="interview-candidate"
 			onClick={onPick}
 			type="button">

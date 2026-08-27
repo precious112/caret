@@ -17,7 +17,7 @@ import { cn } from "../lib/utils"
 
 const AUTO_DISMISS_MS = 6000
 
-export function NotificationStack() {
+export function NotificationStack({ rightInset = 16 }: { rightInset?: number }) {
 	const [items, setItems] = useState<NotificationRequest[]>([])
 
 	useEffect(
@@ -44,9 +44,14 @@ export function NotificationStack() {
 	if (items.length === 0) return null
 
 	return (
+		// `right` is a prop, not a constant: fixed bottom-right is also exactly
+		// where the chat sidebar lives, and a stack of prompts blanketing the
+		// conversation transcript was the field complaint. The host shifts the
+		// stack left of whatever it would otherwise cover.
 		<div
-			className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[380px] flex-col gap-2"
-			data-testid="notification-stack">
+			className="pointer-events-none fixed bottom-4 z-50 flex w-[380px] flex-col gap-2"
+			data-testid="notification-stack"
+			style={{ right: rightInset }}>
 			{items.map((item) => (
 				<div
 					className={cn(
@@ -62,16 +67,23 @@ export function NotificationStack() {
 					</div>
 
 					{item.actions.length > 0 && (
-						<div className="mt-2.5 flex justify-end gap-1.5">
+						<div className="mt-2.5 flex items-center justify-end gap-1.5">
 							<button
 								className="rounded-lg px-2.5 py-1 text-shell-muted transition-colors hover:bg-white/5"
 								onClick={() => respond(item, null)}
 								type="button">
 								Not now
 							</button>
-							{item.actions.map((action) => (
+							{/* One primary — the first action is the caller's recommended
+							    answer. A row of identical filled buttons has no answer. */}
+							{item.actions.map((action, index) => (
 								<button
-									className="rounded-lg bg-caret-accent px-2.5 py-1 font-medium text-white transition-colors hover:bg-caret-accent-hover"
+									className={cn(
+										"rounded-lg px-2.5 py-1 transition-colors",
+										index === 0
+											? "bg-caret-accent font-medium text-white hover:bg-caret-accent-hover"
+											: "text-shell-text hover:bg-white/10",
+									)}
 									key={action}
 									onClick={() => respond(item, action)}
 									type="button">

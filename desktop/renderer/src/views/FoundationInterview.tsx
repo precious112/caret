@@ -268,7 +268,10 @@ function OptionCard({ option, selected, onSelect }: { option: RankedOptionWire; 
 	return (
 		<button
 			className={cn(
-				"group flex flex-col overflow-hidden rounded-xl border text-left transition-colors",
+				// items-stretch: the UA stylesheet gives <button> `align-items:
+				// flex-start`, which shrinks a column-flex button's children to
+				// content width instead of the card's full width.
+				"group flex flex-col items-stretch overflow-hidden rounded-xl border text-left transition-colors",
 				selected ? "border-caret-accent" : "border-shell-border hover:border-white/20",
 			)}
 			data-option-id={option.id}

@@ -237,6 +237,94 @@ async function main(): Promise<void> {
 			return
 		}
 
+		// DRIVE_CONSENT: two page files importing catalog components land at once
+		// (an agent turn writes several pages back to back) — the healer's supply
+		// pass asks for library consent per page, and before the single-flight fix
+		// one turn stacked FOUR identical cards. Expect: ONE card, positioned
+		// beside the open chat (never over it), one muted "Not now", one primary
+		// action — and answering once unblocks every waiting install.
+		if (process.env.DRIVE_CONSENT) {
+			const page = (id: string, component: string) =>
+				fs.writeFile(
+					path.join(fixture, ".caret", "pages", id, "index.tsx"),
+					`import Piece from "../../components/catalog/magicui/${component}"\n\nexport default function Page() {\n\treturn <Piece />\n}\n`,
+				)
+			await fs.mkdir(path.join(fixture, ".caret", "pages", "consent-a"), { recursive: true })
+			await fs.mkdir(path.join(fixture, ".caret", "pages", "consent-b"), { recursive: true })
+			await Promise.all([page("consent-a", "marquee"), page("consent-b", "border-beam")])
+
+			await chrome.waitForSelector('[data-testid="notification-stack"]', { timeout: 60_000 })
+			// Give any duplicate prompt time to stack before counting.
+			await chrome.waitForTimeout(5_000)
+			await shot(chrome, "consent-card")
+
+			const audit = await chrome.evaluate(() => {
+				const stack = document.querySelector('[data-testid="notification-stack"]')
+				const sidebar = document.querySelector('[data-testid="chat-sidebar"]')
+				if (!stack) return { cards: 0, notNows: 0, overlap: "no stack", buttons: [] as string[] }
+				const cards = [...stack.children].filter((card) => card.textContent?.includes("Magic UI"))
+				const buttons = cards.flatMap((card) => [...card.querySelectorAll("button")].map((b) => b.textContent ?? ""))
+				const stackRect = stack.getBoundingClientRect()
+				const sidebarRect = sidebar?.getBoundingClientRect()
+				const overlap = sidebarRect
+					? stackRect.right > sidebarRect.left
+						? "OVERLAPS CHAT"
+						: "clear of chat"
+					: "no sidebar"
+				return { cards: cards.length, notNows: buttons.filter((b) => b === "Not now").length, overlap, buttons }
+			})
+			console.log(
+				`[drive] consent cards: ${audit.cards} (want 1) · Not now count: ${audit.notNows} (want 1) · placement: ${audit.overlap} · buttons: ${audit.buttons.join(" | ")}`,
+			)
+
+			await chrome.getByRole("button", { name: "Just this once" }).click()
+			const lockPath = path.join(fixture, ".caret", "components", "catalog", "catalog-lock.json")
+			const deadline = Date.now() + 60_000
+			let installed: string[] = []
+			while (Date.now() < deadline) {
+				try {
+					const lock = JSON.parse(await fs.readFile(lockPath, "utf-8")) as {
+						installed: Array<{ component: string }>
+					}
+					installed = lock.installed.map((entry) => entry.component)
+					if (installed.includes("marquee") && installed.includes("border-beam")) break
+				} catch {}
+				await new Promise((resolve) => setTimeout(resolve, 1_000))
+			}
+			console.log(
+				`[drive] one answer unblocked both installs: ${installed.includes("marquee") && installed.includes("border-beam") ? "YES" : `NO (lock has: ${installed.join(", ") || "nothing"})`}`,
+			)
+			return
+		}
+
+		// DRIVE_WIZARD: walk the token wizard to its first generated question and
+		// MEASURE the option cards — the UA stylesheet gives <button> align-items:
+		// flex-start, which silently shrank every card's preview and label strip
+		// to content width (seen in the field as previews stopping short of the
+		// card's right edge). A screenshot alone can show it; the measurement says
+		// it in numbers.
+		if (process.env.DRIVE_WIZARD) {
+			await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+			await chrome.getByRole("button", { name: "Answer a few questions" }).click()
+			await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 30_000 })
+			await chrome.fill('[data-testid="wizard-describe"]', "A landing page for an analog synth plugin called Voltaine")
+			await chrome.click('[data-testid="wizard-begin"]')
+			await chrome.waitForSelector('[data-testid="wizard-option"]', { timeout: 240_000 })
+			await shot(chrome, "wizard-option-cards")
+			const gaps = await chrome.evaluate(() => {
+				const cards = [...document.querySelectorAll('[data-testid="wizard-option"]')]
+				return cards.map((card) => {
+					const width = card.clientWidth
+					const childGaps = [...card.children].map((child) => width - (child as HTMLElement).offsetWidth)
+					return `card ${width}px, child shortfalls: ${childGaps.join(", ")}`
+				})
+			})
+			console.log(`[drive] ${gaps.join("\n[drive] ")}`)
+			const shortfall = gaps.some((line) => /shortfalls:.*[1-9]/.test(line))
+			console.log(`[drive] option-card children fill the card: ${shortfall ? "NO (BUG)" : "YES"}`)
+			return
+		}
+
 		// DRIVE_ASK: provoke a real bash permission ask and verify the dock UX —
 		// the composer is REPLACED by the prompt, the heartbeat says "Waiting for
 		// you", and answering brings the input back. DRIVE_ASK_WAIT additionally

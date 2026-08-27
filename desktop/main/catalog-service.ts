@@ -52,6 +52,13 @@ export class CatalogService {
 	private declinedThisSession = new Set<string>()
 	/** Budget refusals already notified, keyed page::component. */
 	private budgetNotified = new Set<string>()
+	/**
+	 * The one in-flight consent prompt per library. An agent turn writes several
+	 * pages in quick succession and each write's supply pass asks independently —
+	 * without this, one turn stacked the SAME question four times, and the user
+	 * answered a wall of identical cards one by one.
+	 */
+	private pendingConsent = new Map<string, Promise<boolean>>()
 
 	constructor(private readonly options: CatalogServiceOptions) {}
 
@@ -59,17 +66,27 @@ export class CatalogService {
 		return `${this.options.projectPath}::${libraryId}`
 	}
 
-	private async hasConsent(libraryId: string): Promise<boolean> {
+	private hasConsent(libraryId: string): Promise<boolean> {
+		const pending = this.pendingConsent.get(libraryId)
+		if (pending) return pending
+		const ask = this.askConsent(libraryId).finally(() => this.pendingConsent.delete(libraryId))
+		this.pendingConsent.set(libraryId, ask)
+		return ask
+	}
+
+	private async askConsent(libraryId: string): Promise<boolean> {
 		if (getPrefs().catalogAllowed.includes(this.consentKey(libraryId))) return true
 		if (this.declinedThisSession.has(libraryId)) return false
 
 		const library = findCatalogLibrary(libraryId)
 		if (!library) return false
 
+		// No "Not now" in the actions: the notification surface has its own
+		// dismiss with that exact label, and offering it twice reads as a bug.
 		const choice = await hostFor(this.options.projectPath).notify(
 			"info",
 			`This design uses ${library.name} (${library.licence}) from the component catalog. Install it into .caret?`,
-			["Allow for this project", "Just this once", "Not now"],
+			["Allow for this project", "Just this once"],
 		)
 		if (choice === "Allow for this project") {
 			await setPref("catalogAllowed", [...new Set([...getPrefs().catalogAllowed, this.consentKey(libraryId)])])

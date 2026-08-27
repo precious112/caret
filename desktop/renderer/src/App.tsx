@@ -217,7 +217,7 @@ export function App() {
 				)}
 			</div>
 
-			<NotificationStack />
+			<NotificationStack rightInset={chatOpen ? CHAT_SIDEBAR_WIDTH + 16 : 16} />
 		</div>
 	)
 }

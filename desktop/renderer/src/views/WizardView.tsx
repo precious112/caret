@@ -1032,7 +1032,11 @@ function OptionCard({
 	return (
 		<button
 			className={cn(
-				"group flex flex-col overflow-hidden rounded-xl border text-left transition-colors",
+				// items-stretch is load-bearing: the UA stylesheet gives <button>
+				// `align-items: flex-start`, so without it a column-flex button's
+				// children shrink to content width and the specimen stops short of
+				// the card's right edge.
+				"group flex flex-col items-stretch overflow-hidden rounded-xl border text-left transition-colors",
 				selected ? "border-caret-accent" : "border-shell-border hover:border-white/20",
 			)}
 			data-option-id={option.id}
