@@ -338,6 +338,62 @@ describe("AgentConversation stall watchdog", () => {
 		assert(note && note.kind === "note" && /went silent/.test(note.text), "the retry happened without saying why")
 	})
 
+	it("pauses the stall clock while a surfaced ask waits on the user", async () => {
+		// Measured in the field: an `npm install` ask sat four minutes with the
+		// user away, and the watchdog killed the healthy turn and blamed the
+		// provider. A human deciding is not a dead socket — the clock must not
+		// run while the question is theirs.
+		let answer = () => {}
+		const answered = new Promise<void>((resolve) => {
+			answer = resolve
+		})
+		let aborts = 0
+		const backend = {
+			id: "opencode",
+			displayName: "Stub",
+			providerName: "Stub",
+			async availability() {
+				return { ready: true, installed: true, detail: "" }
+			},
+			async startSession(options: { mode: SessionMode }) {
+				return {
+					id: "ses_stub",
+					mode: options.mode,
+					async *send(): AsyncGenerator<BackendEvent> {
+						yield {
+							type: "permission",
+							requestId: "per_wait",
+							tool: "bash",
+							path: "npm install",
+							summary: "Run `npm install`?",
+						}
+						await answered
+						yield { type: "text", text: "installed" }
+						yield { type: "done", text: "" }
+					},
+					async respondToPermission() {
+						answer()
+					},
+					async abort() {
+						aborts += 1
+					},
+					async close() {},
+				}
+			},
+		} as unknown as CodingBackend
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })
+
+		const run = conversation.run(REQUEST)
+		// Several full stall windows pass with the ask pending — the user reading.
+		await new Promise((resolve) => setTimeout(resolve, 150))
+		await conversation.respondToPermission("per_wait", "allow")
+		const outcome = await run
+
+		assert.equal(outcome.ok, true, "a turn waiting on the user was reported as a failure")
+		assert.equal(aborts, 0, "the watchdog aborted a turn that was waiting on the user")
+		assert.ok(outcome.text.includes("installed"), "the answered turn did not finish its work")
+	})
+
 	it("fails the turn with its name on it when the stream stalls twice", async () => {
 		const { backend, aborts } = stalledBackend([() => hangingAfter([{ type: "text", text: "start" }])])
 		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })

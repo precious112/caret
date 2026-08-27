@@ -150,6 +150,16 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 	const streaming = state?.streaming ?? false
 	const turns = useMemo(() => groupIntoTurns(entries), [entries])
 
+	// The oldest unanswered ask. While one exists the composer is REPLACED by
+	// the permission dock — OpenCode's own pattern, adopted after a field run
+	// where the user typed "continue" into the box instead of answering the
+	// prompt above it. With nothing to type into, answering is the only move;
+	// asks queued behind this one surface as each is answered.
+	const pendingAsk = useMemo(() => {
+		const entry = entries.find((e) => e.kind === "permission" && e.status === "pending")
+		return entry && entry.kind === "permission" ? entry : null
+	}, [entries])
+
 	const mentions = useAssetMentions({ project, draft, setDraft, inputRef })
 
 	const send = () => {
@@ -313,7 +323,9 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 							</div>
 						))}
 
-						{state?.streaming && <WorkingRow lastEventAt={state.lastEventAt} />}
+						{state?.streaming && (
+							<WorkingRow lastEventAt={state.lastEventAt} waitingOn={pendingAsk?.summary ?? null} />
+						)}
 
 						<FileChanges files={state?.transcript.files ?? []} />
 					</div>
@@ -334,7 +346,16 @@ export function ChatSidebar({ project, onClose, onOpenBackendSetup, onViewAsset 
 						<TakesBlock onDismiss={() => resolveDocked(null)} onPick={resolveDocked} prompt={docked} />
 					)}
 
-					<Composer {...composer} />
+					{pendingAsk ? (
+						<PermissionDock
+							entry={pendingAsk}
+							onRespond={(requestId, decision) =>
+								void invoke("agent:permission", project.path, requestId, decision)
+							}
+						/>
+					) : (
+						<Composer {...composer} />
+					)}
 				</>
 			)}
 		</aside>
@@ -1363,40 +1384,61 @@ function Thinking({ text }: { text: string }) {
 
 function Permission({
 	entry,
+}: {
+	entry: Extract<TranscriptEntryWire, { kind: "permission" }>
+	onRespond(requestId: string, decision: "allow" | "deny" | "allow-always"): void
+}) {
+	// While pending, the dock at the bottom of the sidebar is the one actionable
+	// surface (see PermissionDock) — a second set of buttons here would be two
+	// places answering one question. The transcript line appears once the ask is
+	// settled, as the record of what was decided.
+	if (entry.status === "pending") return null
+
+	return (
+		<p className="text-[11.5px] text-shell-muted" data-testid="chat-permission-resolved">
+			{entry.status === "allowed" ? "Allowed" : "Refused"}
+			{entry.automatic ? `: ${entry.automatic}` : ""}
+		</p>
+	)
+}
+
+/**
+ * Replaces the composer while an ask waits — OpenCode's pattern, adopted
+ * deliberately: docked ABOVE the input, the field run showed the user typing
+ * "continue" into the box instead of answering. With the input gone, the
+ * buttons are the only affordance, and answering brings it back. Allow is the
+ * loud one; a permission ask is the agent mid-flow needing a yes far more
+ * often than it needs a no.
+ */
+function PermissionDock({
+	entry,
 	onRespond,
 }: {
 	entry: Extract<TranscriptEntryWire, { kind: "permission" }>
 	onRespond(requestId: string, decision: "allow" | "deny" | "allow-always"): void
 }) {
-	if (entry.status !== "pending") {
-		return (
-			<p className="text-[11.5px] text-shell-muted" data-testid="chat-permission-resolved">
-				{entry.status === "allowed" ? "Allowed" : "Refused"}
-				{entry.automatic ? `: ${entry.automatic}` : ""}
-			</p>
-		)
-	}
-
-	// The one place accent is spent: something is waiting on an answer.
 	return (
-		<div className="fade-in border-l-2 border-caret-accent py-0.5 pl-3" data-testid="chat-permission">
-			<p className="mb-2 leading-relaxed">{entry.summary}</p>
-			<div className="flex flex-wrap gap-1.5">
+		<div
+			className="fade-in shrink-0 border-t border-caret-accent/40 bg-caret-accent/5 px-3.5 py-3"
+			data-testid="chat-permission">
+			<p className="mb-0.5 text-[11px] font-medium tracking-wide text-caret-accent uppercase">Waiting on you</p>
+			<p className="mb-2.5 text-[12.5px] leading-relaxed">{entry.summary}</p>
+			<div className="flex items-center gap-1.5">
 				<button
-					className="rounded-lg bg-white/10 px-2.5 py-1 font-medium transition-colors hover:bg-white/20"
+					className="rounded-lg bg-caret-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
 					data-testid="chat-permission-allow"
 					onClick={() => onRespond(entry.requestId, "allow")}
 					type="button">
 					Allow
 				</button>
 				<button
-					className="rounded-lg px-2.5 py-1 text-shell-muted transition-colors hover:bg-white/5"
+					className="rounded-lg px-2.5 py-1.5 text-[12px] text-shell-muted transition-colors hover:bg-white/5"
 					onClick={() => onRespond(entry.requestId, "allow-always")}
 					type="button">
-					Always
+					Always allow
 				</button>
 				<button
-					className="rounded-lg px-2.5 py-1 text-shell-muted transition-colors hover:bg-white/5"
+					className="rounded-lg px-2.5 py-1.5 text-[12px] text-shell-muted transition-colors hover:bg-white/5"
 					data-testid="chat-permission-deny"
 					onClick={() => onRespond(entry.requestId, "deny")}
 					type="button">
@@ -1437,7 +1479,7 @@ function elapsedLabel(seconds: number): string {
  */
 const QUIET_LABEL_SECONDS = 60
 
-function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
+function WorkingRow({ lastEventAt, waitingOn }: { lastEventAt: number | null; waitingOn: string | null }) {
 	const [startedAt] = useState(() => Date.now())
 	const [, tick] = useState(0)
 
@@ -1448,6 +1490,18 @@ function WorkingRow({ lastEventAt }: { lastEventAt: number | null }) {
 
 	const seconds = Math.floor((Date.now() - startedAt) / 1000)
 	const quiet = lastEventAt ? Math.floor((Date.now() - lastEventAt) / 1000) : 0
+
+	// An open ask flips the row's meaning: the agent is not working, it is
+	// waiting — on the reader. "Working…" here was measured costing minutes: it
+	// told the user the agent was busy while everything sat on their answer.
+	if (waitingOn) {
+		return (
+			<div className="mt-3 flex items-center gap-2.5 text-[12px] text-caret-accent" data-testid="chat-working">
+				<ThinkingOrb size={20} state="breathing" theme="dark" />
+				<span>Waiting for you — {waitingOn}</span>
+			</div>
+		)
+	}
 
 	return (
 		<div className="mt-3 flex items-center gap-2.5 text-[12px] text-shell-muted" data-testid="chat-working">

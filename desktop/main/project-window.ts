@@ -16,10 +16,11 @@
  * The chrome reports how much room its top bar takes (`canvas:setBounds`), which
  * keeps layout authority in the renderer, where that height is actually known.
  */
-import { BrowserWindow, WebContentsView } from "electron"
+import { BrowserWindow, Notification, WebContentsView } from "electron"
 import * as path from "path"
 
 import {
+	type ConversationState,
 	caretDirectoryExists,
 	DesignSession,
 	hostFor,
@@ -73,6 +74,8 @@ export class ProjectWindow {
 	private chromeInsets: ChromeInsets = { top: DEFAULT_CHROME_INSET, right: 0 }
 	private canvasVisible = false
 	private closed = false
+	/** Asks already notified about — one native notification per ask, ever. */
+	private notifiedAsks = new Set<string>()
 
 	constructor(private readonly options: ProjectWindowOptions) {
 		this.projectPath = options.projectPath
@@ -126,7 +129,10 @@ export class ProjectWindow {
 		// makes every outbound feature stop refusing.
 		this.agent = new AgentService({
 			projectPath: this.projectPath,
-			onState: (state) => this.sendToChrome("agent:state", this.projectPath, state),
+			onState: (state) => {
+				this.sendToChrome("agent:state", this.projectPath, state)
+				this.noticeAskWaiting(state)
+			},
 			// The pill lives where the intent was expressed: in the canvas, not the
 			// chat. This is the entire live surface a canvas edit gets.
 			onEditStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "edit-status", payload: status }),
@@ -250,6 +256,40 @@ export class ProjectWindow {
 	sendToChrome(channel: string, ...args: unknown[]): void {
 		if (this.closed || this.window.isDestroyed()) return
 		this.window.webContents.send(channel, ...args)
+	}
+
+	/**
+	 * A permission ask surfacing while this window is unfocused gets one native
+	 * notification — a long apply turn is exactly when the user is elsewhere,
+	 * and an unanswered ask now waits indefinitely (the watchdog pauses on it),
+	 * so nothing else will ever call them back. Checked again after a settle
+	 * delay because auto-ruled asks are "pending" for milliseconds; only one
+	 * that outlives the delay was actually surfaced to a person.
+	 */
+	private noticeAskWaiting(state: ConversationState): void {
+		for (const entry of state.transcript.entries) {
+			if (entry.kind !== "permission" || entry.status !== "pending") continue
+			if (this.notifiedAsks.has(entry.requestId)) continue
+			this.notifiedAsks.add(entry.requestId)
+			const { requestId, summary } = entry
+			setTimeout(() => this.notifyAsk(requestId, summary), 1_500)
+		}
+	}
+
+	private notifyAsk(requestId: string, summary: string): void {
+		if (this.closed || this.window.isDestroyed() || this.window.isFocused()) return
+		const stillPending = this.agent.conversation
+			.getState()
+			.transcript.entries.some((e) => e.kind === "permission" && e.requestId === requestId && e.status === "pending")
+		if (!stillPending || !Notification.isSupported()) return
+		Logger.info(`[window] ask ${requestId} unanswered with the window unfocused — native notification shown`)
+		const notification = new Notification({ title: "Caret is waiting on you", body: summary })
+		notification.on("click", () => {
+			if (this.closed || this.window.isDestroyed()) return
+			this.window.show()
+			this.window.focus()
+		})
+		notification.show()
 	}
 
 	/** The chrome reporting how much room it occupies around the canvas. */

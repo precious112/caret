@@ -230,6 +230,57 @@ async function main(): Promise<void> {
 			return
 		}
 
+		// DRIVE_ASK: provoke a real bash permission ask and verify the dock UX —
+		// the composer is REPLACED by the prompt, the heartbeat says "Waiting for
+		// you", and answering brings the input back. DRIVE_ASK_WAIT additionally
+		// sits on the ask past the stall window before answering, proving the
+		// watchdog no longer kills a turn that is waiting on a human (the exact
+		// field failure: an `npm install` ask sat four minutes and the turn died).
+		if (process.env.DRIVE_ASK) {
+			await chrome
+				.getByTestId("chat-input")
+				.fill("Use your bash tool to run exactly `echo caret-dock-probe`, then reply with the single word: finished")
+			await chrome.getByTestId("chat-input").press("Enter")
+
+			await chrome.waitForSelector('[data-testid="chat-permission"]', { timeout: 240_000 })
+			const composerGone = (await chrome.getByTestId("chat-input").count()) === 0
+			const transcript = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+			const waitingRow = transcript.includes("Waiting for you")
+			await shot(chrome, "ask-dock-pending")
+			console.log(
+				`[drive] ask surfaced — composer replaced: ${composerGone ? "YES" : "NO"}, heartbeat waiting: ${waitingRow ? "YES" : "NO"}`,
+			)
+
+			if (process.env.DRIVE_ASK_WAIT) {
+				const waitMs = 4.5 * 60_000
+				console.log(`[drive] sitting on the ask for ${Math.round(waitMs / 1000)}s — past the stall window…`)
+				await new Promise((resolve) => setTimeout(resolve, waitMs))
+				const after = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+				const killed = /went silent/.test(after)
+				const stillAsking = (await chrome.locator('[data-testid="chat-permission"]').count()) > 0
+				await shot(chrome, "ask-dock-after-wait")
+				console.log(
+					`[drive] after the wait — ask still open: ${stillAsking ? "YES" : "NO"}, watchdog fired: ${killed ? "YES (BUG)" : "no"}`,
+				)
+			}
+
+			await chrome.getByTestId("chat-permission-allow").click()
+			const settled = Date.now() + 180_000
+			while (Date.now() < settled) {
+				const text = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+				// Two: the user's own bubble echoes "finished", the reply makes it two.
+				if ((text.match(/finished/gi) ?? []).length >= 2) break
+				await new Promise((resolve) => setTimeout(resolve, 1000))
+			}
+			const composerBack = (await chrome.getByTestId("chat-input").count()) > 0
+			const record = (await chrome.textContent('[data-testid="chat-transcript"]').catch(() => null)) ?? ""
+			await shot(chrome, "ask-dock-answered")
+			console.log(
+				`[drive] answered — composer back: ${composerBack ? "YES" : "NO"}, allowed on record: ${/Allowed/.test(record) ? "YES" : "NO"}, turn finished: ${(record.match(/finished/gi) ?? []).length >= 2 ? "YES" : "NO"}`,
+			)
+			return
+		}
+
 		// DRIVE_SYNC: the user's actual gesture — click Sync, wait for the plan
 		// card. This is the flow that failed every time on their route.
 		if (process.env.DRIVE_SYNC) {

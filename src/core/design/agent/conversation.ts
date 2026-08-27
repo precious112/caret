@@ -426,12 +426,24 @@ export class AgentConversation {
 			while (true) {
 				stalled = false
 				const stream = session.send(input)[Symbol.asyncIterator]()
+				// Held across stall laps: when the timer fires while a permission ask
+				// is waiting on the user, the SAME next() promise is re-raced —
+				// calling next() again mid-flight would double-pull the iterator.
+				let stepPromise: ReturnType<typeof stream.next> | null = null
 				while (true) {
-					const step = await raceStall(stream.next(), stallMs)
+					stepPromise ??= stream.next()
+					const step = await raceStall(stepPromise, stallMs)
 					if (step === "stall") {
+						// A surfaced ask produces no stream events while the human
+						// decides — that is their time, not the provider's. Measured in
+						// the field: an `npm install` ask sat four minutes, and the
+						// watchdog killed a healthy turn and blamed the stream. The
+						// backend holds asks with no timeout; while one is open, so do we.
+						if (this.hasPendingAsk()) continue
 						stalled = true
 						break
 					}
+					stepPromise = null
 					if (step.done) break
 					const event = step.value
 					this.lastEventAt = Date.now()
@@ -561,6 +573,16 @@ export class AgentConversation {
 					addNote(this.transcript, "The model ended its turn without a reply.")
 				}
 			}
+			// A pending ask cannot outlive its turn, however the turn ended. The
+			// `done` event sweeps these; a turn that dies by error or abort never
+			// emits one, and a lingering "pending" entry would leave ghost buttons
+			// AND permanently pause the stall watchdog for every later turn.
+			for (const entry of this.transcript.entries) {
+				if (entry.kind === "permission" && entry.status === "pending") {
+					entry.status = "denied"
+					entry.automatic = "the turn ended before this was answered"
+				}
+			}
 			this.streaming = false
 			this.push(true)
 		}
@@ -633,6 +655,15 @@ export class AgentConversation {
 		await this.session?.abort()
 		this.streaming = false
 		this.push(true)
+	}
+
+	/**
+	 * Whether a permission ask is sitting with the user right now. Auto-ruled
+	 * asks resolve within milliseconds of arriving, so a pending entry at stall
+	 * time is one Caret surfaced — the watchdog's clock pauses on it.
+	 */
+	private hasPendingAsk(): boolean {
+		return this.transcript.entries.some((entry) => entry.kind === "permission" && entry.status === "pending")
 	}
 
 	/** The user answering a permission prompt Caret chose to surface. */
