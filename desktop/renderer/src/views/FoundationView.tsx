@@ -1,33 +1,35 @@
 /**
- * The foundation surface — three doors, one `foundation.json` out.
+ * The foundation surface — one flow in, one design system out.
  *
- * **Interview** (default): the AI-run token wizard. The model reads the
- * project description, decides what to ask, and constructs the tokens; every
- * question renders through Caret's own widget components. Built for the
- * developer who is not design-savvy — which is the user this product is for.
+ * A project without a committed design system opens here on a single question:
+ * "What are you building?" The description then routes through a chooser of
+ * how much control the user wants:
  *
- * **Presets**: the deterministic curated flow. Same describe-then-point shape,
- * fixed steps, no model anywhere — for someone who wants full control and
- * identical screens every time.
+ * - **AI-led** — the minimal interview. A handful of plain-language questions,
+ *   the model does the heavy lifting. For the developer who is not a designer.
+ * - **Collaborative** — the same interview machinery with the depth exposed:
+ *   every design decision is asked about, nothing is decided silently. For
+ *   someone design-savvy who wants the AI for lifting, not deciding.
+ * - **Manual** — the token editor, every value by hand. No AI at all.
  *
- * **By hand**: the token editor, unchanged, for a pro who knows exactly what
- * they want.
- *
- * All three write the same file, so none is a lesser mode.
+ * Once a foundation is committed, this surface becomes the design-system view:
+ * palette, type, spacing, depth and the interview's persisted reasoning, each
+ * section editable in place. Re-running the interview is a door on that page,
+ * guarded by the blast-radius banner.
  */
 import { useEffect, useState } from "react"
 
-import { landsInChat, type ProjectState } from "../../../shared/ipc"
+import { landsInChat, type ProjectState, type WizardStateWire } from "../../../shared/ipc"
 import { TokenWizard } from "../components/design-wizard/TokenWizard"
 import { invoke, on } from "../ipc"
-import { cn } from "../lib/utils"
 import { setActiveProject } from "../services/design-client"
-import { FoundationInterview } from "./FoundationInterview"
+import { DesignSystemView } from "./DesignSystemView"
+import { FoundationEntry } from "./FoundationEntry"
 import { InterviewView } from "./InterviewView"
 import { WizardView } from "./WizardView"
 
 /** `agent` is only ever entered by an external agent pushing a question. */
-type Mode = "wizard" | "presets" | "manual" | "agent"
+type Mode = "entry" | "wizard" | "manual" | "agent" | "overview"
 
 export function FoundationView({
 	project,
@@ -38,11 +40,41 @@ export function FoundationView({
 	onDone(): void
 	onInterviewAnswered?(): void
 }) {
-	const [mode, setMode] = useState<Mode>("wizard")
+	const [mode, setMode] = useState<Mode>(project.hasFoundation ? "overview" : "entry")
+	const [wizardState, setWizardState] = useState<WizardStateWire | null>(null)
+	const [description, setDescription] = useState("")
 	const [blastRadius, setBlastRadius] = useState<{ occurrences: number; files: number } | null>(null)
 
-	// The wizard's data layer is module-scoped to one project per window.
-	useEffect(() => setActiveProject(project.path), [project.path])
+	// The wizard's data layer is module-scoped to one project per window. Set
+	// during render, not in an effect: children's load effects run BEFORE a
+	// parent's (React runs effects bottom-up), so the DS view's first fetch on a
+	// fresh mount would otherwise beat the effect that names the project and
+	// throw "No project is open". Assigning a module variable is idempotent.
+	setActiveProject(project.path)
+
+	// A commit can land while this view sits on the untouched entry screen — an
+	// external agent's `commit_foundation` does exactly that. The entry screen
+	// is only the door for an uncommitted project, so it yields to the DS view;
+	// any mode the user actively chose is theirs and is never switched away.
+	useEffect(() => {
+		if (project.hasFoundation) setMode((current) => (current === "entry" ? "overview" : current))
+	}, [project.hasFoundation])
+
+	// A crash mid-interview must resume into the interview, not restart at the
+	// describe screen — every answered question cost a model call.
+	useEffect(() => {
+		let cancelled = false
+		void invoke("wizard:resume", project.path).then((resumed) => {
+			if (cancelled || !resumed) return
+			if (resumed.phase === "question" || resumed.phase === "finish" || resumed.phase === "error") {
+				setWizardState(resumed)
+				setMode((current) => (current === "agent" ? current : "wizard"))
+			}
+		})
+		return () => {
+			cancelled = true
+		}
+	}, [project.path])
 
 	// An *external* agent's question wins over whatever is on screen: unlike
 	// Caret's own flows, there is a tool call blocked on it. Asset picks are
@@ -77,9 +109,11 @@ export function FoundationView({
 			.catch(() => setBlastRadius(null))
 	}, [project.hasFoundation, project.path])
 
+	const rerunning = project.hasFoundation && mode !== "overview" && mode !== "agent"
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden bg-shell-bg">
-			{!project.hasFoundation && (
+			{!project.hasFoundation && mode !== "agent" && (
 				<div className="border-b border-shell-border bg-caret-accent/10 px-8 py-3">
 					<p className="mx-auto max-w-3xl">
 						Set your foundations before generating any pages. Everything an agent writes will be styled from these,
@@ -87,7 +121,7 @@ export function FoundationView({
 					</p>
 				</div>
 			)}
-			{project.hasFoundation && (
+			{rerunning && (
 				<div className="border-b border-shell-border bg-caret-accent/10 px-8 py-3" data-testid="foundation-rerun-notice">
 					<p className="mx-auto max-w-3xl">
 						This project already has foundations. Tokens are live bindings, so committing new ones restyles
@@ -99,55 +133,36 @@ export function FoundationView({
 				</div>
 			)}
 
-			<div className="flex items-center gap-1 border-b border-shell-border px-8 py-2">
-				<ModeTab
-					active={mode === "wizard" || mode === "agent"}
-					label="Answer a few questions"
-					onClick={() => setMode("wizard")}
-					testid="foundation-tab-interview"
-				/>
-				<ModeTab
-					active={mode === "presets"}
-					label="Pick from presets"
-					onClick={() => setMode("presets")}
-					testid="foundation-tab-presets"
-				/>
-				<ModeTab
-					active={mode === "manual"}
-					label="Set them by hand"
-					onClick={() => setMode("manual")}
-					testid="foundation-tab-manual"
-				/>
-			</div>
-
-			{mode === "agent" && <InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode("manual")} />}
-			{mode === "wizard" && (
-				<WizardView
-					onCommitted={onDone}
-					onSwitchToManual={() => setMode("manual")}
-					onSwitchToPresets={() => setMode("presets")}
+			{mode === "agent" && (
+				<InterviewView onAnswered={onInterviewAnswered} onDone={() => setMode(project.hasFoundation ? "overview" : "entry")} />
+			)}
+			{mode === "overview" && (
+				<DesignSystemView onEditByHand={() => setMode("manual")} onRerunInterview={() => setMode("entry")} />
+			)}
+			{mode === "entry" && (
+				<FoundationEntry
+					onManual={(described) => {
+						setDescription(described)
+						setMode("manual")
+					}}
+					onStarted={(state, described) => {
+						setDescription(described)
+						setWizardState(state)
+						setMode("wizard")
+					}}
 					projectPath={project.path}
 				/>
 			)}
-			{mode === "presets" && (
-				<FoundationInterview onCommitted={onDone} onSwitchToManual={() => setMode("manual")} projectPath={project.path} />
+			{mode === "wizard" && (
+				<WizardView
+					initialState={wizardState}
+					onCommitted={onDone}
+					onNothingInFlight={() => setMode("entry")}
+					onSwitchToManual={() => setMode("manual")}
+					projectPath={project.path}
+				/>
 			)}
-			{mode === "manual" && <TokenWizard onDone={onDone} />}
+			{mode === "manual" && <TokenWizard initialDescription={description} onDone={onDone} />}
 		</div>
-	)
-}
-
-function ModeTab({ active, label, onClick, testid }: { active: boolean; label: string; onClick(): void; testid: string }) {
-	return (
-		<button
-			className={cn(
-				"rounded-lg px-3 py-1.5 transition-colors",
-				active ? "bg-caret-accent/15 text-caret-accent" : "text-shell-muted hover:bg-white/5",
-			)}
-			data-testid={testid}
-			onClick={onClick}
-			type="button">
-			{label}
-		</button>
 	)
 }

@@ -44,6 +44,23 @@ export function TokenPreview({ tokens }: Props) {
 						}}>
 						Secondary
 					</button>
+					{tokens.color.secondary && (
+						<button
+							className="px-3 py-1.5 text-xs text-white font-medium"
+							style={{
+								backgroundColor: tokens.color.secondary.seed,
+								borderRadius: `${radiusMd}px`,
+							}}>
+							Supporting
+						</button>
+					)}
+					{tokens.color.accent && (
+						<span
+							className="px-2 py-1.5 text-xs font-medium self-center"
+							style={{ color: tokens.color.accent.seed }}>
+							Accent link →
+						</span>
+					)}
 				</div>
 
 				{/* Card */}

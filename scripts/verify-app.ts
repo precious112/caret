@@ -186,6 +186,34 @@ function assert(condition: unknown, message: string): asserts condition {
  * gave up. Worth having on anything slow: "timed out" alone costs a re-run to
  * turn into a cause.
  */
+/**
+ * Lands the chrome on the design-system view, whatever surface it is on now.
+ *
+ * The top-bar Foundation button is a TOGGLE, so blind clicks are how two
+ * scenarios in a row end up racing each other's surface: the token editor's
+ * save flips to canvas on a 1200ms timer, and a click fired while that timer
+ * is in flight toggles the surface away a moment before it settles. Settle
+ * first, look at what is actually on screen, then click only what is needed.
+ */
+async function openDesignSystem(chrome: import("playwright").Page): Promise<void> {
+	// Let any in-flight surface transition (the editor's save timer, a commit's
+	// onDone) finish before reading the surface.
+	await chrome.waitForTimeout(1_500)
+	if (await chrome.getByTestId("design-system-view").count()) return
+	const onFoundation = await chrome.evaluate(() =>
+		Boolean(
+			document.querySelector(
+				'[data-testid="token-editor"], [data-testid="foundation-describe"], [data-testid="wizard"], [data-testid="wizard-needs-backend"]',
+			),
+		),
+	)
+	// A non-overview foundation mode only resets by leaving and re-entering —
+	// a fresh mount on a committed project opens on the DS view.
+	if (onFoundation) await chrome.click('[data-testid="top-bar"] >> text=Foundation')
+	await chrome.click('[data-testid="top-bar"] >> text=Foundation')
+	await chrome.waitForSelector('[data-testid="design-system-view"]', { timeout: 20_000 })
+}
+
 async function waitFor<T>(
 	label: string,
 	check: () => Promise<T | null>,
@@ -801,23 +829,51 @@ async function main(): Promise<void> {
 		return `the top bar names the project and offers a way out; a second project opened in its own window and reached the recents menu (${recentLabels.length} entries)`
 	})
 
-	await scenario("o. the token editor renders and writes what you set", async () => {
-		// The wizard came across from the VS Code webview with its data layer
-		// rewired from gRPC to IPC. Nothing else in this suite would notice if it
-		// threw on mount or if the IPC shim returned the wrong shape.
-		await chrome.click('[data-testid="top-bar"] >> text=Foundation')
-		await chrome.waitForSelector('[data-testid="foundation-tab-manual"]', { timeout: 20_000 })
-		await chrome.click('[data-testid="foundation-tab-manual"]')
+	await scenario("o. the design-system view shows the committed foundation, and the editor round-trips it", async () => {
+		// `m` committed a foundation, so Foundation must show the design-system
+		// view — the surface that did not exist when commit meant "dropped onto
+		// the canvas". From there, "Edit everything by hand" is the token editor,
+		// whose data layer was rewired from gRPC to IPC; nothing else in this
+		// suite would notice if it threw on mount or saved the wrong shape.
+		//
+		// The fixture booted UNCOMMITTED, so the app auto-opened Foundation onto
+		// the entry screen — and `m`'s commit must flip that mounted screen over
+		// to the DS view once the watcher's debounced push lands. Wait for the
+		// flip BEFORE touching the top-bar button: it is a toggle, and clicking
+		// while the push is still in flight toggles the surface away a moment
+		// before the flip would have shown (a race this scenario lost twice).
+		const flipped = await chrome
+			.waitForSelector('[data-testid="design-system-view"]', { timeout: 20_000 })
+			.then(() => true)
+			.catch(() => false)
+		if (!flipped) {
+			// Not on the Foundation surface at all (an --only subset with a
+			// different history) — navigate there.
+			await chrome.click('[data-testid="top-bar"] >> text=Foundation')
+		}
+		await waitFor(
+			"the design-system view",
+			async () => ((await chrome.getByTestId("design-system-view").count()) ? true : null),
+			20_000,
+			async () => {
+				const ids = await chrome.evaluate(() =>
+					[...document.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")).join(", "),
+				)
+				return `on screen instead: ${ids.slice(0, 400)}`
+			},
+		)
+		await shot(chrome, "02-design-system-view")
+		await chrome.click('[data-testid="ds-edit-by-hand"]')
 
-		// The wizard's first step is the vibe description.
+		// The editor's first step is the vibe description.
 		const textarea = chrome.locator("textarea").first()
 		await textarea.waitFor({ timeout: 20_000 })
 		await textarea.fill("Certification run — set by the token editor")
-		await shot(chrome, "02-token-editor")
+		await shot(chrome, "02b-token-editor")
 
 		// Walk to the review step and save. The step count is the wizard's, so
 		// clicking Next until Save appears is more durable than a fixed number.
-		for (let i = 0; i < 8; i++) {
+		for (let i = 0; i < 9; i++) {
 			const save = chrome.locator("button", { hasText: /^Save/ })
 			if (await save.count()) break
 			const next = chrome.locator("button", { hasText: /^(Next|Continue)/ }).first()
@@ -839,7 +895,15 @@ async function main(): Promise<void> {
 			},
 			30_000,
 		)
-		return `editor wrote vibe: "${tokens.vibe.description.slice(0, 40)}…"`
+		// The round-trip guarantees: fields the editor does not own must survive
+		// its save (`surface` was silently dropped for months), the committed
+		// marker must ride through, and the derivation pass must have filled
+		// what the draft leaves empty.
+		assert(tokens.color.surface === "light" || tokens.color.surface === "dark", "color.surface was dropped by the editor's save")
+		assert(tokens.meta?.committed === true, "meta.committed did not survive the editor's save")
+		assert(Object.keys(tokens.color.neutral?.scale ?? {}).length > 0, "the neutral scale was not derived on save")
+		assert(tokens.color.on?.brand, "on-colours were not derived on save")
+		return `DS view rendered; editor wrote vibe: "${tokens.vibe.description.slice(0, 40)}…" and kept surface/meta`
 	})
 
 	await scenario("p. an agent's question is answerable in the UI and reaches the tool call", async () => {
@@ -3868,80 +3932,119 @@ export default function CatalogDemo() {
 		return `refused with: "${refusal?.trim().slice(0, 60)}…"`
 	})
 
-	await scenario("hh. the Presets flow runs to a committed file with no model anywhere", async () => {
-		// The deterministic tab: fixed curated steps, identical screens on every
-		// machine, zero spend. Runs here deliberately — before any backend is
-		// chosen — because that is exactly when it must still work.
-		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
-		await chrome.click('[data-testid="foundation-tab-presets"]')
+	await scenario("hh. the entry flow describes once and routes every door, with no model anywhere", async () => {
+		// The tabs are gone: a re-run goes describe-first, then chooses how much
+		// control the user wants. Runs here deliberately — before any backend is
+		// chosen — because the routing itself must cost nothing and the manual
+		// door must work with no model at all.
+		//
+		// `o` left a committed foundation, so Foundation opens on the DS view and
+		// re-running is a deliberate act behind the blast-radius banner.
+		await openDesignSystem(chrome)
+		await chrome.click('[data-testid="ds-rerun"]')
+
 		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
-
-		await chrome.fill(
-			'[data-testid="foundation-describe"]',
-			"A dashboard for technical support teams who triage tickets all day",
-		)
-		await chrome.click('[data-testid="foundation-begin"]')
-		await chrome.waitForSelector('[data-testid="foundation-step"]', { timeout: 30_000 })
-		await shot(chrome, "12-presets-step")
-
-		let steps = 0
-		for (; steps < 8; steps++) {
-			if (await chrome.getByTestId("foundation-summary").count()) break
-
-			// The recommendation is preselected: pressing straight through has to
-			// yield a real foundation, which is the entire promise of the flow.
-			const preselected = await chrome.locator('[data-testid="foundation-option"][data-selected="true"]').count()
-			assert(preselected === 1, `expected exactly one option preselected, found ${preselected}`)
-
-			await chrome.click('[data-testid="foundation-continue"]')
-			await chrome.waitForTimeout(300)
-		}
-
-		await chrome.waitForSelector('[data-testid="foundation-summary"]', { timeout: 30_000 })
-		await shot(chrome, "13-interview-summary")
-
-		const before = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
-		await chrome.click('[data-testid="foundation-commit"]')
-
-		const tokens = await waitFor(
-			"the interview to write foundation.json",
-			async () => {
-				const raw = await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8")
-				return raw !== before ? JSON.parse(raw) : null
-			},
-			30_000,
-		)
-
-		assert(tokens.typography?.fontFamily, "the committed foundation has no typeface")
-		assert(tokens.color?.brand?.seed, "the committed foundation has no brand colour")
 		assert(
-			Object.keys(tokens.typography.scale ?? {}).length > 0,
-			"the type scale was never generated — the model was expected to supply it, which it must never do",
+			(await chrome.getByTestId("foundation-rerun-notice").count()) === 1,
+			"re-running over a committed foundation did not show the blast-radius banner",
 		)
+		const description = "A dashboard for technical support teams who triage tickets all day"
+		await chrome.fill('[data-testid="foundation-describe"]', description)
+		await chrome.click('[data-testid="foundation-describe-continue"]')
+		await shot(chrome, "12-entry-chooser")
 
-		return `${steps} step(s), no model → ${tokens.typography.fontFamily}, seed ${tokens.color.brand.seed}`
+		// All three doors are on screen; the collaborative one needs a backend and
+		// must say so rather than pretend.
+		for (const door of ["foundation-mode-ai", "foundation-mode-collaborative", "foundation-mode-manual"]) {
+			assert((await chrome.getByTestId(door).count()) === 1, `the chooser is missing ${door}`)
+		}
+		await chrome.click('[data-testid="foundation-mode-collaborative"]')
+		await chrome.waitForSelector('[data-testid="wizard-needs-backend"]', { timeout: 30_000 })
+
+		// Back around to the manual door, which needs nothing: re-entering the
+		// surface resets the flow to the DS view (no interview is in flight).
+		await openDesignSystem(chrome)
+		await chrome.click('[data-testid="ds-rerun"]')
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+		await chrome.fill('[data-testid="foundation-describe"]', description)
+		await chrome.click('[data-testid="foundation-describe-continue"]')
+		await chrome.click('[data-testid="foundation-mode-manual"]')
+
+		// The manual editor opens with the description already in the vibe step —
+		// the entry flow's description feeds all three doors.
+		const textarea = chrome.locator("textarea").first()
+		await textarea.waitFor({ timeout: 20_000 })
+		const prefilled = await textarea.inputValue()
+		assert(prefilled.includes("triage tickets"), `the description did not prefill the manual editor: "${prefilled.slice(0, 60)}"`)
+		await shot(chrome, "13-entry-manual-prefilled")
+
+		// Leave the surface where the suite expects it.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+		return "describe → chooser showed all three doors; collaborative refused honestly; manual opened prefilled"
 	})
 
-	await scenario("jj. with no backend, the wizard refuses honestly and offers the other doors", async () => {
+	await scenario("jj. with no backend, the AI-led interview refuses honestly and its escape works", async () => {
 		// The wizard is genuinely AI-run, so without a model it must not pretend —
-		// it says what it needs and hands the user the presets tab or the editor,
-		// rather than dead-ending or faking an interview.
-		//
-		// Navigate first: hh's commit flipped the surface back to the canvas, so
-		// the foundation tabs are no longer on screen.
-		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
-		await chrome.click('[data-testid="foundation-tab-interview"]')
-		await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 20_000 })
-		await chrome.fill('[data-testid="wizard-describe"]', "A quiet reading app for long-form essays")
-		await chrome.click('[data-testid="wizard-begin"]')
+		// it says what it needs and hands the user the token editor, rather than
+		// dead-ending or faking an interview.
+		await openDesignSystem(chrome)
+		await chrome.click('[data-testid="ds-rerun"]')
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
+		await chrome.fill('[data-testid="foundation-describe"]', "A quiet reading app for long-form essays")
+		await chrome.click('[data-testid="foundation-describe-continue"]')
+		await chrome.click('[data-testid="foundation-mode-ai"]')
 
 		await chrome.waitForSelector('[data-testid="wizard-needs-backend"]', { timeout: 30_000 })
 		await shot(chrome, "13-wizard-needs-backend")
 
 		// The offered escape actually goes somewhere.
-		await chrome.getByRole("button", { name: "Pick from presets instead" }).click()
-		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
-		return "refused with the reason, and the presets door works"
+		await chrome.getByRole("button", { name: "Set tokens by hand" }).click()
+		const textarea = chrome.locator("textarea").first()
+		await textarea.waitFor({ timeout: 20_000 })
+
+		// Leave the surface where the suite expects it.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+		return "refused with the reason, and the manual door works"
+	})
+
+	await scenario("oo. a design-system section edits in place and the save regenerates the ramp", async () => {
+		// The DS view's promise: see a token, change it where you see it, and the
+		// derivation keeps every consequence in step — no model, no full editor.
+		await openDesignSystem(chrome)
+		await chrome.click('[data-testid="ds-edit-color"]')
+
+		// The colour step mounts inline; drive its hex field to a new brand seed.
+		const hexField = chrome.locator('[data-testid="ds-section-color"] input[placeholder="#000000"]')
+		await hexField.waitFor({ timeout: 20_000 })
+		await hexField.fill("#7c3aed")
+		await hexField.press("Enter")
+		await chrome.waitForTimeout(400)
+		await shot(chrome, "13b-ds-inline-edit")
+		await chrome.click('[data-testid="ds-save-color"]')
+
+		const tokens = await waitFor(
+			"the inline edit to land in foundation.json",
+			async () => {
+				const parsed = JSON.parse(await fs.readFile(path.join(fixture, ".caret", "tokens", "foundation.json"), "utf-8"))
+				return parsed.color?.brand?.seed === "#7c3aed" ? parsed : null
+			},
+			30_000,
+		)
+		// The consequences moved with the choice: seed at 500, meta preserved,
+		// on-colours recomputed against the new brand.
+		assert(tokens.color.brand.scale?.["500"] === "#7c3aed", `brand-500 did not follow the new seed: ${tokens.color.brand.scale?.["500"]}`)
+		assert(tokens.meta?.committed === true, "meta was lost by an inline edit")
+		assert(tokens.color.on?.brand, "on-brand was not recomputed")
+		assert(tokens.border?.focusRing?.color === "#7c3aed", "the focus ring did not follow the brand")
+
+		// Back on the view, the new swatch is what renders.
+		await chrome.waitForSelector('[data-testid="ds-section-color"]', { timeout: 20_000 })
+		const colorText = await chrome.textContent('[data-testid="ds-section-color"]')
+		assert(colorText?.includes("#7c3aed"), "the DS view did not re-read the saved seed")
+
+		// Leave the surface where the suite expects it.
+		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
+		return "edited the brand seed in place; ramp, on-colours and focus ring all followed"
 	})
 
 	// Which model — if any — this run may spend. Resolved once, before the
@@ -4743,15 +4846,17 @@ export default function CatalogDemo() {
 		// vocabulary, the UI renders and answers it, "Just finish" forces a
 		// proposal from what's known, and the committed file is Caret's own
 		// derivation. Two model turns, so it stays affordable on a free model.
-		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
-		await chrome.click('[data-testid="foundation-tab-interview"]')
-		await chrome.waitForSelector('[data-testid="wizard-describe"]', { timeout: 20_000 })
+		// The fixture is committed, so the road in is the DS view's re-run door.
+		await openDesignSystem(chrome)
+		await chrome.click('[data-testid="ds-rerun"]')
+		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
 
 		await chrome.fill(
-			'[data-testid="wizard-describe"]',
+			'[data-testid="foundation-describe"]',
 			"A quiet reading app for long-form essays. People sit with it for an hour at a time. Calm, bookish, light background.",
 		)
-		await chrome.click('[data-testid="wizard-begin"]')
+		await chrome.click('[data-testid="foundation-describe-continue"]')
+		await chrome.click('[data-testid="foundation-mode-ai"]')
 
 		// The first question is a whole model turn composing UI; give it the same
 		// patience as any inference scenario — and a model that cannot produce one
@@ -4822,7 +4927,26 @@ export default function CatalogDemo() {
 		assert(Object.keys(tokens.typography.scale ?? {}).length > 0, "no derived type scale")
 		assert(/^#[0-9a-f]{6}$/.test(tokens.color?.brand?.seed ?? ""), `brand seed is not a hex: ${tokens.color?.brand?.seed}`)
 		assert(Object.keys(tokens.color.brand.scale ?? {}).length > 0, "no derived colour scale")
+		// The seed IS 500 — the repaired ramp contract, asserted where a real
+		// interview writes a real file. A near-white or near-black seed is nudged
+		// by design, so only a mid-range seed is held to exact equality.
+		{
+			const hex = tokens.color.brand.seed.slice(1)
+			const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255)
+			const lightness = (Math.max(r, g, b) + Math.min(r, g, b)) / 2
+			if (lightness >= 0.2 && lightness <= 0.85) {
+				assert(
+					tokens.color.brand.scale?.["500"] === tokens.color.brand.seed,
+					`brand-500 (${tokens.color.brand.scale?.["500"]}) is not the seed (${tokens.color.brand.seed})`,
+				)
+			}
+		}
 		assert((tokens.spacing?.scale ?? []).length > 0, "no spacing scale")
+		// The commit's survivors: the rationale and the committed marker, which
+		// used to be destroyed with the scratch.
+		assert(tokens.meta?.committed === true, "the committed foundation carries no meta.committed marker")
+		assert((tokens.meta?.rule ?? "").length > 0, "the restraint rule was not persisted into meta")
+		assert(Object.keys(tokens.color.neutral?.scale ?? {}).length > 0, "the neutral scale shipped empty — stock grey again")
 
 		// Scratch cleared on commit — a committed interview must not offer a resume.
 		await waitFor(

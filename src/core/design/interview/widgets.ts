@@ -35,7 +35,10 @@ export interface SpecimenParams {
 	displayFamily?: string
 	bodyFamily?: string
 	surface?: "light" | "dark"
-	/** Accent hex, e.g. the brand colour this option proposes. */
+	/**
+	 * Accent hex, e.g. the brand colour this option proposes. A preview field —
+	 * not the palette's `accent` role, which lives on `FoundationProposal`.
+	 */
 	accent?: string
 	neutral?: "warm" | "cool" | "true" | "slight-tint"
 	/** Card/button radius in px. */
@@ -71,6 +74,12 @@ export interface WizardQuestion {
 	options?: WizardOption[]
 	/** Preselected. Pressing straight through must yield a good foundation. */
 	recommendedId?: string
+	/**
+	 * Collaborative mode only: which coverage areas this question settles.
+	 * Sanitized (unknown ids dropped), never rejected over. Absent in ai-led
+	 * interviews.
+	 */
+	covers?: string[]
 	/**
 	 * Which escape hatch the renderer offers beyond the listed options.
 	 * `color` → picker + hex + eyedropper; `font` → Google Fonts search;
@@ -127,16 +136,31 @@ export interface FoundationProposal {
 	baseSize: number
 	/** Brand hex. */
 	brand: string
+	/** A supporting colour hex, when the palette has one. */
+	secondary?: string
+	/** An accent hex used sparingly, when the palette has one. */
+	accent?: string
 	neutral: "warm" | "cool" | "true" | "slight-tint"
 	surface: "light" | "dark"
 	semantic?: { success?: string; warning?: string; error?: string; info?: string }
 	spacingUnit: number
 	radiusCharacter: "sharp" | "soft" | "round" | "pill"
+	/** How much depth the interface has. Absent means subtle. */
+	elevationCharacter?: "flat" | "subtle" | "pronounced"
+	/** The heading weight the foundation allows, e.g. 600. */
+	displayWeight?: number
+	/** The body weights, usually 400 with 500 for emphasis. */
+	bodyWeight?: number
 	/** The restraint rule this foundation adopts — carried into the rules files. */
 	rule: string
 	vibeTags?: string[]
 	/** Two or three sentences to the user on what was built and why. */
 	summary: string
+	/**
+	 * Collaborative mode: every coverage area's decision with its reasoning.
+	 * Persisted into `meta.decisions` so the reasoning outlives the interview.
+	 */
+	decisions?: Array<{ area: string; choice: string; reason: string }>
 }
 
 export type WizardTurn = { action: "ask"; question: WizardQuestion } | { action: "finish"; foundation: FoundationProposal }
@@ -186,6 +210,7 @@ export const WIZARD_TURN_SCHEMA: Record<string, unknown> = {
 				question: { type: "string" },
 				why: { type: "string" },
 				recommendedId: { type: "string" },
+				covers: { type: "array", items: { type: "string" } },
 				other: { enum: ["color", "font", "text"] },
 				leftLabel: { type: "string" },
 				rightLabel: { type: "string" },
@@ -244,13 +269,31 @@ export const WIZARD_TURN_SCHEMA: Record<string, unknown> = {
 				scaleRatio: { type: "number" },
 				baseSize: { type: "number" },
 				brand: { type: "string" },
+				secondary: { type: "string" },
+				accent: { type: "string" },
 				neutral: { enum: ["warm", "cool", "true", "slight-tint"] },
 				surface: { enum: ["light", "dark"] },
 				spacingUnit: { type: "number" },
 				radiusCharacter: { enum: ["sharp", "soft", "round", "pill"] },
+				elevationCharacter: { enum: ["flat", "subtle", "pronounced"] },
+				displayWeight: { type: "number" },
+				bodyWeight: { type: "number" },
 				rule: { type: "string" },
 				vibeTags: { type: "array", items: { type: "string" } },
 				summary: { type: "string" },
+				decisions: {
+					type: "array",
+					items: {
+						type: "object",
+						required: ["area", "choice", "reason"],
+						additionalProperties: false,
+						properties: {
+							area: { type: "string" },
+							choice: { type: "string" },
+							reason: { type: "string" },
+						},
+					},
+				},
 				semantic: {
 					type: "object",
 					additionalProperties: false,

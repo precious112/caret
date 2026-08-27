@@ -129,4 +129,69 @@ describe("foundationThemeCss", () => {
 		assert.ok(css.includes("--color-brand: #3b82f6;"))
 		assert.ok(!css.includes("--color-brand-"), "steps invented from nowhere")
 	})
+
+	it("defines secondary and accent roles only when the palette carries them", () => {
+		assert.ok(!foundationThemeCss(TOKENS).includes("--color-secondary"), "a role the palette lacks was invented")
+		const tokens: FoundationTokens = {
+			...TOKENS,
+			color: {
+				...TOKENS.color,
+				secondary: { seed: "#0ea5e9", scale: { "500": "#0ea5e9" } },
+				accent: { seed: "#f59e0b", scale: { "500": "#f59e0b" } },
+			},
+		}
+		const css = foundationThemeCss(tokens)
+		assert.ok(css.includes("--color-secondary-500: #0ea5e9;"))
+		assert.ok(css.includes("--color-secondary: #0ea5e9;"), "the bare secondary utility is missing")
+		assert.ok(css.includes("--color-accent-500: #f59e0b;"))
+		assert.ok(css.includes("--color-accent: #f59e0b;"))
+	})
+
+	it("derives a tinted neutral at emission time when the stored scale is empty", () => {
+		// Real foundations shipped `neutral.scale: {}` for months, so the theme
+		// emitted nothing and text-neutral-* fell through to stock grey. The write
+		// paths now derive it, but a never-rewritten project regenerates its theme
+		// far more often than its tokens file — so emission derives too.
+		const css = foundationThemeCss(TOKENS)
+		assert.ok(css.includes("--color-neutral-600:"), "an empty neutral scale emitted nothing — stock grey again")
+	})
+
+	it("defines on-colours, shadows, borders and motion under the advertised names", () => {
+		const tokens: FoundationTokens = {
+			...TOKENS,
+			color: { ...TOKENS.color, on: { brand: "#fafafa", surface: "#171717", surfaceMuted: "#525252" } },
+			elevation: {
+				character: "subtle",
+				scale: { flat: "none", raised: "0 1px 2px rgba(0,0,0,0.05)", floating: "0 4px 12px rgba(0,0,0,0.08)", overlay: "0 16px 40px rgba(0,0,0,0.18)" },
+			},
+			border: { width: 1, color: "#e5e5e5", focusRing: { color: "#0a0a0a", width: 2 } },
+			motion: { durations: { fast: 150, base: 250, slow: 350 }, easing: { standard: "cubic-bezier(0.2, 0, 0, 1)", decelerate: "cubic-bezier(0, 0, 0.2, 1)" } },
+		}
+		const css = foundationThemeCss(tokens)
+		assert.ok(css.includes("--color-on-brand: #fafafa;"))
+		assert.ok(css.includes("--color-on-surface-muted: #525252;"), "the camelCase key must emit as a kebab-case utility")
+		assert.ok(css.includes("--shadow-raised:"), "shadow-raised would be inert")
+		assert.ok(css.includes("--shadow-md:"), "the stock shadow names must land on foundation values too")
+		assert.ok(css.includes("--color-border: #e5e5e5;"))
+		assert.ok(css.includes("--duration-base: 250ms;"))
+		assert.ok(css.includes("--ease-standard:"))
+	})
+
+	it("fetches exactly the weights the foundation names, plus the conventional pair", () => {
+		const tokens: FoundationTokens = {
+			...TOKENS,
+			typography: { ...TOKENS.typography, weights: { display: [800], body: [400, 500] } },
+		}
+		const fonts = foundationFontsCss(tokens)
+		assert.ok(fonts.includes("wght@400;500;700;800"), `unexpected weights query: ${fonts}`)
+	})
+
+	it("prefers the foundation's own leadings over the derived pair", () => {
+		const tokens: FoundationTokens = {
+			...TOKENS,
+			typography: { ...TOKENS.typography, scale: { base: 16 }, leadings: { base: 1.65 } },
+		}
+		const css = foundationThemeCss(tokens)
+		assert.ok(css.includes("--text-base--line-height: 1.65;"), "a hand-set leading was overridden by the derivation")
+	})
 })

@@ -49,6 +49,32 @@ export function ColorStep({ tokens, onChange }: Props) {
 		[tokens, onChange],
 	)
 
+	const handleRoleChange = useCallback(
+		async (role: "secondary" | "accent", seed: string) => {
+			onChange({ ...tokens, color: { ...tokens.color, [role]: { seed, scale: {} } } })
+			try {
+				const response = await DesignServiceClient.generateTokenScale({
+					type: "color",
+					seedValue: seed,
+					optionsJson: JSON.stringify({ steps: 11 }),
+				})
+				onChange({ ...tokens, color: { ...tokens.color, [role]: { seed, scale: JSON.parse(response.scaleJson) } } })
+			} catch (e) {
+				console.error("Failed to generate color scale:", e)
+			}
+		},
+		[tokens, onChange],
+	)
+
+	const removeRole = useCallback(
+		(role: "secondary" | "accent") => {
+			const color = { ...tokens.color }
+			delete color[role]
+			onChange({ ...tokens, color })
+		},
+		[tokens, onChange],
+	)
+
 	const handleSemanticChange = useCallback(
 		(key: string, value: string) => {
 			onChange({
@@ -116,6 +142,61 @@ export function ColorStep({ tokens, onChange }: Props) {
 					</div>
 				</div>
 			)}
+
+			{(["secondary", "accent"] as const).map((role) => {
+				const entry = tokens.color[role]
+				const label = role === "secondary" ? "Supporting Color" : "Accent Color"
+				return (
+					<div className="flex flex-col gap-2" key={role}>
+						{entry ? (
+							<>
+								<label className="text-sm font-medium text-foreground">{label}</label>
+								<div className="flex items-center gap-3">
+									<input
+										className="w-10 h-10 rounded border border-input cursor-pointer"
+										data-testid={`color-${role}`}
+										onChange={(e) => handleRoleChange(role, e.target.value)}
+										type="color"
+										value={entry.seed}
+									/>
+									<span className="text-xs font-mono text-muted-foreground">{entry.seed}</span>
+									<button
+										className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+										onClick={() => removeRole(role)}>
+										Remove
+									</button>
+								</div>
+							</>
+						) : (
+							<button
+								className="self-start text-xs text-button-background hover:underline"
+								data-testid={`color-add-${role}`}
+								onClick={() => handleRoleChange(role, role === "secondary" ? "#0ea5e9" : "#f59e0b")}>
+								+ {role === "secondary" ? "Add a supporting color" : "Add an accent"}
+							</button>
+						)}
+					</div>
+				)
+			})}
+
+			<div className="flex flex-col gap-2">
+				<label className="text-sm font-medium text-foreground">Surface</label>
+				<div className="flex gap-2">
+					{(["light", "dark"] as const).map((surface) => (
+						<button
+							className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+								tokens.color.surface === surface
+									? "border-button-background bg-button-background text-button-foreground"
+									: "border-input bg-input-background text-foreground hover:bg-input-background/80"
+							}`}
+							data-testid={`color-surface-${surface}`}
+							key={surface}
+							onClick={() => onChange({ ...tokens, color: { ...tokens.color, surface } })}>
+							{surface === "light" ? "Light pages" : "Dark pages"}
+						</button>
+					))}
+				</div>
+			</div>
 
 			<div className="flex flex-col gap-2">
 				<label className="text-sm font-medium text-foreground">Neutral Character</label>

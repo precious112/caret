@@ -13,14 +13,17 @@
 import {
 	type CodingBackend,
 	clearWizardScratch,
+	COVERAGE_AREAS,
+	coveredAreas,
 	type FoundationProposal,
 	finalizeProposal,
 	getBackend,
 	nextWizardTurn,
-	QUESTION_CAP,
+	questionCapFor,
 	readWizardScratch,
 	type StoredQA,
 	type WizardAnswer,
+	type WizardMode,
 	type WizardQuestion,
 	writeFoundationTokens,
 	writeWizardScratch,
@@ -33,6 +36,7 @@ import { regenerateRulesFiles } from "./rules/generate"
 
 interface WizardSession {
 	description: string
+	mode: WizardMode
 	history: StoredQA[]
 	pending?: WizardQuestion
 	proposal?: FoundationProposal
@@ -59,6 +63,7 @@ async function persist(projectPath: string, session: WizardSession): Promise<voi
 	sessions.set(projectPath, session)
 	await writeWizardScratch(projectPath, {
 		description: session.description,
+		mode: session.mode,
 		history: session.history,
 		pending: session.pending,
 		proposal: session.proposal,
@@ -70,6 +75,7 @@ function stateFor(session: WizardSession): WizardStateWire {
 		const finalized = finalizeProposal(session.proposal, session.description)
 		return {
 			phase: "finish",
+			mode: session.mode,
 			description: session.description,
 			proposal: session.proposal,
 			name: finalized.name,
@@ -79,13 +85,22 @@ function stateFor(session: WizardSession): WizardStateWire {
 		}
 	}
 	if (session.pending) {
+		const covered = new Set(coveredAreas(session.history))
 		return {
 			phase: "question",
+			mode: session.mode,
 			description: session.description,
 			current: session.pending,
 			asked: session.history.length,
-			cap: QUESTION_CAP,
+			cap: questionCapFor(session.mode),
 			history: session.history,
+			coverage:
+				session.mode === "collaborative"
+					? {
+							done: COVERAGE_AREAS.filter((area) => covered.has(area.id)),
+							missing: COVERAGE_AREAS.filter((area) => !covered.has(area.id)),
+						}
+					: undefined,
 		}
 	}
 	return { phase: "describe", description: session.description }
@@ -105,6 +120,7 @@ async function advance(projectPath: string, session: WizardSession, force?: "fin
 			description: session.description,
 			history: session.history,
 			force,
+			mode: session.mode,
 		})
 
 		if (turn.action === "ask") session.pending = turn.question
@@ -135,6 +151,7 @@ export async function resumeWizard(projectPath: string): Promise<WizardStateWire
 
 	const session: WizardSession = {
 		description: scratch.description,
+		mode: scratch.mode ?? "ai-led",
 		history: scratch.history,
 		pending: scratch.pending,
 		proposal: scratch.proposal,
@@ -143,8 +160,12 @@ export async function resumeWizard(projectPath: string): Promise<WizardStateWire
 	return stateFor(session)
 }
 
-export async function startWizard(projectPath: string, description: string): Promise<WizardStateWire> {
-	const session: WizardSession = { description: description.trim(), history: [] }
+export async function startWizard(
+	projectPath: string,
+	description: string,
+	mode: WizardMode = "ai-led",
+): Promise<WizardStateWire> {
+	const session: WizardSession = { description: description.trim(), mode, history: [] }
 	await persist(projectPath, session)
 	return advance(projectPath, session)
 }
@@ -214,6 +235,17 @@ export async function commitWizard(projectPath: string): Promise<{ name: string;
 	if (!session?.proposal) throw new Error("There is no finished foundation to commit.")
 
 	const finalized = finalizeProposal(session.proposal, session.description)
+	// The rationale used to be shown once on the finish screen and destroyed
+	// with the scratch; `meta` is where it survives — and it doubles as the
+	// "a person actually committed this" marker the entry flow keys on.
+	finalized.tokens.meta = {
+		committed: true,
+		committedAt: new Date().toISOString(),
+		source: session.mode === "collaborative" ? "wizard-collaborative" : "wizard",
+		rule: finalized.rule,
+		summary: finalized.summary,
+		decisions: finalized.decisions,
+	}
 	await writeFoundationTokens(projectPath, finalized.tokens)
 	await regenerateRulesFiles(projectPath)
 	await recordEdit(projectPath, {

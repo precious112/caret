@@ -25,6 +25,11 @@ export const WIZARD_STEPS = [
 		description: "Set the corner rounding character for your design.",
 	},
 	{
+		id: "depth",
+		title: "Depth",
+		description: "How much shadow the interface has, and its hairlines.",
+	},
+	{
 		id: "review",
 		title: "Review",
 		description: "Review your foundation tokens before saving.",
@@ -40,6 +45,9 @@ export type NeutralCharacter = (typeof NEUTRAL_CHARACTERS)[number]
 
 export const RADIUS_CHARACTERS = ["sharp", "soft", "round", "pill"] as const
 export type RadiusCharacter = (typeof RADIUS_CHARACTERS)[number]
+
+export const ELEVATION_CHARACTERS = ["flat", "subtle", "pronounced"] as const
+export type ElevationCharacter = (typeof ELEVATION_CHARACTERS)[number]
 
 export const TYPE_SCALE_RATIOS = [
 	{ label: "Minor Second (1.067)", value: 1.067 },

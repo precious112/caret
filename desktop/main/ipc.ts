@@ -36,6 +36,7 @@ import {
 	searchGoogleFonts,
 	setPoster,
 	validateFoundationTokens,
+	withDerivedScales,
 	type WizardAnswer,
 	writeFoundationTokens,
 } from "../../src/core/design"
@@ -45,7 +46,6 @@ import { buildAgentClientConfigs } from "./agent-configs"
 import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
 import { acceptShader, authorShader, discardShader, holdShader } from "./authored-shaders"
 import { resolveNotification } from "./electron-host"
-import { abandonInterview, answerStep, commitInterview, resumeInterview, startInterview, stepBack } from "./foundation-interview"
 import { acceptModel3d, discardModel3d, generateModel3d } from "./generate-3d"
 import {
 	acceptRequestTake,
@@ -157,7 +157,20 @@ export function registerIpcHandlers(windows: WindowManager): void {
 			return { ok: false, error: "Those tokens are missing required fields (vibe, color, typography, spacing, radius)." }
 		}
 		try {
-			await writeFoundationTokens(projectPath, tokens)
+			// Derivation fills empty ramps and recomputes on-colours, shadows and
+			// motion, so a manual edit can never leave the consequences stale.
+			const derived = withDerivedScales(tokens)
+			// The file's meta survives an editor that doesn't know about it, and a
+			// first manual save is itself the commitment.
+			const existing = await readFoundationTokens(projectPath)
+			derived.meta = {
+				committed: true,
+				committedAt: new Date().toISOString(),
+				source: "manual",
+				...existing?.meta,
+				...tokens.meta,
+			}
+			await writeFoundationTokens(projectPath, derived)
 			// Rules files carry the foundation into every agent session, so they are
 			// stale the instant a token changes.
 			await regenerateRulesFiles(projectPath)
@@ -827,22 +840,11 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	ipcMain.handle("interview:pending", () => currentPrompt())
 
-	// The deterministic Presets flow. Separate from the three above, which are
-	// the external-agent path.
-	ipcMain.handle("foundation:resume", (_event, projectPath: string) => resumeInterview(projectPath))
-	ipcMain.handle("foundation:start", (_event, projectPath: string, description: string) =>
-		startInterview(projectPath, description),
-	)
-	ipcMain.handle("foundation:answer", (_event, projectPath: string, stepId: string, optionId: string) =>
-		answerStep(projectPath, stepId, optionId),
-	)
-	ipcMain.handle("foundation:back", (_event, projectPath: string) => stepBack(projectPath))
-	ipcMain.handle("foundation:commit", (_event, projectPath: string) => commitInterview(projectPath))
-	ipcMain.handle("foundation:abandon", (_event, projectPath: string) => abandonInterview(projectPath))
-
 	// The AI-run token wizard — the Foundation surface's default door.
 	ipcMain.handle("wizard:resume", (_event, projectPath: string) => resumeWizard(projectPath))
-	ipcMain.handle("wizard:start", (_event, projectPath: string, description: string) => startWizard(projectPath, description))
+	ipcMain.handle("wizard:start", (_event, projectPath: string, description: string, mode?: "ai-led" | "collaborative") =>
+		startWizard(projectPath, description, mode ?? "ai-led"),
+	)
 	ipcMain.handle("wizard:answer", (_event, projectPath: string, answer: WizardAnswer) => answerWizard(projectPath, answer))
 	ipcMain.handle("wizard:finishNow", (_event, projectPath: string) => finishWizard(projectPath))
 	ipcMain.handle("wizard:retry", (_event, projectPath: string) => retryWizard(projectPath))

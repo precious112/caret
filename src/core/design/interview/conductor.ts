@@ -29,6 +29,55 @@ import {
 /** Aim well under this; the cap is the backstop, not the target. */
 export const QUESTION_CAP = 10
 
+/**
+ * The collaborative interview must touch every coverage area, so its backstop
+ * sits far higher — the cap is still a backstop, not a quota.
+ */
+export const COLLABORATIVE_QUESTION_CAP = 18
+
+/**
+ * Who is being interviewed. `ai-led` is the original minimal interview: a
+ * developer who is not a designer, few questions, the model recommends and the
+ * user can press straight through. `collaborative` is for someone design-savvy
+ * who wants the AI for the heavy lifting but the decisions surfaced: every
+ * coverage area must be asked about, and nothing is decided silently.
+ */
+export type WizardMode = "ai-led" | "collaborative"
+
+export function questionCapFor(mode: WizardMode): number {
+	return mode === "collaborative" ? COLLABORATIVE_QUESTION_CAP : QUESTION_CAP
+}
+
+/**
+ * What a complete design system decides. The collaborative interview may not
+ * finish until each area has an answered question tagged with it. Consequences
+ * (contrast pairings, line heights, shadow strings, motion) are deliberately
+ * NOT areas — Caret derives them, so asking would be a question with one
+ * correct answer.
+ */
+export const COVERAGE_AREAS: ReadonlyArray<{ id: string; label: string }> = [
+	{ id: "display-type", label: "the heading typeface" },
+	{ id: "body-type", label: "the body typeface" },
+	{ id: "type-scale", label: "type size and weight" },
+	{ id: "brand-color", label: "the brand colour" },
+	{ id: "supporting-colors", label: "supporting and accent colours" },
+	{ id: "neutral", label: "the greys" },
+	{ id: "surface", label: "light or dark" },
+	{ id: "semantics", label: "success/warning/error colours" },
+	{ id: "spacing", label: "density and spacing" },
+	{ id: "radius", label: "corner rounding" },
+	{ id: "depth", label: "shadows and depth" },
+]
+
+/** Areas settled so far: the union of `covers` tags over answered questions. */
+export function coveredAreas(history: StoredQA[]): string[] {
+	const tagged = new Set<string>()
+	for (const qa of history) {
+		for (const id of qa.question.covers ?? []) tagged.add(id)
+	}
+	return COVERAGE_AREAS.filter((area) => tagged.has(area.id)).map((area) => area.id)
+}
+
 /** "Yes, all of these" and its relatives — see the `assumptions` check below. */
 const BLANKET_CONFIRM =
 	/^(yes\b|all of (these|the above)|confirm all|these are all|that('| i)s all correct|sounds right|looks right|agree)/i
@@ -46,7 +95,7 @@ export class WizardTurnError extends Error {
  * The reference lists at the bottom are the curated library demoted to what it
  * always should have been: known-good examples the model may use or ignore.
  */
-function systemPrompt(): string {
+function systemPrompt(mode: WizardMode): string {
 	const pairings = TYPEFACE_PAIRINGS.map(
 		(p) => `- ${p.display.family} for headings with ${p.body.family} for body — ${p.feel}`,
 	).join("\n")
@@ -54,12 +103,40 @@ function systemPrompt(): string {
 		"\n",
 	)
 
-	return `You are running a short visual-foundations interview inside Caret, a design tool.
+	const intro =
+		mode === "collaborative"
+			? `You are running a visual-foundations interview inside Caret, a design tool.
+The person answering knows what they are building AND has real design opinions — they want
+you for the heavy lifting, not the deciding. Your job: work through every foundation
+decision WITH them — typefaces, the full colour palette, type scale and weight, density,
+corner character, depth — proposing with your reasoning visible and letting them choose.`
+			: `You are running a short visual-foundations interview inside Caret, a design tool.
 The person answering is a developer who knows exactly what they are building and is not a
 designer. Your job: decide the foundations their project needs — typefaces, colour, density,
-corner character — by asking the fewest, best questions, then hand back the parameters.
+corner character — by asking the fewest, best questions, then hand back the parameters.`
 
-## How to behave
+	const behave =
+		mode === "collaborative"
+			? `## How to behave
+
+- **You may not decide anything silently.** Every foundation parameter comes from an
+  answered question. Propose — with the reasoning in \`why\` and each option's \`reason\` —
+  and let them pick; confirm inferences from their description with an \`assumptions\`
+  question rather than assuming quietly.
+- **You must cover every one of these areas before finishing**, each with at least one
+  answered question tagged with it:
+${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n")}
+  Tag every question with \`covers: [...]\` naming the areas it settles. One question may
+  settle several (a palette question can carry \`brand-color\` and \`supporting-colors\`), but
+  a tag is a claim — only tag what the question genuinely asks about.
+- The palette is more than one colour: ask about supporting and accent colours explicitly
+  ("none" is a legitimate answer, but it must be their answer).
+- You will be told the count; at ${COLLABORATIVE_QUESTION_CAP} you must finish.
+- Still mark a \`recommendedId\` — **except on \`assumptions\`, which must not have one.** A
+  recommendation is your proposal to react to, not a decision made for them.
+- Options should differ meaningfully. Three near-identical blues is not a question.
+- Typefaces must be real Google Fonts family names, spelled exactly. Colours are 6-digit hex.`
+			: `## How to behave
 
 - **Never ask what their description already answers.** Infer it, and confirm inferences with
   one \`assumptions\` question rather than several individual ones.
@@ -68,7 +145,11 @@ corner character — by asking the fewest, best questions, then hand back the pa
   Someone pressing straight through your questions must end up with a foundation you would
   defend.
 - Options should differ meaningfully. Three near-identical blues is not a question.
-- Typefaces must be real Google Fonts family names, spelled exactly. Colours are 6-digit hex.
+- Typefaces must be real Google Fonts family names, spelled exactly. Colours are 6-digit hex.`
+
+	return `${intro}
+
+${behave}
 
 ## Write like you are talking to someone
 
@@ -97,7 +178,15 @@ Nobody outside a design studio can answer that. The same thing, said properly:
 > Lots of space around everything.
 > Corners are square, not rounded.
 > Big titles look confident without looking fancy.
-
+${
+	mode === "collaborative"
+		? `
+This person is design-savvy, so the profession's names are welcome — but give the name
+alongside the plain meaning ("a type scale — how much bigger each heading step gets"),
+never instead of it.
+`
+		: ""
+}
 ## The question formats
 
 Each question is rendered by a real component; pick the format that fits what you need:
@@ -154,7 +243,17 @@ When you can defend every parameter, return \`action: "finish"\` with the founda
 families, scaleRatio (1.05–1.5), baseSize px, brand hex, neutral character, surface,
 optional semantic hexes, spacingUnit (4 or 8), radiusCharacter, a one-sentence restraint
 rule for how colour is used, vibeTags, and a 2–3 sentence summary addressed to the user.
-Caret derives all scales and writes the file — you name parameters only.
+Optional when the product calls for them: a \`secondary\` hex, an \`accent\` hex, an
+\`elevationCharacter\` (flat/subtle/pronounced), a \`displayWeight\` and \`bodyWeight\`.
+Caret derives all scales and writes the file — you name parameters only.${
+	mode === "collaborative"
+		? `
+
+The finish must also carry \`decisions\`: one entry per coverage area (\`area\`, \`choice\`,
+\`reason\`), each reason grounded in what THEY answered — this is the record that lets them
+audit the design system later. A finish that skips an area or its decision is rejected.`
+		: ""
+}
 
 ## Known-good references (use or ignore freely)
 
@@ -165,7 +264,14 @@ Colour directions that work:
 ${palettes}`
 }
 
-function turnPrompt(description: string, history: StoredQA[], questionCount: number, force: boolean, complaint?: string): string {
+function turnPrompt(
+	mode: WizardMode,
+	description: string,
+	history: StoredQA[],
+	questionCount: number,
+	force: boolean,
+	complaint?: string,
+): string {
 	const transcript = history.length
 		? history
 				.map((qa) => {
@@ -177,6 +283,17 @@ function turnPrompt(description: string, history: StoredQA[], questionCount: num
 				.join("\n\n")
 		: "(nothing asked yet)"
 
+	let coverageNote = ""
+	if (mode === "collaborative" && !force) {
+		const covered = new Set(coveredAreas(history))
+		const missing = COVERAGE_AREAS.filter((area) => !covered.has(area.id))
+		coverageNote = missing.length
+			? `\n\nCovered so far: ${covered.size ? [...covered].join(", ") : "(nothing)"}. Still missing: ${missing
+					.map((area) => `\`${area.id}\` (${area.label})`)
+					.join(", ")} — you may not finish until every area has been asked about.`
+			: "\n\nEvery coverage area has been asked about — finish when you can defend every parameter."
+	}
+
 	return `Their project, in their words:
 
 """
@@ -185,7 +302,7 @@ ${description.trim()}
 
 The interview so far (${questionCount} question(s) asked):
 
-${transcript}
+${transcript}${coverageNote}
 
 ${
 	force
@@ -216,6 +333,14 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 	const question: WizardQuestion = { ...raw, id: slug(raw.id, `q${history.length + 1}`) }
 	if (history.some((qa) => qa.question.id === question.id)) question.id = `${question.id}-${history.length + 1}`
 	if (!question.question?.trim()) throw new WizardTurnError("the question text is empty.")
+
+	// Coverage tags: sanitized, never rejected over — an unknown tag is noise,
+	// not a broken screen.
+	if (question.covers) {
+		const known = new Set(COVERAGE_AREAS.map((area) => area.id))
+		const covers = question.covers.filter((id) => known.has(id))
+		question.covers = covers.length ? covers : undefined
+	}
 
 	const needsOptions = ["options", "color", "font", "chips", "boolean", "assumptions"].includes(question.kind)
 
@@ -301,10 +426,37 @@ export interface ConductorInput {
 	/** Answered questions only. */
 	history: StoredQA[]
 	force?: "finish"
+	/** Absent means the original minimal interview. */
+	mode?: WizardMode
+}
+
+/**
+ * Collaborative mode's contract, enforced: a finish the user did not force must
+ * have asked about every coverage area and must carry a decision per area.
+ * Throws a quotable sentence; the caller's retry does the rest.
+ */
+function checkCollaborativeFinish(foundation: FoundationProposal, history: StoredQA[]): void {
+	const covered = new Set(coveredAreas(history))
+	const unasked = COVERAGE_AREAS.filter((area) => !covered.has(area.id))
+	if (unasked.length) {
+		throw new WizardTurnError(
+			`you have not asked about: ${unasked.map((area) => `\`${area.id}\` (${area.label})`).join(", ")}. ` +
+				`Ask about them (tagging the questions with \`covers\`) before finishing.`,
+		)
+	}
+	const decided = new Set((foundation.decisions ?? []).map((decision) => decision.area))
+	const undecided = COVERAGE_AREAS.filter((area) => !decided.has(area.id))
+	if (undecided.length) {
+		throw new WizardTurnError(
+			`the finish is missing \`decisions\` entries for: ${undecided.map((area) => area.id).join(", ")}. ` +
+				`Every coverage area needs { area, choice, reason }.`,
+		)
+	}
 }
 
 export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn> {
-	const force = input.force === "finish" || input.history.length >= QUESTION_CAP
+	const mode = input.mode ?? "ai-led"
+	const force = input.force === "finish" || input.history.length >= questionCapFor(mode)
 
 	const attempt = async (complaint?: string): Promise<WizardTurn> => {
 		const result = await input.backend.structured<{
@@ -313,9 +465,9 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 			foundation?: FoundationProposal
 		}>({
 			workingDirectory: input.workingDirectory,
-			prompt: turnPrompt(input.description, input.history, input.history.length, force, complaint),
+			prompt: turnPrompt(mode, input.description, input.history, input.history.length, force, complaint),
 			schema: WIZARD_TURN_SCHEMA,
-			systemPrompt: systemPrompt(),
+			systemPrompt: systemPrompt(mode),
 			model: input.model,
 			effort: input.effort,
 		})
@@ -327,6 +479,9 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 		}
 		if (value?.action === "finish" || force) {
 			if (!value?.foundation) throw new WizardTurnError('action was "finish" but no foundation was included.')
+			// "Just finish it" is the user's escape and the cap is the backstop —
+			// both must terminate, so only a model-chosen finish has to earn it.
+			if (mode === "collaborative" && !force) checkCollaborativeFinish(value.foundation, input.history)
 			// Finalize is the validator: it throws ProposalError with a quotable
 			// sentence, and its success proves the proposal derives cleanly.
 			finalizeProposal(value.foundation, input.description)

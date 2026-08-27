@@ -11,7 +11,11 @@ type Props = {
 
 type FontResult = { family: string; category: string; variants: string[] }
 
-export function TypographyStep({ tokens, onChange }: Props) {
+const DISPLAY_WEIGHTS = [400, 500, 600, 700, 800]
+const BODY_WEIGHTS = [300, 400, 500]
+
+/** One Google Fonts search box with its dropdown — used for body and heading faces. */
+function FontSearch({ current, onSelect }: { current: string; onSelect(family: string): void }) {
 	const [fontSearch, setFontSearch] = useState("")
 	const [fontResults, setFontResults] = useState<FontResult[]>([])
 	const [showDropdown, setShowDropdown] = useState(false)
@@ -39,11 +43,109 @@ export function TypographyStep({ tokens, onChange }: Props) {
 		return () => clearTimeout(timeout)
 	}, [fontSearch])
 
+	return (
+		<div className="relative" ref={dropdownRef}>
+			<Input
+				onChange={(e) => {
+					setFontSearch(e.target.value)
+					setShowDropdown(true)
+				}}
+				onFocus={() => setShowDropdown(true)}
+				placeholder={current ? `Search fonts… (current: ${current})` : "Search fonts..."}
+				value={fontSearch}
+			/>
+			{showDropdown && fontResults.length > 0 && (
+				<div
+					className="absolute z-10 top-full mt-1 w-full max-h-48 overflow-y-auto rounded-md border border-input shadow-md"
+					style={{
+						backgroundColor:
+							"var(--vscode-editorWidget-background, var(--vscode-dropdown-background, var(--vscode-editor-background)))",
+					}}>
+					{fontResults.map((font) => (
+						<button
+							className="w-full px-3 py-2 text-left text-sm text-foreground"
+							key={font.family}
+							onClick={() => {
+								onSelect(font.family)
+								setFontSearch("")
+								setShowDropdown(false)
+							}}
+							onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vscode-list-hoverBackground)")}
+							onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}>
+							<span className="font-medium">{font.family}</span>
+							<span className="ml-2 text-xs text-muted-foreground">{font.category}</span>
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	)
+}
+
+function WeightRow({
+	label,
+	choices,
+	selected,
+	onPick,
+}: {
+	label: string
+	choices: number[]
+	selected: number
+	onPick(weight: number): void
+}) {
+	return (
+		<div className="flex items-center gap-3">
+			<span className="text-xs text-muted-foreground w-16">{label}</span>
+			<div className="flex gap-2">
+				{choices.map((weight) => (
+					<button
+						className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+							selected === weight
+								? "border-button-background bg-button-background text-button-foreground"
+								: "border-input bg-input-background text-foreground hover:bg-input-background/80"
+						}`}
+						key={weight}
+						onClick={() => onPick(weight)}
+						style={{ fontWeight: weight }}>
+						{weight}
+					</button>
+				))}
+			</div>
+		</div>
+	)
+}
+
+export function TypographyStep({ tokens, onChange }: Props) {
 	const selectFont = useCallback(
 		(family: string) => {
 			onChange({ ...tokens, typography: { ...tokens.typography, fontFamily: family } })
-			setFontSearch("")
-			setShowDropdown(false)
+		},
+		[tokens, onChange],
+	)
+
+	const selectDisplayFont = useCallback(
+		(family: string | undefined) => {
+			const typography = { ...tokens.typography }
+			if (family) {
+				typography.displayFamily = family
+			} else {
+				delete typography.displayFamily
+				delete typography.displayFallback
+			}
+			onChange({ ...tokens, typography })
+		},
+		[tokens, onChange],
+	)
+
+	const setWeights = useCallback(
+		(role: "display" | "body", weight: number) => {
+			const weights = {
+				display: tokens.typography.weights?.display ?? [600],
+				body: tokens.typography.weights?.body ?? [400, 500],
+			}
+			// One weight per role in the editor; body always keeps 500 for emphasis.
+			weights[role] = role === "body" ? [...new Set([weight, 500])].sort((a, b) => a - b) : [weight]
+			onChange({ ...tokens, typography: { ...tokens.typography, weights } })
 		},
 		[tokens, onChange],
 	)
@@ -67,47 +169,50 @@ export function TypographyStep({ tokens, onChange }: Props) {
 	return (
 		<div className="flex flex-col gap-5">
 			<div className="flex flex-col gap-2">
-				<label className="text-sm font-medium text-foreground">Font Family</label>
-				<div className="relative" ref={dropdownRef}>
-					<Input
-						onChange={(e) => {
-							setFontSearch(e.target.value)
-							setShowDropdown(true)
-						}}
-						onFocus={() => setShowDropdown(true)}
-						placeholder={
-							tokens.typography.fontFamily
-								? `Search fonts… (current: ${tokens.typography.fontFamily})`
-								: "Search fonts..."
-						}
-						value={fontSearch}
-					/>
-					{showDropdown && fontResults.length > 0 && (
-						<div
-							className="absolute z-10 top-full mt-1 w-full max-h-48 overflow-y-auto rounded-md border border-input shadow-md"
-							style={{
-								backgroundColor:
-									"var(--vscode-editorWidget-background, var(--vscode-dropdown-background, var(--vscode-editor-background)))",
-							}}>
-							{fontResults.map((font) => (
-								<button
-									className="w-full px-3 py-2 text-left text-sm text-foreground"
-									key={font.family}
-									onClick={() => selectFont(font.family)}
-									onMouseEnter={(e) =>
-										(e.currentTarget.style.backgroundColor = "var(--vscode-list-hoverBackground)")
-									}
-									onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}>
-									<span className="font-medium">{font.family}</span>
-									<span className="ml-2 text-xs text-muted-foreground">{font.category}</span>
-								</button>
-							))}
-						</div>
-					)}
-				</div>
+				<label className="text-sm font-medium text-foreground">Body Font</label>
+				<FontSearch current={tokens.typography.fontFamily} onSelect={selectFont} />
 				<span className="text-xs text-muted-foreground">
 					Current: <strong>{tokens.typography.fontFamily}</strong>
 				</span>
+			</div>
+
+			<div className="flex flex-col gap-2">
+				<label className="text-sm font-medium text-foreground">Heading Font</label>
+				{tokens.typography.displayFamily ? (
+					<>
+						<FontSearch current={tokens.typography.displayFamily} onSelect={(family) => selectDisplayFont(family)} />
+						<span className="text-xs text-muted-foreground">
+							Current: <strong>{tokens.typography.displayFamily}</strong>
+							{" · "}
+							<button className="text-button-background hover:underline" onClick={() => selectDisplayFont(undefined)}>
+								Same as body
+							</button>
+						</span>
+					</>
+				) : (
+					<button
+						className="self-start text-xs text-button-background hover:underline"
+						data-testid="typography-add-display"
+						onClick={() => selectDisplayFont(tokens.typography.fontFamily)}>
+						+ Use a different face for headings
+					</button>
+				)}
+			</div>
+
+			<div className="flex flex-col gap-2">
+				<label className="text-sm font-medium text-foreground">Weights</label>
+				<WeightRow
+					choices={DISPLAY_WEIGHTS}
+					label="Headings"
+					onPick={(weight) => setWeights("display", weight)}
+					selected={tokens.typography.weights?.display?.[0] ?? 600}
+				/>
+				<WeightRow
+					choices={BODY_WEIGHTS}
+					label="Body"
+					onPick={(weight) => setWeights("body", weight)}
+					selected={tokens.typography.weights?.body?.[0] ?? 400}
+				/>
 			</div>
 
 			<div className="flex flex-col gap-2">

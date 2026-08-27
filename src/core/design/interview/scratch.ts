@@ -18,10 +18,13 @@ import * as fs from "fs/promises"
 import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
+import type { WizardMode } from "./conductor"
 import type { FoundationProposal, StoredQA, WizardQuestion } from "./widgets"
 
 export interface WizardScratch {
 	description: string
+	/** Which interview this is; scratch written before modes existed is ai-led. */
+	mode?: WizardMode
 	/** Answered questions, in order. */
 	history: StoredQA[]
 	/** On screen but not yet answered, so resume re-renders it for free. */
@@ -45,6 +48,7 @@ export async function readWizardScratch(projectPath: string): Promise<WizardScra
 		if (!Array.isArray(parsed.history)) return null
 		return {
 			description: parsed.description,
+			mode: parsed.mode === "collaborative" ? "collaborative" : "ai-led",
 			history: parsed.history,
 			pending: parsed.pending,
 			proposal: parsed.proposal,

@@ -20,10 +20,10 @@ import { strict as assert } from "assert"
 import type { CodingBackend } from "../../agent/backend"
 import { TYPEFACE_PAIRINGS } from "../../foundation-library"
 import { buildFoundation, IncompleteInterviewError } from "../commit"
-import { nextWizardTurn, validateQuestion, WizardTurnError } from "../conductor"
+import { COVERAGE_AREAS, nextWizardTurn, validateQuestion, WizardTurnError } from "../conductor"
 import { finalizeProposal, ProposalError } from "../finalize"
-import { deterministicOptions, INTERVIEW_STEPS, tagsFromDescription } from "../steps"
-import type { FoundationProposal, WizardQuestion } from "../widgets"
+import { tagsFromDescription } from "../steps"
+import type { FoundationProposal, StoredQA, WizardQuestion } from "../widgets"
 import { normalizeHex } from "../widgets"
 
 const DESCRIPTION = "A dashboard for technical teams who watch it all day"
@@ -254,6 +254,75 @@ describe("nextWizardTurn", () => {
 		})
 		assert.equal(turn.action, "finish")
 	})
+
+	describe("collaborative mode", () => {
+		/** One answered question per coverage area, each properly tagged. */
+		function fullCoverage(): StoredQA[] {
+			return COVERAGE_AREAS.map((area, index) => ({
+				question: question({ id: `q-${area.id}`, covers: [area.id], options: undefined, kind: "text" }),
+				answer: { questionId: `q-${area.id}`, question: `About ${area.label}?`, kind: "text", value: `answer ${index}` },
+			}))
+		}
+
+		const fullDecisions = () => COVERAGE_AREAS.map((area) => ({ area: area.id, choice: "chosen", reason: "they said so" }))
+
+		it("rejects a model-chosen finish while coverage areas are missing", async () => {
+			await assert.rejects(
+				nextWizardTurn({
+					...base,
+					mode: "collaborative",
+					backend: backendReturning([{ action: "finish", foundation: { ...PROPOSAL, decisions: fullDecisions() } }]),
+				}),
+				(err: unknown) => err instanceof WizardTurnError && /have not asked about/.test(err.message),
+			)
+		})
+
+		it("rejects a covered finish that skips its decisions record", async () => {
+			await assert.rejects(
+				nextWizardTurn({
+					...base,
+					history: fullCoverage(),
+					mode: "collaborative",
+					backend: backendReturning([{ action: "finish", foundation: PROPOSAL }]),
+				}),
+				(err: unknown) => err instanceof WizardTurnError && /decisions/.test(err.message),
+			)
+		})
+
+		it("accepts a finish once every area is asked about and decided", async () => {
+			const turn = await nextWizardTurn({
+				...base,
+				history: fullCoverage(),
+				mode: "collaborative",
+				backend: backendReturning([{ action: "finish", foundation: { ...PROPOSAL, decisions: fullDecisions() } }]),
+			})
+			assert.equal(turn.action, "finish")
+		})
+
+		it("lets 'Just finish it' bypass coverage — the user's escape always works", async () => {
+			const turn = await nextWizardTurn({
+				...base,
+				mode: "collaborative",
+				force: "finish",
+				backend: backendReturning([{ action: "finish", foundation: PROPOSAL }]),
+			})
+			assert.equal(turn.action, "finish")
+		})
+
+		it("sanitizes unknown coverage tags instead of rejecting the question", () => {
+			const valid = validateQuestion(
+				question({
+					covers: ["brand-color", "made-up-area"],
+					options: [
+						{ id: "a", label: "A" },
+						{ id: "b", label: "B" },
+					],
+				}),
+				[],
+			)
+			assert.deepEqual(valid.covers, ["brand-color"])
+		})
+	})
 })
 
 describe("finalizeProposal", () => {
@@ -289,28 +358,40 @@ describe("finalizeProposal", () => {
 	it("refuses a proposal with no restraint rule", () => {
 		assert.throws(() => finalizeProposal({ ...PROPOSAL, rule: "  " }, DESCRIPTION), ProposalError)
 	})
-})
 
-describe("the Presets tab (deterministic)", () => {
-	it("orders the same options for the same description, every time", () => {
-		const tags = tagsFromDescription(DESCRIPTION)
-		const first = deterministicOptions(INTERVIEW_STEPS[0], {}, tags)
-		const second = deterministicOptions(INTERVIEW_STEPS[0], {}, tags)
-		assert.deepEqual(first, second)
-		assert.equal(first.length, 3)
+	it("derives ramps for secondary and accent when the palette names them", () => {
+		const { tokens } = finalizeProposal({ ...PROPOSAL, secondary: "#0ea5e9", accent: "f59e0b" }, DESCRIPTION)
+		assert.equal(tokens.color.secondary?.seed, "#0ea5e9")
+		assert.equal(tokens.color.accent?.seed, "#f59e0b")
+		assert.ok(Object.keys(tokens.color.secondary?.scale ?? {}).length > 0, "no secondary ramp")
+		assert.ok(Object.keys(tokens.color.accent?.scale ?? {}).length > 0, "no accent ramp")
 	})
 
-	it("only offers palettes the chosen typeface is declared to work with", () => {
-		const typeface = TYPEFACE_PAIRINGS[0]
-		const offered = INTERVIEW_STEPS[1].options({ typeface: typeface.id }).map((option) => option.id)
-		assert.ok(offered.length > 0)
-		assert.deepEqual(
-			offered.filter((id) => !typeface.pairsWith.palettes.includes(id)),
-			[],
-			"a combination nobody curated was offered",
+	it("refuses a secondary that is not a colour, naming the role", () => {
+		assert.throws(
+			() => finalizeProposal({ ...PROPOSAL, secondary: "sea foam" }, DESCRIPTION),
+			(err: unknown) => err instanceof ProposalError && /secondary/.test(err.message),
 		)
 	})
 
+	it("ships a real neutral ramp — never the empty scale that fell through to stock grey", () => {
+		const { tokens } = finalizeProposal(PROPOSAL, DESCRIPTION)
+		assert.ok(Object.keys(tokens.color.neutral.scale).length > 0, "neutral.scale is empty")
+		assert.ok(tokens.color.on?.brand, "no on-brand foreground was derived")
+		assert.ok(tokens.elevation?.scale.floating, "no elevation was derived")
+		assert.ok(tokens.motion?.durations.base, "no motion was derived")
+		assert.ok(tokens.typography.leadings?.base, "no leadings were derived")
+	})
+
+	it("carries collaborative decisions through for the commit to persist", () => {
+		const decisions = [{ area: "brand-color", choice: "#2563eb", reason: "asked for a trustworthy blue" }]
+		const finalized = finalizeProposal({ ...PROPOSAL, decisions }, DESCRIPTION)
+		assert.deepEqual(finalized.decisions, decisions)
+		assert.equal(finalizeProposal(PROPOSAL, DESCRIPTION).decisions, undefined)
+	})
+})
+
+describe("the library reading and shared validation", () => {
 	it("refuses a blanket confirmation among assumptions", () => {
 		// The screen ticks every statement already, so "Yes, all of these" says
 		// nothing — and sitting beside real statements it gets confirmed with them,

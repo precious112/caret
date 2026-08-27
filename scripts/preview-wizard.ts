@@ -44,6 +44,7 @@ async function main() {
 	const { createRoot } = await import("react-dom/client")
 	await import("@/styles.css")
 	const { __PreviewQuestion } = await import("@/views/WizardView")
+	const { FoundationEntry } = await import("@/views/FoundationEntry")
 
 	const base = { surface: "dark", neutral: "cool", accent: "#22d3ee", radius: 4, spacingUnit: 4, baseSize: 14, displayFamily: "Space Grotesk", bodyFamily: "Inter" }
 
@@ -113,6 +114,18 @@ async function main() {
 
 	createRoot(document.getElementById("root")!).render(
 		<div className="flex flex-col gap-10 bg-shell-bg px-10 py-10" style={{ minHeight: "100vh" }}>
+			{/* The entry flow: describe, then the three-door chooser. */}
+			<div className="border-b border-shell-border pb-10">
+				<FoundationEntry onManual={() => {}} onStarted={() => {}} projectPath="/tmp/preview" />
+			</div>
+			<div className="border-b border-shell-border pb-10">
+				<FoundationEntry
+					__previewDescription="A dashboard where support teams triage tickets all day. Dark, calm, serious."
+					onManual={() => {}}
+					onStarted={() => {}}
+					projectPath="/tmp/preview"
+				/>
+			</div>
 			{QUESTIONS.map((question, index) => (
 				<div className="border-b border-shell-border pb-10" key={question.id}>
 					<__PreviewQuestion base={base} index={index} question={question} />

@@ -3,62 +3,41 @@ import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { DesignServiceClient } from "@/services/design-client"
 import { WIZARD_STEPS } from "./data-steps"
+import { DEFAULT_TOKENS, draftFromSaved, type FoundationTokensDraft, mergeDraftOverSaved } from "./draft"
 import { TokenPreview } from "./preview/TokenPreview"
 import { ColorStep } from "./steps/ColorStep"
+import { DepthStep } from "./steps/DepthStep"
 import { RadiusStep } from "./steps/RadiusStep"
 import { ReviewStep } from "./steps/ReviewStep"
 import { SpacingStep } from "./steps/SpacingStep"
 import { TypographyStep } from "./steps/TypographyStep"
 import { VibeStep } from "./steps/VibeStep"
 
-export type FoundationTokensDraft = {
-	vibe: { description: string; tags: string[] }
-	color: {
-		brand: { seed: string; scale: Record<string, string> }
-		neutral: { character: string; scale: Record<string, string> }
-		semantic: { success: string; warning: string; error: string; info: string }
-	}
-	typography: {
-		fontFamily: string
-		fallback: string
-		scaleRatio: number
-		baseSize: number
-		scale: Record<string, string>
-	}
-	spacing: { baseUnit: 4 | 8; scale: number[] }
-	radius: { character: string; scale: number[] }
-}
-
-const DEFAULT_TOKENS: FoundationTokensDraft = {
-	vibe: { description: "", tags: [] },
-	color: {
-		brand: { seed: "#3b82f6", scale: {} },
-		neutral: { character: "cool", scale: {} },
-		semantic: { success: "#22c55e", warning: "#eab308", error: "#ef4444", info: "#3b82f6" },
-	},
-	typography: {
-		fontFamily: "Inter",
-		fallback: "system-ui, sans-serif",
-		scaleRatio: 1.25,
-		baseSize: 16,
-		scale: {},
-	},
-	spacing: { baseUnit: 4, scale: [0, 1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64] },
-	radius: { character: "soft", scale: [0, 2, 4, 8, 12, 9999] },
-}
+// The steps import the draft type from here; the shape itself lives in draft.ts.
+export type { FoundationTokensDraft } from "./draft"
 
 type Props = {
 	onDone: () => void
+	/** Entry-flow prefill for a project described before choosing manual. */
+	initialDescription?: string
+	/** Open on a specific step — the DS view's per-section edit jumps. */
+	initialStep?: number
 }
 
-export function TokenWizard({ onDone }: Props) {
-	const [step, setStep] = useState(0)
+export function TokenWizard({ onDone, initialDescription, initialStep }: Props) {
+	const [step, setStep] = useState(initialStep ?? 0)
 	const [tokens, setTokens] = useState<FoundationTokensDraft>(DEFAULT_TOKENS)
 	const [saving, setSaving] = useState(false)
 	const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle")
 	const [saveError, setSaveError] = useState("")
 	const [loaded, setLoaded] = useState(false)
 	const [hasExistingTokens, setHasExistingTokens] = useState(false)
+	// The file as loaded, kept whole. The draft above holds only what the steps
+	// edit; saving merges the draft OVER this, so fields the editor does not
+	// know about (`meta`, on-colours, motion, a future group) survive the
+	// round-trip instead of being silently dropped — `color.surface` was lost
+	// exactly this way before.
+	const [savedRaw, setSavedRaw] = useState<Record<string, any> | null>(null)
 
 	useEffect(() => {
 		let cancelled = false
@@ -68,17 +47,12 @@ export function TokenWizard({ onDone }: Props) {
 				if (response.tokensJson && response.tokensJson !== "null") {
 					try {
 						const saved = JSON.parse(response.tokensJson)
-						setTokens((prev) => ({
-							vibe: { ...prev.vibe, ...saved.vibe },
-							color: {
-								brand: { ...prev.color.brand, ...saved.color?.brand },
-								neutral: { ...prev.color.neutral, ...saved.color?.neutral },
-								semantic: { ...prev.color.semantic, ...saved.color?.semantic },
-							},
-							typography: { ...prev.typography, ...saved.typography },
-							spacing: { ...prev.spacing, ...saved.spacing },
-							radius: { ...prev.radius, ...saved.radius },
-						}))
+						setSavedRaw(saved)
+						const draft = draftFromSaved(saved)
+						// The entry flow's description wins over the stored vibe: on a
+						// re-run the user just typed it, deliberately.
+						if (initialDescription) draft.vibe = { ...draft.vibe, description: initialDescription }
+						setTokens(draft)
 						setHasExistingTokens(true)
 					} catch {
 						// ignore parse errors, use defaults
@@ -95,6 +69,13 @@ export function TokenWizard({ onDone }: Props) {
 			cancelled = true
 		}
 	}, [])
+
+	useEffect(() => {
+		// No file yet: the entry flow's description is all there is to prefill.
+		if (initialDescription && loaded && !hasExistingTokens) {
+			setTokens((prev) => ({ ...prev, vibe: { ...prev.vibe, description: initialDescription } }))
+		}
+	}, [initialDescription, loaded, hasExistingTokens])
 
 	const handleNext = useCallback(() => {
 		if (step < WIZARD_STEPS.length - 1) {
@@ -114,7 +95,7 @@ export function TokenWizard({ onDone }: Props) {
 		setSaveError("")
 		try {
 			await DesignServiceClient.updateFoundationTokens({
-				tokensJson: JSON.stringify(tokens),
+				tokensJson: JSON.stringify(mergeDraftOverSaved(savedRaw, tokens)),
 			})
 			setSaveStatus("success")
 			setTimeout(() => onDone(), 1200)
@@ -126,7 +107,7 @@ export function TokenWizard({ onDone }: Props) {
 		} finally {
 			setSaving(false)
 		}
-	}, [tokens, onDone])
+	}, [tokens, savedRaw, onDone])
 
 	const handleEditStep = useCallback((targetStep: number) => {
 		setStep(targetStep)
@@ -144,7 +125,7 @@ export function TokenWizard({ onDone }: Props) {
 	}
 
 	return (
-		<div className="flex flex-col h-full">
+		<div className="flex flex-col h-full" data-testid="token-editor">
 			<div className="flex items-center gap-2 px-4 py-3 border-b border-input">
 				<button className="p-1 rounded hover:bg-input-background text-foreground" onClick={onDone}>
 					<ArrowLeftIcon size={16} />
@@ -186,10 +167,11 @@ export function TokenWizard({ onDone }: Props) {
 				{step === 2 && <TypographyStep onChange={setTokens} tokens={tokens} />}
 				{step === 3 && <SpacingStep onChange={setTokens} tokens={tokens} />}
 				{step === 4 && <RadiusStep onChange={setTokens} tokens={tokens} />}
-				{step === 5 && <ReviewStep onEditStep={handleEditStep} tokens={tokens} />}
+				{step === 5 && <DepthStep onChange={setTokens} tokens={tokens} />}
+				{step === 6 && <ReviewStep onEditStep={handleEditStep} tokens={tokens} />}
 
 				{/* Live preview */}
-				{step < 5 && (
+				{step < 6 && (
 					<div className="mt-6 pt-4 border-t border-input">
 						<h4 className="text-xs font-medium text-muted-foreground mb-2">Live Preview</h4>
 						<TokenPreview tokens={tokens} />

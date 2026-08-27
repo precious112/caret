@@ -6,9 +6,15 @@
  * restarts → within seconds every Playwright handle reports "Target page,
  * context or browser has been closed", while the app process itself stays up.
  *
- * This drives the exact trigger (the Presets flow committing a foundation),
- * then polls window and page state every 500ms and dumps everything main
- * prints. No model, no backend — reproduction costs nothing.
+ * ⚠️ STALE DRIVER: this drove the Presets flow, which was removed with the
+ * foundation-entry rework (the tabs are gone; any foundation commit is still
+ * the trigger). Before using it again, re-point the clicks below at the
+ * design-system view's manual editor (`ds-edit-by-hand` → walk the token
+ * wizard to Save) — the write path it exercises is the same.
+ *
+ * This drives the trigger, then polls window and page state every 500ms and
+ * dumps everything main prints. No model, no backend — reproduction costs
+ * nothing.
  *
  *   npx tsx scripts/repro-window-death.ts
  */

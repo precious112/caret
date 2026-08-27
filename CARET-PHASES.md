@@ -540,11 +540,32 @@ of asked one by one). Freedom over content, none over presentation.
 - [x] Scratch (`.caret/.interview.json`, gitignored, healer-ignored): description, transcript,
       the question currently on screen, a finished proposal — resume is free, no model call.
       Cleared on commit.
-- [x] No backend → the wizard says so and offers the other doors; it does not fake an
+- [x] No backend → the wizard says so and offers the manual editor; it does not fake an
       interview it cannot run.
-- [x] Three tabs on the Foundation surface: **Interview** (the wizard, default) ·
-      **Presets** (the 2026-08-03 deterministic flow, kept for full-control users) ·
-      **By hand** (token editor). The MCP interview tools stay as the external-agent path.
+- [x] **Re-scoped 2026-08-27 — control-level entry, not tabs.** Dogfooding (test2/test3)
+      showed the tabs were the wrong shape and the single interview the wrong depth: both
+      projects converged on identical typography/spacing/radius because the model anchors on
+      the reference list and the preselected recommendation, and no artifact survived the
+      commit to let anyone notice. The agreed shape: describe first, then choose how much
+      control — **AI-led** (the minimal interview, unchanged, for the vibe coder — never
+      exposed to token-construction depth) · **Collaborative** (same widget machinery, higher
+      cap, a coverage contract over every design area — full palette incl. secondary/accent,
+      type + weights, spacing, radius, depth — enforced via `covers` tags and a per-area
+      `decisions` record; nothing decided silently) · **Manual** (the token editor, made
+      full-coverage). The Presets surface is deleted; the curated library survives as prompt
+      reference and the external-agent path. The MCP interview tools stay as before.
+- [x] **The design-system view.** A committed project's Foundation surface is a visual DS
+      page — palette by role with WCAG contrast badges, type specimens with real leading and
+      weights, spacing/radius/depth visualized, motion — layered so depth sits in expandable
+      detail. Each section edits in place via the editor's own step components. `meta` on
+      `foundation.json` persists the commit marker, source, restraint rule, summary and the
+      collaborative decisions — the rationale used to be destroyed with the scratch.
+- [x] **Choices vs consequences.** The schema carries secondary/accent roles, weights,
+      tracking, elevation character, borders, motion; `withDerivedScales` (run on every write
+      path) derives the consequences — ramps (seed at 500; the pastel-500 defect is fixed),
+      tinted neutral scales (previously shipped empty and fell through to stock grey),
+      contrast-guaranteed on-colours, shadow strings, border colours, leadings, motion timing.
+      Consequences are never interview questions in any mode.
 - [x] Re-runnable with blast radius shown — landed with Phase 7's live bindings: the
       Foundation surface measures and states the reach ("restyles N token-bound styles across
       M files instantly") before a re-run, and committing new tokens restyles every bound page

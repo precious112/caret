@@ -26,7 +26,22 @@ export function ReviewStep({ tokens, onEditStep }: Props) {
 				<div className="flex items-center gap-2">
 					<div className="w-6 h-6 rounded border border-input" style={{ backgroundColor: tokens.color.brand.seed }} />
 					<span className="text-xs font-mono text-muted-foreground">{tokens.color.brand.seed}</span>
+					{tokens.color.secondary && (
+						<div
+							className="w-6 h-6 rounded border border-input"
+							style={{ backgroundColor: tokens.color.secondary.seed }}
+							title={`Supporting: ${tokens.color.secondary.seed}`}
+						/>
+					)}
+					{tokens.color.accent && (
+						<div
+							className="w-6 h-6 rounded border border-input"
+							style={{ backgroundColor: tokens.color.accent.seed }}
+							title={`Accent: ${tokens.color.accent.seed}`}
+						/>
+					)}
 					<span className="text-xs text-muted-foreground ml-2">Neutral: {tokens.color.neutral.character}</span>
+					<span className="text-xs text-muted-foreground">· {tokens.color.surface} pages</span>
 				</div>
 				{scaleEntries.length > 0 && (
 					<div className="flex gap-0.5 mt-1">
@@ -44,7 +59,11 @@ export function ReviewStep({ tokens, onEditStep }: Props) {
 
 			<Section onEdit={() => onEditStep(2)} title="Typography">
 				<div className="text-xs text-muted-foreground">
-					{tokens.typography.fontFamily} · {tokens.typography.baseSize}px · ratio {tokens.typography.scaleRatio}
+					{tokens.typography.displayFamily && tokens.typography.displayFamily !== tokens.typography.fontFamily
+						? `${tokens.typography.displayFamily} · ${tokens.typography.fontFamily}`
+						: tokens.typography.fontFamily}{" "}
+					· {tokens.typography.baseSize}px · ratio {tokens.typography.scaleRatio}
+					{tokens.typography.weights && ` · weights ${tokens.typography.weights.display[0]}/${tokens.typography.weights.body[0]}`}
 				</div>
 			</Section>
 
@@ -66,6 +85,13 @@ export function ReviewStep({ tokens, onEditStep }: Props) {
 							/>
 						))}
 					</div>
+				</div>
+			</Section>
+
+			<Section onEdit={() => onEditStep(5)} title="Depth">
+				<div className="text-xs text-muted-foreground capitalize">
+					{tokens.elevation?.character ?? "subtle"} shadows · {tokens.border?.width ?? 1}px hairlines ·{" "}
+					{tokens.border?.focusRing.width ?? 2}px focus ring
 				</div>
 			</Section>
 		</div>

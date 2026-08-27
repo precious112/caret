@@ -17,15 +17,39 @@ export interface ColorScale {
 	950: string
 }
 
+/** A colour the palette names: one chosen seed, everything else derived. */
+export interface ColorRole {
+	seed: string
+	scale: Partial<ColorScale>
+}
+
+/**
+ * Foreground colours guaranteed to read on their backgrounds. Never chosen —
+ * Caret picks each one by WCAG contrast (≥ 4.5:1 wherever the ramp allows) so
+ * "text on brand" is a token, not a habit of reaching for white.
+ */
+export interface OnColors {
+	brand: string
+	secondary?: string
+	accent?: string
+	/** Text on the project's surface. */
+	surface: string
+	/** De-emphasised text that still clears contrast on the surface. */
+	surfaceMuted: string
+}
+
 export interface ColorTokens {
-	brand: {
-		seed: string
-		scale: Partial<ColorScale>
-	}
+	brand: ColorRole
+	/** A supporting colour, when the palette has one. Same shape as brand. */
+	secondary?: ColorRole
+	/** An accent used sparingly, when the palette has one. Same shape as brand. */
+	accent?: ColorRole
 	neutral: {
 		character: "warm" | "cool" | "true" | "slight-tint"
 		scale: Partial<ColorScale>
 	}
+	/** Derived, never asked — see {@link OnColors}. */
+	on?: OnColors
 	/**
 	 * Whether this project is built on light or dark surfaces.
 	 *
@@ -59,6 +83,71 @@ export interface TypographyTokens {
 	scaleRatio: number
 	baseSize: number
 	scale: Record<string, number>
+	/**
+	 * Unitless line height per scale step — display sizes sit tight (~1.1), body
+	 * sizes get room to read (~1.5). Derived from the sizes; a hand-set value for
+	 * a step survives because derivation only fills steps the scale has and the
+	 * leadings lack.
+	 */
+	leadings?: Record<string, number>
+	/**
+	 * The weights this foundation allows, per role — a restraint decision, and
+	 * also what the webfont import actually fetches. Absent means the historical
+	 * default set (400–900).
+	 */
+	weights?: { display: number[]; body: number[] }
+	/** Letter-spacing for large display sizes, e.g. "-0.02em". */
+	tracking?: { display?: string }
+}
+
+/**
+ * How much depth the interface has. The character is a choice (flat design vs
+ * shadowed); the shadow strings are derived from it, tinted by the neutral and
+ * adjusted for the surface.
+ */
+export interface ElevationTokens {
+	character: "flat" | "subtle" | "pronounced"
+	scale: {
+		flat: string
+		raised: string
+		floating: string
+		overlay: string
+	}
+}
+
+/** Hairlines and the focus ring. Colours derived from neutral and brand. */
+export interface BorderTokens {
+	width: number
+	color: string
+	focusRing: { color: string; width: number }
+}
+
+/**
+ * Micro-interaction timing only — hovers, menus, modals. Choreography is design
+ * content and belongs to the pages, not the foundation. Always derived from the
+ * vibe; never an interview question.
+ */
+export interface MotionTokens {
+	durations: { fast: number; base: number; slow: number }
+	easing: { standard: string; decelerate: string }
+}
+
+/**
+ * Who committed this foundation and why it looks the way it does. Doubles as
+ * the "a person actually chose this" marker that separates a real foundation
+ * from the scaffold default — and as the only place the interview's reasoning
+ * survives the commit.
+ */
+export interface FoundationMeta {
+	committed: true
+	committedAt: string
+	source: "wizard" | "wizard-collaborative" | "manual" | "agent"
+	/** The one-sentence restraint rule the foundation adopts. */
+	rule?: string
+	/** Two or three sentences to the user on what was built and why. */
+	summary?: string
+	/** Collaborative interviews record every decision with its reasoning. */
+	decisions?: Array<{ area: string; choice: string; reason: string }>
 }
 
 export interface SpacingTokens {
@@ -77,6 +166,10 @@ export interface FoundationTokens {
 	typography: TypographyTokens
 	spacing: SpacingTokens
 	radius: RadiusTokens
+	elevation?: ElevationTokens
+	border?: BorderTokens
+	motion?: MotionTokens
+	meta?: FoundationMeta
 }
 
 export interface PageMeta {

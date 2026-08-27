@@ -19,6 +19,7 @@
  * token change can regenerate it alone and arrive as a CSS hot update instead
  * of a shell rebuild.
  */
+import { generateNeutralScale } from "../token-scales"
 import type { FoundationTokens } from "../types"
 
 /** Kept in sync with the healer's ignore list — this file is Caret's, not content. */
@@ -49,8 +50,15 @@ function cssFontFamily(family: string, fallback: string): string {
 export function foundationFontsCss(tokens: FoundationTokens): string {
 	const families = [...new Set([tokens.typography.fontFamily, tokens.typography.displayFamily].filter(Boolean))] as string[]
 	if (families.length === 0) return ""
+	// A foundation that names its weights fetches exactly those (plus the
+	// conventional pair so emphasis never synthesizes); one that doesn't gets
+	// the historical broad set.
+	const declared = tokens.typography.weights
+	const weights = declared
+		? [...new Set([...declared.display, ...declared.body, 400, 700])].filter((w) => Number.isFinite(w)).sort((a, b) => a - b)
+		: [400, 500, 600, 700, 800, 900]
 	const query = families
-		.map((family) => `family=${encodeURIComponent(family).replace(/%20/g, "+")}:wght@400;500;600;700;800;900`)
+		.map((family) => `family=${encodeURIComponent(family).replace(/%20/g, "+")}:wght@${weights.join(";")}`)
 		.join("&")
 	return `@import url("https://fonts.googleapis.com/css2?${query}&display=swap");\n`
 }
@@ -94,15 +102,41 @@ export function foundationThemeCss(tokens: FoundationTokens): string {
 	// the scale may be empty on a hand-rolled foundation, the seed never is.
 	if (tokens.color.brand.seed) lines.push(`  --color-brand: ${tokens.color.brand.seed};`)
 
+	// Optional palette roles, same treatment as brand. No shadowing concern:
+	// Tailwind has no stock `secondary`/`accent` colour scale.
+	for (const role of ["secondary", "accent"] as const) {
+		const entry = tokens.color[role]
+		if (!entry?.seed) continue
+		for (const [step, value] of Object.entries(entry.scale ?? {})) {
+			lines.push(`  --color-${role}-${step}: ${value};`)
+		}
+		lines.push(`  --color-${role}: ${entry.seed};`)
+	}
+
 	// The foundation's neutral deliberately shadows Tailwind's stock `neutral`:
 	// a warm- or cool-tinted grey is a foundation decision, and an agent writing
 	// `text-neutral-600` should land on it rather than on the untinted default.
-	for (const [step, value] of Object.entries(tokens.color.neutral?.scale ?? {})) {
+	// Foundations written before the derivation pass carry an empty scale, so
+	// derive here as well — the theme is regenerated far more often than the
+	// tokens file is rewritten.
+	const neutralScale = Object.keys(tokens.color.neutral?.scale ?? {}).length
+		? tokens.color.neutral.scale
+		: generateNeutralScale(tokens.color.neutral?.character ?? "true", { brandSeed: tokens.color.brand.seed })
+	for (const [step, value] of Object.entries(neutralScale)) {
 		lines.push(`  --color-neutral-${step}: ${value};`)
 	}
 
 	for (const [name, value] of Object.entries(tokens.color.semantic ?? {})) {
 		lines.push(`  --color-${name}: ${value};`)
+	}
+
+	// Contrast-guaranteed foregrounds: `text-on-brand` beats reaching for white.
+	if (tokens.color.on) {
+		for (const [name, value] of Object.entries(tokens.color.on)) {
+			if (!value) continue
+			const slug = name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+			lines.push(`  --color-on-${slug}: ${value};`)
+		}
 	}
 
 	const body = cssFontFamily(tokens.typography.fontFamily, tokens.typography.fallback)
@@ -113,13 +147,18 @@ export function foundationThemeCss(tokens: FoundationTokens): string {
 	lines.push(`  --font-display: ${display};`)
 
 	// The type scale: `text-xl` follows the foundation's ratio, not Tailwind's
-	// default steps. Each size carries its own line height — leaving the default
-	// pair in place would set leading computed for a different size.
+	// default steps. Each size carries its own line height — from the tokens
+	// when the foundation names them, otherwise derived, so leading is never the
+	// default pair computed for a different size.
 	for (const [label, raw] of Object.entries(tokens.typography.scale ?? {})) {
 		const size = typeof raw === "number" ? raw : Number.parseFloat(String(raw))
 		if (!Number.isFinite(size) || size <= 0) continue
 		lines.push(`  --text-${label}: ${size}px;`)
-		lines.push(`  --text-${label}--line-height: ${lineHeightFor(size)};`)
+		const leading = tokens.typography.leadings?.[label]
+		lines.push(`  --text-${label}--line-height: ${typeof leading === "number" ? leading : lineHeightFor(size)};`)
+	}
+	if (tokens.typography.tracking?.display) {
+		lines.push(`  --tracking-display: ${tokens.typography.tracking.display};`)
 	}
 
 	// Radius character: `rounded-sm` … `rounded-xl` follow the foundation, so
@@ -130,6 +169,42 @@ export function foundationThemeCss(tokens: FoundationTokens): string {
 		if (typeof value === "number" && Number.isFinite(value) && value < 9999) {
 			lines.push(`  --radius-${label}: ${value}px;`)
 		}
+	}
+
+	// Elevation: `shadow-raised`/`shadow-floating`/`shadow-overlay` come from the
+	// foundation, deliberately shadowing Tailwind's stock ladder — a shadow is a
+	// design decision, tinted by this project's neutral, not a stock grey.
+	if (tokens.elevation?.scale) {
+		const shadowNames: Array<[keyof typeof tokens.elevation.scale, string]> = [
+			["raised", "sm"],
+			["raised", "raised"],
+			["floating", "md"],
+			["floating", "floating"],
+			["overlay", "lg"],
+			["overlay", "overlay"],
+		]
+		for (const [key, alias] of shadowNames) {
+			const value = tokens.elevation.scale[key]
+			if (value) lines.push(`  --shadow-${alias}: ${value};`)
+		}
+	}
+
+	// Hairlines and the focus ring.
+	if (tokens.border) {
+		lines.push(`  --color-border: ${tokens.border.color};`)
+		lines.push(`  --border-width: ${tokens.border.width}px;`)
+		lines.push(`  --color-ring: ${tokens.border.focusRing.color};`)
+		lines.push(`  --ring-width: ${tokens.border.focusRing.width}px;`)
+	}
+
+	// Micro-interaction timing: every transition uses these; choreography stays
+	// with the pages.
+	if (tokens.motion) {
+		lines.push(`  --duration-fast: ${tokens.motion.durations.fast}ms;`)
+		lines.push(`  --duration-base: ${tokens.motion.durations.base}ms;`)
+		lines.push(`  --duration-slow: ${tokens.motion.durations.slow}ms;`)
+		lines.push(`  --ease-standard: ${tokens.motion.easing.standard};`)
+		lines.push(`  --ease-decelerate: ${tokens.motion.easing.decelerate};`)
 	}
 
 	return `/* GENERATED by Caret from tokens/foundation.json — do not edit; edit the foundation. */

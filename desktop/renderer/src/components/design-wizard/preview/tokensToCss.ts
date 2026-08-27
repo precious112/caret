@@ -11,6 +11,10 @@ export function tokensToCssVars(tokens: FoundationTokensDraft): Record<string, s
 	}
 	vars["--color-brand-seed"] = tokens.color.brand.seed
 
+	// Optional palette roles
+	if (tokens.color.secondary) vars["--color-secondary-seed"] = tokens.color.secondary.seed
+	if (tokens.color.accent) vars["--color-accent-seed"] = tokens.color.accent.seed
+
 	// Semantic colors
 	vars["--color-success"] = tokens.color.semantic.success
 	vars["--color-warning"] = tokens.color.semantic.warning

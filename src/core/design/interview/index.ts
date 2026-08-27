@@ -1,30 +1,32 @@
 /**
- * The foundation interview, both doors.
+ * The foundation interview.
  *
- * **The wizard** is the feature: the model runs the interview, composing every
- * question from the widget vocabulary (`widgets.ts`), one validated turn at a
- * time (`conductor.ts`), finishing in a parameter proposal that Caret alone
- * turns into `foundation.json` (`finalize.ts`). Progress survives a crash
+ * **The wizard** is the feature: the model runs the interview — minimal in
+ * ai-led mode, exhaustive in collaborative mode — composing every question
+ * from the widget vocabulary (`widgets.ts`), one validated turn at a time
+ * (`conductor.ts`), finishing in a parameter proposal that Caret alone turns
+ * into `foundation.json` (`finalize.ts`). Progress survives a crash
  * (`scratch.ts`).
  *
- * **The presets flow** (`steps.ts` + `commit.ts`) is the deterministic
- * secondary tab: fixed curated steps, no model anywhere, for someone who wants
- * full control.
+ * **The external-agent path** commits through `commit.ts` (`buildFoundation`),
+ * assembling curated library pieces the agent's user pointed at.
  */
 export { buildFoundation, type CommittedFoundation, IncompleteInterviewError } from "./commit"
-export { type ConductorInput, nextWizardTurn, QUESTION_CAP, validateQuestion, WizardTurnError } from "./conductor"
+export {
+	COLLABORATIVE_QUESTION_CAP,
+	type ConductorInput,
+	COVERAGE_AREAS,
+	coveredAreas,
+	nextWizardTurn,
+	QUESTION_CAP,
+	questionCapFor,
+	validateQuestion,
+	type WizardMode,
+	WizardTurnError,
+} from "./conductor"
 export { type FinalizedFoundation, finalizeProposal, ProposalError } from "./finalize"
 export { clearWizardScratch, readWizardScratch, type WizardScratch, writeWizardScratch } from "./scratch"
-export {
-	type Decisions,
-	deterministicOptions,
-	INTERVIEW_STEPS,
-	type InterviewStep,
-	type StepId,
-	type StepOption,
-	stepAt,
-	tagsFromDescription,
-} from "./steps"
+export { type Decisions, type StepId, tagsFromDescription } from "./steps"
 export {
 	type FoundationProposal,
 	normalizeHex,

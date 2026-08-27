@@ -119,6 +119,38 @@ export async function buildGuide(projectPath: string, audience: GuideAudience = 
 	const context = await buildFoundationContext(projectPath)
 	const promoted = await readPromotedRules(projectPath).catch(() => ({ version: 1 as const, rules: [] }))
 
+	// Vocabulary lines for token groups a foundation only sometimes carries.
+	const tokens = context.tokens
+	const paletteRoleLines = [
+		tokens?.color?.secondary
+			? "- Secondary scale: `text-secondary-500`, `bg-secondary-50` … the supporting colour, same steps as brand."
+			: "",
+		tokens?.color?.accent
+			? "- Accent scale: `text-accent-500`, `bg-accent-50` … used rarely, per the restraint rule below."
+			: "",
+		tokens?.color?.on
+			? "- On-colours: text on a brand background is `text-on-brand` (and `text-on-secondary`/`text-on-accent`\n  where those roles exist) — never white by habit. Body text on the page is `text-on-surface`;\n  de-emphasised text is `text-on-surface-muted`. Each is contrast-checked against its background."
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n")
+	const depthLines = tokens?.elevation
+		? `- Shadows: \`shadow-raised\`, \`shadow-floating\`, \`shadow-overlay\` (also aliased over \`shadow-sm/md/lg\`)
+  come from the foundation, tinted to this project — never invent a shadow value.
+- Borders: hairlines are \`border-border\` at the foundation's width; the focus ring colour is \`ring-ring\`.`
+		: ""
+	const motionLines = tokens?.motion
+		? `- Motion: every transition uses \`duration-fast\`/\`duration-base\`/\`duration-slow\` with
+  \`ease-standard\` (or \`ease-decelerate\` for things entering). Choreography — what animates
+  and why — is yours to design; the timing vocabulary is not.`
+		: ""
+	const restraintLine = tokens?.meta?.rule
+		? `
+
+**This foundation's restraint rule:** ${tokens.meta.rule}
+`
+		: ""
+
 	const promotedSection =
 		promoted.rules.length === 0
 			? ""
@@ -206,10 +238,12 @@ never edit it), so use them as ordinary utilities:
 - Neutral scale: \`text-neutral-600\`, \`bg-neutral-50\` … resolve to THIS project's tinted
   neutrals, not Tailwind's stock grey. Use \`neutral-*\` for greys — never \`slate\`/\`gray\`/
   \`zinc\`/\`stone\`, which bypass the foundation.
-- Semantic: \`text-success\`, \`text-warning\`, \`text-error\`, \`text-info\` (and \`bg-\`/\`border-\`).
+${paletteRoleLines ? `${paletteRoleLines}\n` : ""}- Semantic: \`text-success\`, \`text-warning\`, \`text-error\`, \`text-info\` (and \`bg-\`/\`border-\`).
 - Type: the body face is \`font-sans\`, the heading face is \`font-display\`. The size steps
-  (\`text-xs\` … \`text-5xl\`) follow the foundation's own ratio, not Tailwind's defaults.
+  (\`text-xs\` … \`text-5xl\`) follow the foundation's own ratio, not Tailwind's defaults —
+  each carries its own line height, so never set an arbitrary leading or font size.
 - Radius: \`rounded-sm\` … \`rounded-xl\` follow the foundation's radius character.
+${depthLines ? `${depthLines}\n` : ""}${motionLines ? `${motionLines}\n` : ""}${restraintLine}
 
 These are **live bindings**: when a token changes, every page using the token class updates
 instantly. A raw value (\`text-[#1a2b3c]\`) is frozen at what the token happened to be today

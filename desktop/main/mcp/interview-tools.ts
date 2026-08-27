@@ -25,6 +25,7 @@ import {
 	narrowCandidates,
 	readAssetIndex,
 	resolveCandidate,
+	withDerivedScales,
 	writeFoundationTokens,
 } from "../../../src/core/design"
 import { recordEdit } from "../../../src/core/design/provenance"
@@ -149,12 +150,21 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				const tokens = args.seed
 					? {
 							...candidate.tokens,
-							color: { ...candidate.tokens.color, brand: { ...candidate.tokens.color.brand, seed: args.seed } },
+							// A new seed invalidates the ramp derived from the old one; empty
+							// it so the derivation pass regenerates from the override.
+							color: { ...candidate.tokens.color, brand: { seed: args.seed, scale: {} } },
 						}
 					: candidate.tokens
 
 				try {
-					await writeFoundationTokens(ctx.projectPath, tokens)
+					const derived = withDerivedScales(tokens)
+					derived.meta = {
+						committed: true,
+						committedAt: new Date().toISOString(),
+						source: "agent",
+						rule: candidate.palette.rule,
+					}
+					await writeFoundationTokens(ctx.projectPath, derived)
 					await regenerateRulesFiles(ctx.projectPath)
 					await recordEdit(ctx.projectPath, {
 						actor: "agent",

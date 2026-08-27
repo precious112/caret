@@ -196,6 +196,11 @@ export function buildTokens(input: BuildTokensInput): FoundationTokens {
 		typography: {
 			fontFamily: typeface.body.family,
 			fallback: typeface.body.fallback,
+			// The pairing's whole point is a display face; dropping it here made
+			// every agent-committed foundation render headings in the body face
+			// and the DS view name the system after half the pairing.
+			displayFamily: typeface.display.family,
+			displayFallback: typeface.display.fallback,
 			scaleRatio: typeface.scaleRatio,
 			baseSize: shape.baseSize,
 			scale: numericScale(generateTokenScale("typography", String(shape.baseSize), { ratio: typeface.scaleRatio })),

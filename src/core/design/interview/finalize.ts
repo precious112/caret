@@ -12,9 +12,10 @@
  * in ranges where the derivations behave. Violations throw with a sentence the
  * conductor's retry can quote back at the model.
  */
+import { withDerivedScales } from "../derive"
 import { SHAPE_PRESETS } from "../foundation-library"
 import { generateTokenScale } from "../token-scales"
-import type { FoundationTokens } from "../types"
+import type { ColorTokens, FoundationTokens } from "../types"
 import { type FoundationProposal, normalizeHex } from "./widgets"
 
 export class ProposalError extends Error {
@@ -70,11 +71,23 @@ export interface FinalizedFoundation {
 	name: string
 	rule: string
 	summary: string
+	/** Collaborative interviews: per-area reasoning, destined for `meta.decisions`. */
+	decisions?: Array<{ area: string; choice: string; reason: string }>
 }
 
 export function finalizeProposal(proposal: FoundationProposal, description: string): FinalizedFoundation {
 	const brand = normalizeHex(proposal.brand)
 	if (!brand) throw new ProposalError(`"${proposal.brand}" is not a hex colour — use six hex digits like #2563eb.`)
+
+	// Optional palette roles: absent is fine, unparseable is a bounce.
+	const roles: Pick<ColorTokens, "secondary" | "accent"> = {}
+	for (const role of ["secondary", "accent"] as const) {
+		const raw = proposal[role]
+		if (raw === undefined || raw === null || raw === "") continue
+		const hex = normalizeHex(raw)
+		if (!hex) throw new ProposalError(`The ${role} colour "${raw}" is not a hex colour — use six hex digits like #2563eb.`)
+		roles[role] = { seed: hex, scale: generateTokenScale("color", hex, { steps: 11 }) }
+	}
 
 	if (!proposal.displayFamily?.trim() || !proposal.bodyFamily?.trim()) {
 		throw new ProposalError("Both displayFamily and bodyFamily must be real Google Fonts family names.")
@@ -93,6 +106,15 @@ export function finalizeProposal(proposal: FoundationProposal, description: stri
 		if (hex) semantic[key] = hex
 	}
 
+	// The weights a foundation allows. A named weight is snapped to the real
+	// axis; absent means the conventional pair.
+	const snapWeight = (value: number | undefined, fallback: number): number => {
+		if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+		return Math.round(Math.min(900, Math.max(100, value)) / 100) * 100
+	}
+	const displayWeight = snapWeight(proposal.displayWeight, 600)
+	const bodyWeight = snapWeight(proposal.bodyWeight, 400)
+
 	const tokens: FoundationTokens = {
 		vibe: {
 			description: description.trim() || proposal.summary,
@@ -100,6 +122,7 @@ export function finalizeProposal(proposal: FoundationProposal, description: stri
 		},
 		color: {
 			brand: { seed: brand, scale: generateTokenScale("color", brand, { steps: 11 }) },
+			...roles,
 			neutral: { character: proposal.neutral, scale: {} },
 			semantic,
 			surface: proposal.surface === "dark" ? "dark" : "light",
@@ -112,15 +135,25 @@ export function finalizeProposal(proposal: FoundationProposal, description: stri
 			scaleRatio,
 			baseSize,
 			scale: numericScale(generateTokenScale("typography", String(baseSize), { ratio: scaleRatio })),
+			weights: {
+				display: [displayWeight],
+				body: bodyWeight === 500 ? [400, 500] : [...new Set([bodyWeight, 500])].sort((a, b) => a - b),
+			},
 		},
 		spacing: { baseUnit: spacingUnit, scale: spacingScaleFor(spacingUnit) },
 		radius: { character: proposal.radiusCharacter, scale: radiusScaleFor(proposal.radiusCharacter) },
+		elevation: proposal.elevationCharacter
+			? { character: proposal.elevationCharacter, scale: { flat: "", raised: "", floating: "", overlay: "" } }
+			: undefined,
 	}
 
 	return {
-		tokens,
+		// The derivation pass fills the neutral ramp, on-colours, elevation
+		// strings, border, motion and leadings — consequences, not choices.
+		tokens: withDerivedScales(tokens),
 		name: `${proposal.displayFamily.trim()} · ${proposal.bodyFamily.trim()}`,
 		rule: proposal.rule.trim(),
 		summary: proposal.summary?.trim() ?? "",
+		decisions: proposal.decisions?.length ? proposal.decisions : undefined,
 	}
 }

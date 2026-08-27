@@ -229,9 +229,17 @@ export class ProjectWindow {
 	}
 
 	async getState(): Promise<ProjectState> {
-		const hasFoundation = (await caretDirectoryExists(this.projectPath))
-			? Boolean(await readFoundationTokens(this.projectPath))
-			: false
+		// "Has a foundation" means a person committed one, not that the file
+		// exists — the scaffold writes a default `foundation.json` into every
+		// project, so mere presence is meaningless. The committed marker is the
+		// real signal; a derived brand ramp identifies foundations committed
+		// before the marker existed (the scaffold default ships `scale: {}`).
+		let hasFoundation = false
+		if (await caretDirectoryExists(this.projectPath)) {
+			const tokens = await readFoundationTokens(this.projectPath)
+			hasFoundation =
+				tokens?.meta?.committed === true || Object.keys(tokens?.color?.brand?.scale ?? {}).length > 0
+		}
 		return {
 			path: this.projectPath,
 			name: path.basename(this.projectPath),

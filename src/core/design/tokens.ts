@@ -74,6 +74,17 @@ export function validateFoundationTokens(obj: unknown): obj is FoundationTokens 
 	if (!color.neutral || typeof color.neutral !== "object") return false
 	if (!color.semantic || typeof color.semantic !== "object") return false
 
+	// Optional palette roles: absent is fine, present must be a seeded role.
+	for (const role of ["secondary", "accent"]) {
+		const entry = color[role]
+		if (entry === undefined) continue
+		if (!entry || typeof entry !== "object") return false
+		if (typeof (entry as Record<string, unknown>).seed !== "string") return false
+	}
+
+	// Optional provenance/rationale block.
+	if (tokens.meta !== undefined && (!tokens.meta || typeof tokens.meta !== "object")) return false
+
 	const typography = tokens.typography as Record<string, unknown>
 	if (typeof typography.fontFamily !== "string") return false
 	if (typeof typography.baseSize !== "number") return false

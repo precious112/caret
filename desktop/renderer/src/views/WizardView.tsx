@@ -20,7 +20,7 @@
  *   a font search, or a free input — never another lecture.
  */
 import { ArrowLeft, Check, Loader2, Pipette, Plus, Search, Sparkles } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import type {
 	WizardAnswerWire,
@@ -35,16 +35,24 @@ import { cn } from "../lib/utils"
 
 interface Props {
 	projectPath: string
+	/** The `wizard:start` result, when the entry flow already began the interview. */
+	initialState?: WizardStateWire | null
 	onCommitted(name: string): void
-	onSwitchToPresets(): void
 	onSwitchToManual(): void
+	/**
+	 * Resume found nothing in flight. The describe screen lives in the entry
+	 * flow now, so this surface has nothing to show — the parent decides what
+	 * comes next.
+	 */
+	onNothingInFlight?(): void
 }
 
-export function WizardView({ projectPath, onCommitted, onSwitchToPresets, onSwitchToManual }: Props) {
-	const [state, setState] = useState<WizardStateWire | null>(null)
-	const [busy, setBusy] = useState(true)
+export function WizardView({ projectPath, initialState, onCommitted, onSwitchToManual, onNothingInFlight }: Props) {
+	const [state, setState] = useState<WizardStateWire | null>(initialState ?? null)
+	const [busy, setBusy] = useState(!initialState)
 
 	useEffect(() => {
+		if (initialState) return
 		let cancelled = false
 		void invoke("wizard:resume", projectPath)
 			.then((resumed) => !cancelled && setState(resumed ?? { phase: "describe", description: "" }))
@@ -52,7 +60,17 @@ export function WizardView({ projectPath, onCommitted, onSwitchToPresets, onSwit
 		return () => {
 			cancelled = true
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [projectPath])
+
+	// A resumed `describe` phase means nothing is actually in flight — the host
+	// holds a description but no question was ever asked. The entry flow owns
+	// that screen now.
+	const nothingInFlight = state?.phase === "describe"
+	useEffect(() => {
+		if (nothingInFlight) onNothingInFlight?.()
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [nothingInFlight])
 
 	async function transition(run: () => Promise<WizardStateWire>): Promise<void> {
 		setBusy(true)
@@ -76,17 +94,7 @@ export function WizardView({ projectPath, onCommitted, onSwitchToPresets, onSwit
 		<div className="flex-1 overflow-auto bg-shell-bg" data-testid="wizard">
 			<div className="mx-auto flex max-w-5xl gap-8 px-8 py-10">
 				<div className="min-w-0 flex-1">
-					{state.phase === "describe" && (
-						<Describe
-							busy={busy}
-							initial={state.description}
-							onSubmit={(description) => transition(() => invoke("wizard:start", projectPath, description))}
-						/>
-					)}
-
-					{state.phase === "needs-backend" && (
-						<NeedsBackend detail={state.detail} onManual={onSwitchToManual} onPresets={onSwitchToPresets} />
-					)}
+					{state.phase === "needs-backend" && <NeedsBackend detail={state.detail} onManual={onSwitchToManual} />}
 
 					{state.phase === "question" && busy && <Thinking asked={state.asked} />}
 					{state.phase === "question" && !busy && (
@@ -122,14 +130,17 @@ export function WizardView({ projectPath, onCommitted, onSwitchToPresets, onSwit
 							canFinish={state.canFinish}
 							message={state.message}
 							onFinishNow={() => transition(() => invoke("wizard:finishNow", projectPath))}
-							onPresets={onSwitchToPresets}
+							onManual={onSwitchToManual}
 							onRetry={() => transition(() => invoke("wizard:retry", projectPath))}
 						/>
 					)}
 				</div>
 
 				{(state.phase === "question" || state.phase === "finish") && (
-					<SoFar history={state.history} proposalSpec={state.phase === "finish" ? proposalSpec(state) : undefined} />
+					<div className="hidden w-56 shrink-0 flex-col gap-7 lg:flex">
+						{state.phase === "question" && state.coverage && <Coverage coverage={state.coverage} />}
+						<SoFar history={state.history} proposalSpec={state.phase === "finish" ? proposalSpec(state) : undefined} />
+					</div>
 				)}
 			</div>
 		</div>
@@ -142,49 +153,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 
 // ── screens ─────────────────────────────────────────────────────────────────
 
-function Describe({ initial, busy, onSubmit }: { initial: string; busy: boolean; onSubmit(description: string): void }) {
-	const [text, setText] = useState(initial)
-	const ref = useRef<HTMLTextAreaElement>(null)
-	useEffect(() => ref.current?.focus(), [])
-	const ready = text.trim().length >= 8
-
-	return (
-		<div className="fade-in">
-			<h1 className="text-2xl font-medium">Describe what you're building.</h1>
-			<p className="mt-2 max-w-xl leading-relaxed text-shell-muted">
-				What it is, who it's for, anything you already know you want. The interview is built from this — the better the
-				description, the fewer the questions.
-			</p>
-
-			<textarea
-				className="mt-6 min-h-28 w-full resize-none rounded-xl border border-shell-border bg-shell-panel px-4 py-3 leading-relaxed outline-none transition-colors focus:border-caret-accent/60"
-				data-testid="wizard-describe"
-				onChange={(event) => setText(event.target.value)}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && !event.shiftKey && ready) {
-						event.preventDefault()
-						onSubmit(text)
-					}
-				}}
-				placeholder="A dashboard where support teams triage tickets all day. Dark, calm, serious."
-				ref={ref}
-				value={text}
-			/>
-
-			<button
-				className="mt-4 flex items-center gap-2 rounded-lg bg-caret-accent px-4 py-2 font-medium text-white transition-colors hover:bg-caret-accent-hover disabled:opacity-40"
-				data-testid="wizard-begin"
-				disabled={!ready || busy}
-				onClick={() => onSubmit(text)}
-				type="button">
-				{busy && <Loader2 className="animate-spin" size={13} />}
-				Start
-			</button>
-		</div>
-	)
-}
-
-function NeedsBackend({ detail, onPresets, onManual }: { detail: string; onPresets(): void; onManual(): void }) {
+function NeedsBackend({ detail, onManual }: { detail: string; onManual(): void }) {
 	return (
 		<div className="fade-in" data-testid="wizard-needs-backend">
 			<h1 className="text-2xl font-medium">The interview needs a coding backend.</h1>
@@ -194,12 +163,6 @@ function NeedsBackend({ detail, onPresets, onManual }: { detail: string; onPrese
 			<div className="mt-5 flex items-center gap-2">
 				<button
 					className="rounded-lg bg-caret-accent px-4 py-2 font-medium text-white transition-colors hover:bg-caret-accent-hover"
-					onClick={onPresets}
-					type="button">
-					Pick from presets instead
-				</button>
-				<button
-					className="rounded-lg px-3 py-2 text-shell-muted transition-colors hover:bg-white/5"
 					onClick={onManual}
 					type="button">
 					Set tokens by hand
@@ -303,14 +266,14 @@ function ErrorScreen({
 	busy,
 	onRetry,
 	onFinishNow,
-	onPresets,
+	onManual,
 }: {
 	message: string
 	canFinish: boolean
 	busy: boolean
 	onRetry(): void
 	onFinishNow(): void
-	onPresets(): void
+	onManual(): void
 }) {
 	return (
 		<div className="fade-in" data-testid="wizard-error">
@@ -336,12 +299,41 @@ function ErrorScreen({
 				)}
 				<button
 					className="rounded-lg px-3 py-2 text-shell-muted transition-colors hover:bg-white/5"
-					onClick={onPresets}
+					onClick={onManual}
 					type="button">
-					Use presets instead
+					Set tokens by hand
 				</button>
 			</div>
 		</div>
+	)
+}
+
+/**
+ * Collaborative mode's checklist: what has been settled, what the interview
+ * still owes a question about. AI-led interviews never show this — depth is
+ * the inbetweener's, not the vibe coder's.
+ */
+function Coverage({ coverage }: { coverage: NonNullable<Extract<WizardStateWire, { phase: "question" }>["coverage"]> }) {
+	return (
+		<aside data-testid="wizard-coverage">
+			<p className="text-[11px] tracking-wider text-shell-muted uppercase">Covering</p>
+			<ul className="mt-3 flex flex-col gap-1.5">
+				{[...coverage.done.map((area) => ({ ...area, done: true })), ...coverage.missing.map((area) => ({ ...area, done: false }))].map(
+					(area) => (
+						<li className="flex items-center gap-2 text-[11.5px]" key={area.id}>
+							<span
+								className={cn(
+									"flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+									area.done ? "border-caret-accent bg-caret-accent/15 text-caret-accent" : "border-shell-border text-transparent",
+								)}>
+								<Check size={9} strokeWidth={3} />
+							</span>
+							<span className={area.done ? "" : "text-shell-muted"}>{area.label}</span>
+						</li>
+					),
+				)}
+			</ul>
+		</aside>
 	)
 }
 
@@ -385,6 +377,20 @@ function Finish({
 				{state.rule}
 			</p>
 
+			{(state.proposal.decisions?.length ?? 0) > 0 && (
+				<div className="mt-5 max-w-2xl" data-testid="wizard-decisions">
+					<p className="text-[11px] tracking-wider text-shell-muted uppercase">How this was decided</p>
+					<ul className="mt-2 flex flex-col gap-1.5">
+						{state.proposal.decisions?.map((decision) => (
+							<li className="text-[12px] leading-relaxed" key={decision.area}>
+								<span className="font-medium">{decision.choice}</span>
+								<span className="text-shell-muted"> — {decision.reason}</span>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
+
 			<button
 				className="mt-7 flex items-center gap-2 rounded-lg bg-caret-accent px-4 py-2 font-medium text-white transition-colors hover:bg-caret-accent-hover disabled:opacity-40"
 				data-testid="wizard-commit"
@@ -417,7 +423,7 @@ export function __PreviewQuestion({
 				baseOverride={base}
 				onAnswer={() => {}}
 				onFinishNow={index > 0 ? () => {} : undefined}
-				state={{ phase: "question", description: "", current: question, asked: index, cap: 10, history: [] }}
+				state={{ phase: "question", mode: "ai-led", description: "", current: question, asked: index, cap: 10, history: [] }}
 			/>
 		</div>
 	)
@@ -1138,7 +1144,7 @@ function SoFar({ history, proposalSpec: finalSpec }: { history: WizardQAWire[]; 
 	].filter(Boolean) as Array<[string, string]>
 
 	return (
-		<aside className="hidden w-56 shrink-0 lg:block" data-testid="wizard-so-far">
+		<aside data-testid="wizard-so-far">
 			<p className="text-[11px] tracking-wider text-shell-muted uppercase">So far</p>
 			<div className="mt-3 overflow-hidden rounded-xl border border-shell-border">
 				<MiniSpecimen spec={spec} />
