@@ -129,7 +129,11 @@ function memberPathFrom(expr: Node, itemParam: string): string[] | null {
 		path.unshift(current.property.name)
 		current = current.object
 	}
-	if (current?.type === "Identifier" && current.name === itemParam && path.length > 0) return path
+	// An empty path is a real answer: `{tag}` over `["Bright", "Fruity"]`
+	// renders the item itself — the rows are primitives, not objects. Requiring
+	// a member access here misclassified that case as "computed" and refused an
+	// edit the data literal supports perfectly well.
+	if (current?.type === "Identifier" && current.name === itemParam) return path
 	return null
 }
 
@@ -245,16 +249,24 @@ export function resolveRowTextEdit(
 	}
 
 	const item = items[instanceIndex]
-	if (item?.type !== "ObjectExpression") {
-		return { kind: "refusal", reason: "The data item isn't an object literal — its fields can't be addressed by name." }
+	let value: Node | null
+	if (candidates[0].path.length === 0) {
+		// `{tag}` renders the item itself: the row IS the value.
+		value = item
+	} else {
+		if (item?.type !== "ObjectExpression") {
+			return { kind: "refusal", reason: "The data item isn't an object literal — its fields can't be addressed by name." }
+		}
+		value = valueAtPath(item, candidates[0].path)
+		if (!value) {
+			return { kind: "refusal", reason: `The data item has no "${candidates[0].path.join(".")}" field to edit.` }
+		}
 	}
 
-	const value = valueAtPath(item, candidates[0].path)
-	if (!value) {
-		return { kind: "refusal", reason: `The data item has no "${candidates[0].path.join(".")}" field to edit.` }
-	}
-
-	const fieldLabel = `item ${instanceIndex + 1} · ${candidates[0].path.join(".")}`
+	const fieldLabel =
+		candidates[0].path.length === 0
+			? `item ${instanceIndex + 1}`
+			: `item ${instanceIndex + 1} · ${candidates[0].path.join(".")}`
 
 	if (value.type === "StringLiteral") {
 		// Redelivery guard, same contract as spliceTextEdit: already-correct is
@@ -273,12 +285,14 @@ export function resolveRowTextEdit(
 		}
 	}
 
+	const fieldName = candidates[0].path.length === 0 ? "this item" : `"${candidates[0].path.join(".")}"`
+
 	if (value.type === "NumericLiteral") {
 		const numeric = Number(newText.trim())
 		if (!Number.isFinite(numeric)) {
 			return {
 				kind: "refusal",
-				reason: `"${candidates[0].path.join(".")}" is a number in the data — the new value must be numeric.`,
+				reason: `${fieldName} is a number in the data — the new value must be numeric.`,
 			}
 		}
 		return { kind: "edit", edits: [{ start: value.start, end: value.end, text: String(numeric) }], itemLabel: fieldLabel }
@@ -286,6 +300,6 @@ export function resolveRowTextEdit(
 
 	return {
 		kind: "refusal",
-		reason: `The "${candidates[0].path.join(".")}" field isn't a plain string or number — edit the data directly.`,
+		reason: `${fieldName} isn't a plain string or number in the data — edit the data directly.`,
 	}
 }

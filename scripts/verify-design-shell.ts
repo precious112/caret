@@ -2278,6 +2278,53 @@ async function main() {
 		}
 	})
 
+	await scenario("w2. the property panel sits beside the selection, never on it", async () => {
+		// Reported from the field: selecting a hero image in the page's top-right
+		// put the panel ON the image — the panel's home corner is exactly where
+		// heroes and navs live. The contract: whatever corner or edge the panel
+		// picks, its box must not intersect the selected element's box.
+		const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+		try {
+			await page.goto(`http://localhost:${port}/?page=fragmented&mode=focused`)
+			await page.waitForSelector('[data-testid="frag-title"]', { state: "attached", timeout: 15000 })
+			await page.waitForTimeout(2500)
+
+			const overlapAfterSelect = async (placeCss: string): Promise<{ overlap: boolean; panel: string }> => {
+				const point = await page.evaluate((css) => {
+					const el = document.querySelector('[data-testid="frag-title"]') as HTMLElement
+					el.style.cssText += css
+					const r = el.getBoundingClientRect()
+					return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+				}, placeCss)
+				await page.mouse.click(point.x, point.y)
+				await waitFor(
+					async () => await page.evaluate(() => !!document.querySelector("#caret-param-panel")),
+					10000,
+					"the property panel to open",
+				)
+				return await page.evaluate(() => {
+					const el = document.querySelector('[data-testid="frag-title"]')!.getBoundingClientRect()
+					const p = document.querySelector("#caret-param-panel")!.getBoundingClientRect()
+					const overlap = el.left < p.right && el.right > p.left && el.top < p.bottom && el.bottom > p.top
+					return { overlap, panel: `${Math.round(p.left)},${Math.round(p.top)} ${Math.round(p.width)}×${Math.round(p.height)}` }
+				})
+			}
+
+			// The reported case: the element occupies the panel's home corner.
+			const corner = await overlapAfterSelect("position:fixed;top:40px;right:0;left:auto;width:620px;height:320px;")
+			if (corner.overlap) throw new Error(`panel covers a top-right selection (panel at ${corner.panel})`)
+
+			// The hard case: the element spans BOTH top corners — the panel must
+			// leave the top band entirely rather than pick the covered mirror.
+			const banner = await overlapAfterSelect("position:fixed;top:40px;left:0;right:0;width:100%;height:320px;")
+			if (banner.overlap) throw new Error(`panel covers a full-width selection (panel at ${banner.panel})`)
+
+			return `top-right selection → panel at ${corner.panel}; full-width selection → panel at ${banner.panel}; no overlap`
+		} finally {
+			await page.close()
+		}
+	})
+
 	await browser.close()
 }
 

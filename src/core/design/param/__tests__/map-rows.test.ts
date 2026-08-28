@@ -56,6 +56,47 @@ describe("resolveRowTextEdit — content edits reach one row's data", () => {
 		result.kind.should.equal("refusal")
 	})
 
+	it("edits a row whose item IS the text — primitive string rows, `{tag}` with no member access", () => {
+		// The exact shape that was misclassified as "computed" in the field:
+		// Crema's tasting tags, a .map over plain strings. The fix: an empty
+		// member path is a real answer, meaning the row itself is the value.
+		const source = `export default function P() {
+  return (
+    <div>
+      {["Bright", "Fruity", "Balanceed", "Sweet"].map((tag, i) => (
+        <span data-caret-id="span-3" key={tag} className="chip">
+          {tag}
+        </span>
+      ))}
+    </div>
+  )
+}
+`
+		const result = resolveRowTextEdit(source, "span-3", 2, "Balanced", "Balanceed")
+		result.kind.should.equal("edit")
+		if (result.kind !== "edit") return
+		result.itemLabel.should.equal("item 3")
+		const next = applyEdits(source, result.edits)
+		next.should.containEql('"Balanced"')
+		next.should.not.containEql("Balanceed")
+		next.should.containEql('"Bright"')
+		next.should.containEql('"Fruity"')
+		next.should.containEql('"Sweet"')
+	})
+
+	it("primitive rows keep the redelivery and staleness contracts", () => {
+		const source = `export default function P() {
+  return <div>{["One", "Two"].map((w) => <span data-caret-id="t">{w}</span>)}</div>
+}
+`
+		const same = resolveRowTextEdit(source, "t", 0, "One")
+		same.kind.should.equal("edit")
+		if (same.kind === "edit") same.edits.length.should.equal(0)
+
+		const stale = resolveRowTextEdit(source, "t", 0, "New", "Stale Rendered Text")
+		stale.kind.should.equal("refusal")
+	})
+
 	it("works over an inline array literal too (shape 2)", () => {
 		const source = `export default function P() {
   return <div>{[{ label: "One" }, { label: "Two" }].map((item) => <p data-caret-id="t">{item.label}</p>)}</div>

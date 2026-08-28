@@ -3243,6 +3243,38 @@ function generateParamPanel(): string {
 		  currentTarget = null
 		}
 
+		/* The panel must sit BESIDE the selection, never on it. Its home is the
+		 * top-right corner — which is exactly where a hero image or nav lives, so
+		 * a fixed corner covered the very element being edited (reported in the
+		 * field on a top-right photo). Order of preference: the home corner, the
+		 * mirrored left corner, and for an element wide enough to own both, below
+		 * it (or above when there is no room below). Recomputed on every show and
+		 * every render, since the panel's height depends on its rows. */
+		function positionPanel() {
+		  if (!panel || !currentTarget || !currentTarget.element.isConnected) return
+		  // Start from the home corner so measurement is deterministic.
+		  panel.style.left = "auto"
+		  panel.style.right = "16px"
+		  panel.style.top = "64px"
+		  const el = currentTarget.element.getBoundingClientRect()
+		  const pad = 12
+		  const box = panel.getBoundingClientRect()
+		  const hits = (b: { left: number; right: number; top: number; bottom: number }) =>
+		    el.left < b.right + pad && el.right > b.left - pad && el.top < b.bottom + pad && el.bottom > b.top - pad
+		  if (!hits(box)) return
+		  const mirrored = { left: 16, right: 16 + box.width, top: box.top, bottom: box.bottom }
+		  if (!hits(mirrored)) {
+		    panel.style.right = "auto"
+		    panel.style.left = "16px"
+		    return
+		  }
+		  // The element spans both corners: go below it, or above when the bottom
+		  // of the viewport leaves no room.
+		  let top = el.bottom + pad
+		  if (top + box.height > window.innerHeight - pad) top = el.top - box.height - pad
+		  panel.style.top = \`\${Math.max(12, Math.min(top, window.innerHeight - box.height - pad))}px\`
+		}
+
 		/* ── resize handles — Phase 10.2 ─────────────────────────────────────────
 		 * The resolver runs AT POINTERDOWN (the preview channel depends on the
 		 * layout context, so it must be known before the first frame), the drag
@@ -3395,6 +3427,7 @@ function generateParamPanel(): string {
 		  host.dataset.caretId = caretId
 		  attachResizeHandles()
 		  host.innerHTML = '<div style="color:#8b93a7">resolving…</div>'
+		  positionPanel()
 		  bridge.send({ type: "param-resolve", payload: { filePath, caretId, viewportWidth: viewportWidth() } })
 		}
 
@@ -3533,6 +3566,7 @@ function generateParamPanel(): string {
 		      })
 		    })
 		  }
+		  positionPanel()
 		}
 
 		export function isParamPanelOpen(): boolean {
