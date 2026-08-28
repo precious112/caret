@@ -86,6 +86,14 @@ export interface EditResultPayload {
 	error?: string
 	suggestAiEdit?: boolean
 	/**
+	 * Which lane produced this result, so exactly one surface reacts: `inline`
+	 * results belong to the grab plugin (fallback card or its own toast),
+	 * `agent` results to the edit pill, and untagged results (param edits,
+	 * resizes) to the bridge's generic toast. Before this existed, one failed
+	 * inline edit was reported by the plugin's card AND the bridge's toast.
+	 */
+	kind?: "inline" | "agent"
+	/**
 	 * A colour edit replaced this foundation token class (`brand-500`) with an
 	 * arbitrary value — the element detached from the token. The canvas offers
 	 * the alternative: change the token itself, reaching `tokenUses` places.

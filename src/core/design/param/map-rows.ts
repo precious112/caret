@@ -273,9 +273,13 @@ export function resolveRowTextEdit(
 		// success without a write, and a stale oldText refuses.
 		if (value.value === newText.trim()) return { kind: "edit", edits: [], itemLabel: fieldLabel }
 		if (oldText !== undefined && value.value !== oldText.trim() && oldText.trim() !== "") {
+			// Say what was compared: the page-side text against the data. Blaming
+			// "the data changed" guessed at a cause — in the field the mismatch was
+			// the page's own leftover text, and the message sent the user reloading
+			// for nothing.
 			return {
 				kind: "refusal",
-				reason: "The data changed since this row was rendered — reload the page and try again.",
+				reason: `The page showed "${oldText.trim()}" but the data says "${value.value}" — the page looks out of date. Reload it and try the edit again.`,
 			}
 		}
 		return {

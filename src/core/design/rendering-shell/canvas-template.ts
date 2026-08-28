@@ -2243,6 +2243,7 @@ function generateBridge(): string {
 
 		function showToast(message: string, isError: boolean) {
 		  const el = document.createElement("div")
+		  el.setAttribute("data-caret-bridge-toast", isError ? "error" : "success")
 		  el.textContent = message
 		  Object.assign(el.style, {
 		    position: "fixed", bottom: "20px", right: "20px", zIndex: "99999",
@@ -2254,15 +2255,26 @@ function generateBridge(): string {
 		  setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 300) }, 2500)
 		}
 
+		// Feedback belongs to the frame that acted. This bridge loads in the
+		// canvas document AND the focused iframe, and both hear every result —
+		// so an untracked toast here doubled (or tripled) whatever surface owned
+		// the edit. The generic toast now serves only results no dedicated
+		// surface owns (param edits, resizes — untagged), and only in the frame
+		// that actually sent an edit.
+		let editSentFromThisFrame = false
+		let undoSentFromThisFrame = false
+
 		window.addEventListener("message", (e) => {
 		  if (e.data?.source !== "caret-host") return
 
 		  if (e.data.type === "edit-result") {
-		    const { success, error } = e.data.payload
-		    if (!success) showToast(error || "Edit failed", true)
+		    const { success, error, kind } = e.data.payload
+		    // Tagged results have owners: "inline" → the grab plugin's card/toast,
+		    // "agent" → the edit pill. Toasting them here says it twice.
+		    if (!success && kind === undefined && editSentFromThisFrame) showToast(error || "Edit failed", true)
 		  }
 
-		  if (e.data.type === "undo-result") {
+		  if (e.data.type === "undo-result" && undoSentFromThisFrame) {
 		    const { undone, label, error } = e.data.payload
 		    showToast(undone ? \`Undid: \${label}\` : (error || "Nothing to undo"), !undone)
 		  }
@@ -2275,6 +2287,10 @@ function generateBridge(): string {
 
 		export const bridge = {
 		  send(message: { type: string; payload: unknown }) {
+		    if (message.type === "param-edit" || message.type === "resize-commit" || message.type === "inline-edit") {
+		      editSentFromThisFrame = true
+		    }
+		    if (message.type === "design-undo") undoSentFromThisFrame = true
 		    window.parent.postMessage({ source: "caret-vite", ...message }, "*")
 		  },
 
@@ -3902,6 +3918,11 @@ function generateCaretGrabPlugin(): string {
 
 		let lastResolvedSource: SourceLocation | null = null
 
+		/** True once THIS frame has sent an inline edit — the feedback gate. */
+		let sentInlineEditHere = false
+		/** The text edit in flight, so a failure can put the original back. */
+		let pendingTextRevert: { el: Element; original: string; newText: string } | null = null
+
 		// The most recent colour the picker emitted. The detach toast's promote
 		// action reads this rather than the hex that rode in the edit-result:
 		// the picker fires per input event during a drag, only the FIRST of which
@@ -3953,6 +3974,7 @@ function generateCaretGrabPlugin(): string {
 
 		function showToast(message: string, type: "success" | "error") {
 		  const toast = document.createElement("div")
+		  toast.setAttribute("data-caret-toast", type)
 		  toast.textContent = message
 		  toast.style.cssText = \`position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 20px;border-radius:8px;font-size:13px;font-family:system-ui,sans-serif;color:#fff;pointer-events:none;opacity:0;transition:opacity 0.2s;\${type === "success" ? "background:#16a34a;" : "background:#dc2626;"}\`
 		  document.body.appendChild(toast)
@@ -4110,6 +4132,22 @@ function generateCaretGrabPlugin(): string {
 		  log("initializing caret-grab-plugin")
 
 		  bridge.on("edit-result", (payload: any) => {
+		    // Only the frame that SENT an inline edit gives feedback. This plugin
+		    // loads in the canvas document AND in the focused iframe, and both hear
+		    // every result — the iframe (which knows the edit's source) showed the
+		    // fallback card while the canvas document fell to the generic branch
+		    // and showed a toast: one failure, two surfaces, reported in the field.
+		    if (!sentInlineEditHere) return
+		    // A failed text edit must not leave the typed text on screen: the next
+		    // attempt would capture it as the "before" value and be refused as
+		    // stale — one transient failure then poisons every retry. Restore the
+		    // original, exactly as Escape does. Guarded so an HMR-applied change is
+		    // never clobbered: only text still reading as the rejected input reverts.
+		    if (!payload.success && pendingTextRevert) {
+		      const { el, original, newText } = pendingTextRevert
+		      if (el.isConnected && (el.textContent || "") === newText) el.textContent = original
+		    }
+		    pendingTextRevert = null
 		    // AI/overlay edits resolve at the pill; a toast on top would say the
 		    // same thing twice in two visual languages. Inline edits keep the toast.
 		    if (editPillEngaged()) return
@@ -4334,6 +4372,8 @@ function generateCaretGrabPlugin(): string {
 		              // so the host can route the content edit to that data item.
 		              const editId = el.getAttribute("data-caret-id") || ""
 		              const twins = editId ? Array.from(document.querySelectorAll('[data-caret-id="' + editId + '"]')) : []
+		              sentInlineEditHere = true
+		              pendingTextRevert = { el, original, newText }
 		              bridge.send({
 		                type: "inline-edit",
 		                payload: {
@@ -4414,6 +4454,7 @@ function generateCaretGrabPlugin(): string {
 
 		          input.addEventListener("input", (e) => {
 		            lastPickedHex = (e.target as HTMLInputElement).value
+		            sentInlineEditHere = true
 		            bridge.send({
 		              type: "inline-edit",
 		              payload: {
@@ -4471,6 +4512,7 @@ function generateCaretGrabPlugin(): string {
 		            }
 		            const reader = new FileReader()
 		            reader.onload = () => {
+		              sentInlineEditHere = true
 		              bridge.send({
 		                type: "inline-edit",
 		                payload: {

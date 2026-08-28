@@ -96,7 +96,7 @@ async function requestAgent(workspacePath: string, task: AgentTask): Promise<boo
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
 		Logger.warn(`[design] agent request (${task.kind}) refused: ${message}`)
-		sendEditResult(workspacePath, { success: false, error: message })
+		sendEditResult(workspacePath, { kind: "agent", success: false, error: message })
 		return false
 	}
 }
@@ -280,12 +280,12 @@ async function handleAiEdit(payload: AiEditRequestPayload, workspacePath: string
 				detail: { kind: "instruction", text: payload.instruction },
 			})
 			void maybeOfferCorrections(workspacePath)
-			sendEditResult(workspacePath, { success: true })
+			sendEditResult(workspacePath, { kind: "agent", success: true })
 		}
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] AI edit failed: ${errorMsg}`)
-		sendEditResult(workspacePath, { success: false, error: errorMsg })
+		sendEditResult(workspacePath, { kind: "agent", success: false, error: errorMsg })
 	}
 }
 
@@ -339,12 +339,12 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 				detail: { kind: "instruction", text: payload.instruction },
 			})
 			void maybeOfferCorrections(workspacePath)
-			sendEditResult(workspacePath, { success: true })
+			sendEditResult(workspacePath, { kind: "agent", success: true })
 		}
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Overlay edit failed: ${errorMsg}`)
-		sendEditResult(workspacePath, { success: false, error: errorMsg })
+		sendEditResult(workspacePath, { kind: "agent", success: false, error: errorMsg })
 	}
 }
 
@@ -377,7 +377,7 @@ Rules for this take:
 async function handleVariantRequest(payload: import("./messages").VariantRequestPayload, workspacePath: string): Promise<void> {
 	const bridge = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
 	if (!bridge.connected()) {
-		sendEditResult(workspacePath, {
+		sendEditResult(workspacePath, { kind: "agent",
 			success: false,
 			error: "Generating takes needs a coding backend — open Settings → Backend to connect one.",
 		})
@@ -388,7 +388,7 @@ async function handleVariantRequest(payload: import("./messages").VariantRequest
 	try {
 		set = await createVariantSet(workspacePath, payload.pageId, payload.instruction)
 	} catch (err) {
-		sendEditResult(workspacePath, { success: false, error: err instanceof Error ? err.message : String(err) })
+		sendEditResult(workspacePath, { kind: "agent", success: false, error: err instanceof Error ? err.message : String(err) })
 		return
 	}
 
@@ -729,9 +729,9 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 				newValue: payload.newValue,
 				note: payload.editType,
 			})
-			sendEditResult(workspacePath, { success: true })
+			sendEditResult(workspacePath, { kind: "inline", success: true })
 		} else {
-			sendEditResult(workspacePath, {
+			sendEditResult(workspacePath, { kind: "inline",
 				success: false,
 				error:
 					refusal ??
@@ -742,7 +742,7 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Inline edit failed: ${errorMsg}`)
-		sendEditResult(workspacePath, { success: false, error: errorMsg })
+		sendEditResult(workspacePath, { kind: "inline", success: false, error: errorMsg })
 	}
 }
 
@@ -772,7 +772,7 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 				)
 
 		if (!result.ok) {
-			sendEditResult(workspacePath, {
+			sendEditResult(workspacePath, { kind: "inline",
 				success: false,
 				error: "This content can't be edited inline — it may use dynamic expressions. Use AI Edit to describe the change you want.",
 				suggestAiEdit: true,
@@ -790,7 +790,7 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 				newValue: payload.newValue,
 				detail: { kind: "color-bind", token: bindTo },
 			})
-			sendEditResult(workspacePath, { success: true, boundTo: bindTo, editTarget })
+			sendEditResult(workspacePath, { kind: "inline", success: true, boundTo: bindTo, editTarget })
 			return
 		}
 
@@ -808,7 +808,7 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 			// +1: the scan runs after the detach, so the element in hand no longer
 			// counts itself — but promoting re-binds it, so it is part of the reach.
 			const uses = await countTokenUses(path.join(workspacePath, ".caret"), detachedFrom)
-			sendEditResult(workspacePath, { success: true, detachedFrom, tokenUses: uses.occurrences + 1, editTarget })
+			sendEditResult(workspacePath, { kind: "inline", success: true, detachedFrom, tokenUses: uses.occurrences + 1, editTarget })
 			void maybeOfferCorrections(workspacePath)
 			return
 		}
@@ -821,11 +821,11 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 			newValue: payload.newValue,
 			detail: { kind: "color", hex: payload.newValue },
 		})
-		sendEditResult(workspacePath, { success: true, editTarget })
+		sendEditResult(workspacePath, { kind: "inline", success: true, editTarget })
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] Colour edit failed: ${errorMsg}`)
-		sendEditResult(workspacePath, { success: false, error: errorMsg })
+		sendEditResult(workspacePath, { kind: "inline", success: false, error: errorMsg })
 	}
 }
 
@@ -913,7 +913,7 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 		await captureUndoStep(workspacePath, `promote ${payload.token} to ${payload.hex}`)
 		const tokens = await readFoundationTokens(workspacePath)
 		if (!tokens || !setFoundationTokenValue(tokens, payload.token, payload.hex)) {
-			sendEditResult(workspacePath, {
+			sendEditResult(workspacePath, { kind: "inline",
 				success: false,
 				error: `Couldn't change ${payload.token} — the foundation no longer defines that token.`,
 			})
@@ -935,7 +935,7 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 			Logger.warn(`[design] promote-token: token updated but re-bind of ${payload.filePath}:${payload.lineNumber} failed`)
 		}
 
-		sendEditResult(workspacePath, {
+		sendEditResult(workspacePath, { kind: "inline",
 			success: true,
 			boundTo: payload.token,
 			editTarget: { filePath: payload.filePath, lineNumber: payload.lineNumber, caretId: payload.caretId },
@@ -944,7 +944,7 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 	} catch (err) {
 		const errorMsg = err instanceof Error ? err.message : String(err)
 		Logger.error(`[design] promote-token failed: ${errorMsg}`)
-		sendEditResult(workspacePath, { success: false, error: errorMsg })
+		sendEditResult(workspacePath, { kind: "inline", success: false, error: errorMsg })
 	}
 }
 
