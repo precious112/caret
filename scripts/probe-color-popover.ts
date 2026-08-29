@@ -1,8 +1,10 @@
 /**
  * Drives Caret's own colour popover (the replacement for the Chromium
- * <input type=color> popup) in the real app: right-click → Edit color →
- * the popover opens beside the element with token swatches, a hex field
- * that accepts a pasted value, and Enter commits ONE write.
+ * <input type=color> popup) in the real app, three ways:
+ *   1. right-click → Edit color → hex paste + Enter commits ONE write
+ *   2. reopen → token swatch click paints INSTANTLY and hands over cleanly
+ *   3. left-click select → panel colour edit shows while the selection is
+ *      still up (react-grab's !important freeze pins must be released)
  *
  *   npm run build && npx tsx scripts/probe-color-popover.ts
  */
@@ -57,7 +59,10 @@ async function main(): Promise<void> {
 					for (const win of BrowserWindow.getAllWindows()) {
 						const views = (win.contentView?.children ?? []) as any[]
 						const found = views.find(
-							(v) => v.webContents && !v.webContents.isDestroyed() && v.webContents.getURL().startsWith("http://localhost"),
+							(v) =>
+								v.webContents &&
+								!v.webContents.isDestroyed() &&
+								v.webContents.getURL().startsWith("http://localhost"),
 						)
 						if (found) wc = found.webContents
 					}
@@ -85,9 +90,14 @@ async function main(): Promise<void> {
 				let pageFrame: any = null
 				deadline = Date.now() + 60_000
 				while (Date.now() < deadline) {
-					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused") && f.url.includes("page=colorpage")) ?? null
+					pageFrame =
+						wc.mainFrame.frames.find(
+							(f: any) => f.url.includes("mode=focused") && f.url.includes("page=colorpage"),
+						) ?? null
 					if (pageFrame) {
-						const ready = await pageFrame.executeJavaScript(`!!document.querySelector('[data-caret-id="cta"]')`).catch(() => false)
+						const ready = await pageFrame
+							.executeJavaScript(`!!document.querySelector('[data-caret-id="cta"]')`)
+							.catch(() => false)
 						if (ready) break
 					}
 					await new Promise((r) => setTimeout(r, 300))
@@ -175,18 +185,194 @@ async function main(): Promise<void> {
 						toast: document.querySelector('[data-caret-toast]')?.textContent ?? document.querySelector('#caret-detach-toast')?.textContent ?? null,
 					})`,
 				)
-				return { ok: true, popover, after }
+
+				// ── Part 2: the swatch-click path must change the screen INSTANTLY ──
+				// The field failure: a swatch commit wrote the file correctly but the
+				// screen kept the old colour until a stale preview pin dropped.
+				// First: 2.5s after part 1's commit, the handover timer must have
+				// dropped part 1's pin already — measured BEFORE anything reopens
+				// (react-grab re-pins the element itself whenever its UI engages,
+				// so this is the one moment OUR pin can be measured alone).
+				const inlineBeforeReopen = await pageFrame.executeJavaScript(
+					`document.querySelector('[data-caret-id="cta"]').style.backgroundColor || ""`,
+				)
+				let menu2 = false
+				for (let attempt = 0; attempt < 5 && !menu2; attempt++) {
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 300))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "right", clickCount: 1 })
+					const menuDeadline = Date.now() + 4000
+					while (Date.now() < menuDeadline && !menu2) {
+						menu2 = await pageFrame
+							.executeJavaScript(
+								`(() => {
+									const host = document.querySelector('[data-react-grab]')
+									const root = host && host.shadowRoot
+									if (!root) return false
+									const items = Array.from(root.querySelectorAll('button, [role="menuitem"], div'))
+									const item = items.find((n) => n.textContent && n.textContent.trim() === 'Edit color')
+									if (!item) return false
+									item.click()
+									return true
+								})()`,
+							)
+							.catch(() => false)
+						if (!menu2) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!menu2) return { error: "part 2: Edit color menu never appeared", popover, after }
+				await new Promise((r) => setTimeout(r, 600))
+
+				const swatchFlow = await pageFrame.executeJavaScript(
+					`(() => {
+						const el = document.querySelector('[data-caret-id="cta"]')
+						const openState = { inlineAtOpen: el.style.backgroundColor || "" }
+						const swatch = document.querySelector('#caret-color-popover [data-color-token]')
+						if (!swatch) return { error: "no swatch in the popover", openState }
+						const hex = swatch.getAttribute('data-color-token')
+						swatch.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+						return { openState, swatchHex: hex, inlineRightAfterClick: el.style.backgroundColor || "" }
+					})()`,
+				)
+				if (swatchFlow.error) return { error: swatchFlow.error, popover, after }
+
+				await new Promise((r) => setTimeout(r, 2600))
+				const handover = await pageFrame.executeJavaScript(
+					`(() => {
+						const el = document.querySelector('[data-caret-id="cta"]')
+						return {
+							inlineAfterHandover: el.style.backgroundColor || "",
+							computed: window.getComputedStyle(el).backgroundColor,
+						}
+					})()`,
+				)
+
+				// ── Part 3: a PANEL edit must show while the panel is still open ──
+				// react-grab freezes the selected element: ~80 computed properties
+				// pinned as !important inline styles, which mask any class change
+				// HMR applies until deselect. The field report: a text-colour edit
+				// said "applied" and only showed after the widget closed. After a
+				// successful edit-result the panel now strips the important-priority
+				// pins, so the class shows through with the selection still up.
+				await pageFrame.executeJavaScript(`((window).__REACT_GRAB__?.activate?.(), true)`).catch(() => {})
+				await new Promise((r) => setTimeout(r, 500))
+				let panelUp = false
+				for (let attempt = 0; attempt < 5 && !panelUp; attempt++) {
+					wc.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y })
+					await new Promise((r) => setTimeout(r, 300))
+					wc.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					wc.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 })
+					const panelDeadline = Date.now() + 3000
+					while (Date.now() < panelDeadline && !panelUp) {
+						panelUp = await pageFrame
+							.executeJavaScript(`!!document.querySelector('#caret-param-panel [data-param-input="color"]')`)
+							.catch(() => false)
+						if (!panelUp) await new Promise((r) => setTimeout(r, 250))
+					}
+				}
+				if (!panelUp) return { error: "part 3: the param panel never offered a color row", popover, after }
+
+				const fedPanel = await pageFrame.executeJavaScript(
+					`(() => {
+						const el = document.querySelector('[data-caret-id="cta"]')
+						const pinned = []
+						for (let i = 0; i < el.style.length; i++) {
+							const prop = el.style[i]
+							if (el.style.getPropertyPriority(prop) === 'important') pinned.push(prop)
+						}
+						const input = document.querySelector('#caret-param-panel [data-param-input="color"]')
+						const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+						setter.call(input, '#15803d')
+						input.dispatchEvent(new Event('input', { bubbles: true }))
+						input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+						return { pinsAtSelect: pinned.length, colorPinnedAtSelect: pinned.includes('color') }
+					})()`,
+				)
+
+				// Poll: the edit lands (write + HMR), pins release, colour shows —
+				// all while the panel stays open. 8s covers a slow HMR beat.
+				let panelFlow: any = null
+				const panelDeadline = Date.now() + 8000
+				while (Date.now() < panelDeadline) {
+					panelFlow = await pageFrame.executeJavaScript(
+						`(() => {
+							const el = document.querySelector('[data-caret-id="cta"]')
+							let pins = 0
+							for (let i = 0; i < el.style.length; i++) {
+								if (el.style.getPropertyPriority(el.style[i]) === 'important') pins++
+							}
+							return {
+								panelStillOpen: !!document.querySelector('#caret-param-panel'),
+								pinsNow: pins,
+								computedColor: window.getComputedStyle(el).color,
+							}
+						})()`,
+					)
+					if (panelFlow.computedColor === "rgb(21, 128, 61)" && panelFlow.pinsNow === 0) break
+					await new Promise((r) => setTimeout(r, 400))
+				}
+				panelFlow = { ...fedPanel, ...panelFlow }
+				return { ok: true, popover, after, inlineBeforeReopen, swatchFlow, handover, panelFlow }
 			} catch (err) {
 				return { error: err instanceof Error ? err.message : String(err) }
 			}
 		})
 
 		console.log("outcome:", JSON.stringify(outcome, null, 2))
+		const o = outcome as any
+		let failed = !!o.error
+		const check = (ok: boolean, good: string, bad: string) => {
+			console.log(ok ? `${good} ✓` : `${bad} ✗`)
+			if (!ok) failed = true
+		}
+		console.log("--- swatch-flow verdict ---")
+		if (o.swatchFlow && o.handover) {
+			// inlineAtOpen is react-grab's own freeze pin — expected, not ours.
+			// OUR pin is measured before react-grab re-engages: it must be gone.
+			check(o.inlineBeforeReopen === "", "part-1 pin released before reopen", `PART-1 PIN STUCK (${o.inlineBeforeReopen})`)
+			check(
+				!!o.swatchFlow.inlineRightAfterClick,
+				`swatch click painted instantly (${o.swatchFlow.inlineRightAfterClick})`,
+				"SWATCH CLICK DID NOT PAINT",
+			)
+			check(
+				o.handover.inlineAfterHandover === "",
+				`pin handed over to the class (computed now ${o.handover.computed})`,
+				`PIN STUCK (${o.handover.inlineAfterHandover})`,
+			)
+		}
+		console.log("--- panel-flow verdict ---")
+		if (o.panelFlow) {
+			// If react-grab did not freeze at selection there is nothing to
+			// release — report it rather than fail a premise the run lacked.
+			if (o.panelFlow.pinsAtSelect === 0) console.log("no freeze pins at selection — nothing to release (informational)")
+			else
+				check(
+					o.panelFlow.pinsNow === 0,
+					`freeze pins released after the edit (was ${o.panelFlow.pinsAtSelect})`,
+					`FREEZE PINS REMAIN (${o.panelFlow.pinsNow} of ${o.panelFlow.pinsAtSelect})`,
+				)
+			check(o.panelFlow.panelStillOpen === true, "panel still open", "PANEL CLOSED EARLY")
+			check(
+				o.panelFlow.computedColor === "rgb(21, 128, 61)",
+				"colour shows with the selection still up",
+				`COLOUR MASKED (computed ${o.panelFlow.computedColor})`,
+			)
+		}
 		const after = await fs.readFile(pagePath, "utf-8")
 		console.log("--- file state ---")
-		if (after.includes("bg-[#9b4708]")) console.log("FILE EDITED ✓ — one write, bg-error → bg-[#9b4708] (detach; no token to match in this fixture)")
-		else if (!after.includes("bg-error")) console.log("FILE CHANGED to:", after.match(/bg-\S+/)?.[0])
-		else console.log("FILE UNCHANGED ✗ — still bg-error")
+		// Part 1 detaches to bg-[#9b4708]; part 2's first swatch is the error
+		// token and re-binds — so bg-error at the END is part 2 working, and
+		// part 1's write is evidenced by the detach toast it produced.
+		check(String(o.after ?? "").includes("Detached"), "part 1 detached from the token", "PART 1 NEVER DETACHED")
+		check(after.includes("bg-error"), "part 2 re-bound to bg-error", `PART 2 DID NOT RE-BIND (${after.match(/bg-\S+/)?.[0]})`)
+		check(
+			after.includes("text-[#15803d]"),
+			"part 3 wrote the text colour",
+			`PART 3 DID NOT WRITE (${after.match(/text-\S+/)?.[0]})`,
+		)
+		if (failed) process.exitCode = 1
 	} finally {
 		await app.close().catch(() => {})
 		await fs.rm(dir, { recursive: true, force: true }).catch(() => {})

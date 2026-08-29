@@ -3727,10 +3727,34 @@ function generateParamPanel(): string {
 		  render((payload.params || []) as PanelParam[])
 		})
 
+		/* react-grab FREEZES the selected element while its UI is up: ~80 computed
+		 * properties (colors, padding, radius, transform, ...) are pinned as
+		 * !important inline styles so the page holds still under the overlay. A
+		 * class change applied by HMR is invisible behind those pins until
+		 * deselect — the field report was a text-color edit that said "applied"
+		 * and only showed after the panel closed. Unfreeze restores the element's
+		 * pre-freeze inline style per property (usually none), so a pin removed
+		 * early just makes that restore a no-op. Page code never writes
+		 * !important inline styles and Caret's own preview pin is
+		 * normal-priority, so the priority IS the signature of react-grab's pins. */
+		function releaseFreezePins(root: Element) {
+		  for (const node of [root, ...Array.from(root.querySelectorAll("*"))]) {
+		    const style = (node as HTMLElement).style
+		    if (!style || style.length === 0) continue
+		    for (let i = style.length - 1; i >= 0; i--) {
+		      const prop = style[i]
+		      if (style.getPropertyPriority(prop) === "important") style.removeProperty(prop)
+		    }
+		  }
+		}
+
 		// After any successful edit, re-resolve — spans have moved. A resize's
 		// verify runs after the HMR that applies it has had a beat to land.
 		bridge.on("edit-result", (payload: any) => {
-		  if (payload?.success && currentTarget) setTimeout(requestRefresh, 250)
+		  if (payload?.success && currentTarget) {
+		    releaseFreezePins(currentTarget.element)
+		    setTimeout(requestRefresh, 250)
+		  }
 		  if (payload?.success && pendingVerify) setTimeout(() => void runPendingVerify(), 700)
 		  if (payload?.success === false) pendingVerify = null
 		})
@@ -3955,10 +3979,35 @@ function generateCaretGrabPlugin(): string {
 		  host: HTMLDivElement
 		  el: HTMLElement
 		  cssProp: string
-		  priorInline: string
 		  outside: (e: Event) => void
 		} | null = null
-		let colorPreviewRestoreTimer: number | null = null
+
+		/* The one live preview pin. Caret pages never use inline styles (the
+		 * authoring rules ban them), so the preview can own the inline property
+		 * outright: pin when a colour is being tried, unpin to hand back to the
+		 * stylesheet. Tracking the pin module-wide is what keeps a second popover
+		 * from mistaking the first one's leftover pin for the element's real
+		 * style — that leak showed in the field as an edit that "didn't apply"
+		 * until the element was deselected. */
+		let colorPreviewPin: { el: HTMLElement; cssProp: string } | null = null
+		let colorPreviewUnpinTimer: number | null = null
+
+		function pinPreview(el: HTMLElement, cssProp: string, hex: string) {
+		  if (colorPreviewPin && colorPreviewPin.el !== el) unpinPreview()
+		  el.style.setProperty(cssProp, hex)
+		  colorPreviewPin = { el, cssProp }
+		}
+
+		function unpinPreview() {
+		  if (colorPreviewUnpinTimer !== null) {
+		    window.clearTimeout(colorPreviewUnpinTimer)
+		    colorPreviewUnpinTimer = null
+		  }
+		  if (colorPreviewPin) {
+		    colorPreviewPin.el.style.removeProperty(colorPreviewPin.cssProp)
+		    colorPreviewPin = null
+		  }
+		}
 
 		// The colour the user settled on. The detach toast's promote action reads
 		// this rather than the hex that rode in the edit-result.
@@ -4029,29 +4078,35 @@ function generateCaretGrabPlugin(): string {
 		  return groups
 		}
 
-		function closeColorPopover(restorePreview: boolean) {
+		function closeColorPopover(cancelled: boolean) {
 		  const state = colorPopoverState
 		  if (!state) return
 		  colorPopoverState = null
 		  document.removeEventListener("pointerdown", state.outside, true)
 		  state.host.remove()
-		  if (restorePreview) {
-		    if (state.priorInline) state.el.style.setProperty(state.cssProp, state.priorInline)
-		    else state.el.style.removeProperty(state.cssProp)
+		  if (cancelled) {
+		    // Nothing was written: hand straight back to the stylesheet.
+		    unpinPreview()
 		  } else {
-		    // A commit keeps the preview just long enough for HMR to apply the
-		    // real class underneath, then hands back to the stylesheet.
-		    if (colorPreviewRestoreTimer !== null) window.clearTimeout(colorPreviewRestoreTimer)
-		    colorPreviewRestoreTimer = window.setTimeout(() => {
-		      if (state.priorInline) state.el.style.setProperty(state.cssProp, state.priorInline)
-		      else state.el.style.removeProperty(state.cssProp)
-		    }, 1500)
+		    // Committed: the pin already shows the NEW colour (commit paints it
+		    // before closing), so the screen is right immediately. Drop the pin
+		    // once HMR has applied the real class underneath — same colour, so
+		    // the handover is invisible.
+		    if (colorPreviewUnpinTimer !== null) window.clearTimeout(colorPreviewUnpinTimer)
+		    colorPreviewUnpinTimer = window.setTimeout(() => {
+		      colorPreviewUnpinTimer = null
+		      unpinPreview()
+		    }, 1800)
 		  }
 		  try { (window as any).__REACT_GRAB__?.activate?.() } catch {}
 		}
 
 		function openColorPopover(el: HTMLElement, filePath: string, lineNumber: number) {
 		  closeColorPopover(true)
+		  // Any pin left by a previous popover (including a post-commit handover
+		  // still waiting on its timer) must be gone BEFORE the starting colour
+		  // is read, or this popover opens on the preview instead of the truth.
+		  unpinPreview()
 		  ;(window as any).__REACT_GRAB__?.deactivate?.()
 
 		  // The runtime is the only honest source for the starting colour — a
@@ -4142,20 +4197,22 @@ function generateCaretGrabPlugin(): string {
 		    ctx.fillRect(Math.round(x) - 1, 0, 2, hue.height)
 		  }
 
-		  function refresh(fromInput?: boolean) {
+		  function refresh(options?: { fromInput?: boolean; paint?: boolean }) {
 		    drawSv()
 		    drawHue()
 		    const hex = currentHex()
 		    preview.style.background = hex
-		    if (!fromInput) hexInput.value = hex
-		    applyPreview(hex)
-		  }
-
-		  function applyPreview(hex: string) {
-		    el.style.setProperty(cssProp, hex)
+		    if (!options?.fromInput) hexInput.value = hex
+		    // Paint the element only for a real colour interaction — pinning the
+		    // STARTING colour at open masked every later change until the pin
+		    // dropped, which read as "the edit didn't apply".
+		    if (options?.paint !== false) pinPreview(el, cssProp, hex)
 		  }
 
 		  function commit(hex: string) {
+		    // The screen changes the instant the user decides, whatever the path
+		    // in — swatch, Enter, drag release, eyedropper.
+		    pinPreview(el, cssProp, hex)
 		    lastPickedHex = hex
 		    sentInlineEditHere = true
 		    bridge.send({
@@ -4207,7 +4264,7 @@ function generateCaretGrabPlugin(): string {
 		    const hex = normalizeHexInput(hexInput.value)
 		    if (hex) {
 		      hsv = hexToHsv(hex)
-		      refresh(true)
+		      refresh({ fromInput: true })
 		    }
 		  })
 		  hexInput.addEventListener("keydown", (e) => {
@@ -4237,8 +4294,8 @@ function generateCaretGrabPlugin(): string {
 		  }
 		  window.setTimeout(() => document.addEventListener("pointerdown", outside, true), 0)
 
-		  colorPopoverState = { host, el, cssProp, priorInline: el.style.getPropertyValue(cssProp), outside }
-		  refresh()
+		  colorPopoverState = { host, el, cssProp, outside }
+		  refresh({ paint: false })
 		  hexInput.focus()
 		  hexInput.select()
 		}
