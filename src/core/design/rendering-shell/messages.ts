@@ -61,6 +61,12 @@ export interface InlineEditPayload {
 	caretId?: string
 	/** Which rendered row of a .map() template this edit came from (0-based). */
 	instanceIndex?: number
+	/**
+	 * Colour edits: the property the popover previewed, so the host edits the
+	 * class the user was actually looking at rather than the first colour-ish
+	 * one in the className.
+	 */
+	targetProperty?: "background" | "text"
 }
 
 export interface AiEditRequestPayload {

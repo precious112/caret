@@ -774,7 +774,7 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 		const bindTo = tokenClassForHex(payload.newValue, tokens) ?? undefined
 
 		hostFor(workspacePath).noteSelfWrite(payload.filePath)
-		const spliced = await spliceColorEdit(payload.filePath, payload.caretId, payload.newValue, bindTo)
+		const spliced = await spliceColorEdit(payload.filePath, payload.caretId, payload.newValue, bindTo, payload.targetProperty)
 		const result = spliced.handled
 			? { ok: spliced.ok, replacedClass: spliced.replacedClass }
 			: await runExclusive(payload.filePath, () =>

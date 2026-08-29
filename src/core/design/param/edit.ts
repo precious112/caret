@@ -92,9 +92,15 @@ export async function spliceTextEdit(
 }
 
 /**
- * Colour edit by caret-id: replaces the FIRST colour-family utility in the
- * element's className — same user-facing semantic the picker always had —
- * keeping both the family prefix (`bg-` stays `bg-`) and any variant prefix.
+ * Colour edit by caret-id, targeting the property the gesture actually edited.
+ *
+ * `targetProperty` is which colour the popover previewed ("background" when
+ * the element has a visible background, else "text"). The utility of THAT
+ * family is what gets replaced — an unprefixed one first, then a varianted
+ * one, then the old first-any-colour behaviour as the fallback. Without the
+ * preference, "replace the first colour utility" edited the marquee band's
+ * BORDER while the user watched a background preview: the toast said bound,
+ * the preview lifted, and the cream came back.
  * `tokenClass` writes the token name instead of an arbitrary value.
  */
 export async function spliceColorEdit(
@@ -102,6 +108,7 @@ export async function spliceColorEdit(
 	caretId: string | undefined,
 	newColor: string,
 	tokenClass?: string,
+	targetProperty?: "background" | "text",
 ): Promise<SpliceEditOutcome> {
 	if (!caretId) return NOT_HANDLED
 
@@ -120,7 +127,14 @@ export async function spliceColorEdit(
 
 		const value = classAttr?.value ?? ""
 		const utilities = parseClassName(value)
-		const target = utilities.find((utility) => propertyOf(utility.base)?.type === "color")
+		const colorUtilities = utilities.filter((utility) => propertyOf(utility.base)?.type === "color")
+		const preferredFamily = targetProperty === "background" ? "bg-" : targetProperty === "text" ? "text-" : null
+		const unvarianted = (utility: (typeof utilities)[number]) => utility.raw === utility.base
+		const target =
+			(preferredFamily &&
+				(colorUtilities.find((u) => u.base.startsWith(preferredFamily) && unvarianted(u)) ??
+					colorUtilities.find((u) => u.base.startsWith(preferredFamily)))) ||
+			colorUtilities[0]
 		const suffix = tokenClass ?? `[${newColor}]`
 
 		if (target && classAttr?.valueStart !== null && classAttr !== undefined) {
@@ -147,15 +161,16 @@ export async function spliceColorEdit(
 			return [{ start, end, text: replacement }]
 		}
 
-		// No colour class: append one (or create className), same as before.
+		// No colour class: append one of the edited family (or create className).
+		const appendFamily = preferredFamily ?? "text-"
 		if (classAttr && classAttr.valueStart !== null && classAttr.valueEnd !== null) {
 			outcome = { handled: true, ok: true }
 			const needsSpace = value.length > 0
-			return [{ start: classAttr.valueEnd, end: classAttr.valueEnd, text: `${needsSpace ? " " : ""}text-${suffix}` }]
+			return [{ start: classAttr.valueEnd, end: classAttr.valueEnd, text: `${needsSpace ? " " : ""}${appendFamily}${suffix}` }]
 		}
 		if (!classAttr) {
 			outcome = { handled: true, ok: true }
-			return [{ start: element.openingInsertAt, end: element.openingInsertAt, text: ` className="text-${suffix}"` }]
+			return [{ start: element.openingInsertAt, end: element.openingInsertAt, text: ` className="${appendFamily}${suffix}"` }]
 		}
 		return null
 	})

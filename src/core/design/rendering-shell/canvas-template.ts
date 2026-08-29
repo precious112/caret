@@ -4167,6 +4167,9 @@ function generateCaretGrabPlugin(): string {
 		        oldValue: "",
 		        newValue: hex,
 		        caretId: el.getAttribute("data-caret-id") || "",
+		        // The property this popover previewed — the host edits the class
+		        // the user was looking at, not the first colour-ish one.
+		        targetProperty: cssProp === "background-color" ? "background" : "text",
 		      },
 		    })
 		    closeColorPopover(false)

@@ -165,10 +165,15 @@ export function propertyOf(base: string): PropertyMatch | null {
 		if (!base.startsWith(prefix)) continue
 		const suffix = base.slice(prefix.length)
 		// border-2 is a width; border-dashed a style — colours are name-number,
-		// bare names the theme defines, or arbitrary colour values.
+		// bare names the theme defines, or arbitrary colour values. The width
+		// guard must cover the SIDE variants too: `border-y-2` was classified as
+		// a border colour, so a colour edit on an element carrying it replaced
+		// the border WIDTH with a colour class (found in the field on Voltaine's
+		// marquee band). Side-specific colours (`border-t-brand-600`) stay
+		// colours: a side alone or side-number is a width, side-name is not.
 		if (
 			prefix === "border-" &&
-			(/^\d+$/.test(suffix) || ["solid", "dashed", "dotted", "none", "t", "b", "l", "r"].includes(suffix))
+			(/^([xytrbles]|[xytrbles]-\d+|\d+)$/.test(suffix) || ["solid", "dashed", "dotted", "double", "hidden", "none"].includes(suffix))
 		) {
 			return null
 		}

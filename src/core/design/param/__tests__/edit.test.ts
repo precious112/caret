@@ -96,6 +96,55 @@ describe("splice-backed editors", () => {
 		outcome.handled.should.be.false()
 	})
 
+	it("colour: edits the property the gesture targeted, not the first colour-ish class — the marquee shape", async () => {
+		// The exact field failure: a background edit on an element whose
+		// className leads with a border width and a border colour. The old
+		// matcher replaced `border-y-2` (misclassified as a colour), the
+		// background never changed, and the user watched their pick revert.
+		await fs.writeFile(
+			file,
+			`<div data-caret-id="m" className="border-y-2 border-brand-950 bg-brand-500 py-3.5">x</div>`,
+		)
+		const outcome = await spliceColorEdit(file, "m", "#d38809", "brand-600", "background")
+		outcome.ok.should.be.true()
+		outcome.replacedClass?.should.equal("bg-brand-500")
+		const after = await fs.readFile(file, "utf-8")
+		after.should.containEql("border-y-2")
+		after.should.containEql("border-brand-950")
+		after.should.containEql("bg-brand-600")
+		after.should.not.containEql("bg-brand-500")
+	})
+
+	it("colour: a text-targeted edit skips an earlier background class", async () => {
+		await fs.writeFile(file, `<a data-caret-id="cta" className="bg-brand-600 text-neutral-950">x</a>`)
+		const outcome = await spliceColorEdit(file, "cta", "#ffffff", undefined, "text")
+		outcome.replacedClass?.should.equal("text-neutral-950")
+		const after = await fs.readFile(file, "utf-8")
+		after.should.containEql("bg-brand-600")
+		after.should.containEql("text-[#ffffff]")
+	})
+
+	it("colour: prefers the unvarianted class of the target family over a hover variant", async () => {
+		await fs.writeFile(file, `<a data-caret-id="h" className="hover:bg-brand-500 bg-brand-600">x</a>`)
+		const outcome = await spliceColorEdit(file, "h", "#123456", undefined, "background")
+		outcome.replacedClass?.should.equal("bg-brand-600")
+		const after = await fs.readFile(file, "utf-8")
+		after.should.containEql("hover:bg-brand-500")
+		after.should.containEql("bg-[#123456]")
+	})
+
+	it("colour: appends the targeted family when no colour class exists", async () => {
+		await fs.writeFile(file, `<div data-caret-id="bgless" className="p-4">x</div>`)
+		await spliceColorEdit(file, "bgless", "#101010", undefined, "background")
+		;(await fs.readFile(file, "utf-8")).should.containEql(`className="p-4 bg-[#101010]"`)
+	})
+
+	it("colour: without a target, keeps the historical first-colour behaviour", async () => {
+		await fs.writeFile(file, `<div data-caret-id="c2" className="p-4 md:bg-brand-500 text-white">x</div>`)
+		const outcome = await spliceColorEdit(file, "c2", "#123456")
+		outcome.replacedClass?.should.equal("bg-brand-500")
+	})
+
 	it("text: refuses dynamic text with a typed reason instead of falling through", async () => {
 		await fs.writeFile(file, `<p data-caret-id="d">{user.name}</p>`)
 		const outcome = await spliceTextEdit(file, "d", "New")
