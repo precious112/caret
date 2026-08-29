@@ -139,7 +139,10 @@ export function WizardView({ projectPath, initialState, onCommitted, onSwitchToM
 				{(state.phase === "question" || state.phase === "finish") && (
 					<div className="hidden w-56 shrink-0 flex-col gap-7 lg:flex">
 						{state.phase === "question" && state.coverage && <Coverage coverage={state.coverage} />}
-						<SoFar history={state.history} proposalSpec={state.phase === "finish" ? proposalSpec(state) : undefined} />
+						<SoFar
+							history={state.history}
+							proposalSpec={state.phase === "finish" ? proposalSpec(state) : undefined}
+						/>
 					</div>
 				)}
 			</div>
@@ -318,20 +321,23 @@ function Coverage({ coverage }: { coverage: NonNullable<Extract<WizardStateWire,
 		<aside data-testid="wizard-coverage">
 			<p className="text-[11px] tracking-wider text-shell-muted uppercase">Covering</p>
 			<ul className="mt-3 flex flex-col gap-1.5">
-				{[...coverage.done.map((area) => ({ ...area, done: true })), ...coverage.missing.map((area) => ({ ...area, done: false }))].map(
-					(area) => (
-						<li className="flex items-center gap-2 text-[11.5px]" key={area.id}>
-							<span
-								className={cn(
-									"flex size-3.5 shrink-0 items-center justify-center rounded-full border",
-									area.done ? "border-caret-accent bg-caret-accent/15 text-caret-accent" : "border-shell-border text-transparent",
-								)}>
-								<Check size={9} strokeWidth={3} />
-							</span>
-							<span className={area.done ? "" : "text-shell-muted"}>{area.label}</span>
-						</li>
-					),
-				)}
+				{[
+					...coverage.done.map((area) => ({ ...area, done: true })),
+					...coverage.missing.map((area) => ({ ...area, done: false })),
+				].map((area) => (
+					<li className="flex items-center gap-2 text-[11.5px]" key={area.id}>
+						<span
+							className={cn(
+								"flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+								area.done
+									? "border-caret-accent bg-caret-accent/15 text-caret-accent"
+									: "border-shell-border text-transparent",
+							)}>
+							<Check size={9} strokeWidth={3} />
+						</span>
+						<span className={area.done ? "" : "text-shell-muted"}>{area.label}</span>
+					</li>
+				))}
 			</ul>
 		</aside>
 	)
@@ -423,7 +429,15 @@ export function __PreviewQuestion({
 				baseOverride={base}
 				onAnswer={() => {}}
 				onFinishNow={index > 0 ? () => {} : undefined}
-				state={{ phase: "question", mode: "ai-led", description: "", current: question, asked: index, cap: 10, history: [] }}
+				state={{
+					phase: "question",
+					mode: "ai-led",
+					description: "",
+					current: question,
+					asked: index,
+					cap: 10,
+					history: [],
+				}}
 			/>
 		</div>
 	)
@@ -653,6 +667,7 @@ function FontWidget({
 	const [customFamily, setCustomFamily] = useState<string | null>(null)
 	const [query, setQuery] = useState("")
 	const [results, setResults] = useState<Array<{ family: string; category: string }>>([])
+	const [searchSource, setSearchSource] = useState<"google-fonts" | "bundled">("google-fonts")
 
 	useFonts([
 		...options.flatMap((option) => familiesOf({ ...base, ...option.spec, displayFamily: option.label })),
@@ -677,7 +692,10 @@ function FontWidget({
 			return
 		}
 		const timer = setTimeout(() => {
-			void invoke("fonts:search", query).then((fonts) => setResults(fonts.slice(0, 6)))
+			void invoke("fonts:search", query).then((result) => {
+				setResults(result.fonts.slice(0, 6))
+				setSearchSource(result.source)
+			})
 		}, 250)
 		return () => clearTimeout(timer)
 	}, [query])
@@ -744,6 +762,16 @@ function FontWidget({
 								</button>
 							))}
 						</div>
+					)}
+
+					{/* An offline search must say it is one: it covers 20 fonts, not
+					    the catalogue the placeholder promises — especially when it
+					    finds nothing, which otherwise reads as "no such font". */}
+					{searchSource === "bundled" && query.trim().length >= 2 && (
+						<p className="mt-2 text-[11px] text-shell-muted" data-testid="wizard-font-offline">
+							Offline — searching a small built-in list, not all of Google Fonts. A font missing here may still
+							exist.
+						</p>
 					)}
 				</div>
 			)}

@@ -50,7 +50,8 @@ export const DesignServiceClient = {
 
 	async searchGoogleFonts(request: {
 		value: string
-	}): Promise<{ fonts: Array<{ family: string; category: string; variants: string[] }> }> {
-		return { fonts: await invoke("fonts:search", request.value) }
+	}): Promise<{ fonts: Array<{ family: string; category: string; variants: string[] }>; source: "google-fonts" | "bundled" }> {
+		const result = await invoke("fonts:search", request.value)
+		return { fonts: result.fonts, source: result.source }
 	},
 }

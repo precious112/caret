@@ -18,6 +18,7 @@ const BODY_WEIGHTS = [300, 400, 500]
 function FontSearch({ current, onSelect }: { current: string; onSelect(family: string): void }) {
 	const [fontSearch, setFontSearch] = useState("")
 	const [fontResults, setFontResults] = useState<FontResult[]>([])
+	const [searchSource, setSearchSource] = useState<"google-fonts" | "bundled">("google-fonts")
 	const [showDropdown, setShowDropdown] = useState(false)
 	const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -36,6 +37,7 @@ function FontSearch({ current, onSelect }: { current: string; onSelect(family: s
 			try {
 				const response = await DesignServiceClient.searchGoogleFonts({ value: fontSearch })
 				setFontResults(response.fonts)
+				setSearchSource(response.source)
 			} catch (e) {
 				console.error("Font search failed:", e)
 			}
@@ -77,6 +79,14 @@ function FontSearch({ current, onSelect }: { current: string; onSelect(family: s
 						</button>
 					))}
 				</div>
+			)}
+			{/* An offline search must say it is one: it covers 20 fonts, not the
+			    whole catalogue — especially when it finds nothing, which otherwise
+			    reads as "no such font". */}
+			{searchSource === "bundled" && fontSearch.trim().length >= 2 && (
+				<p className="mt-1 text-xs text-muted-foreground">
+					Offline — searching a small built-in list, not all of Google Fonts. A font missing here may still exist.
+				</p>
 			)}
 		</div>
 	)
@@ -184,7 +194,9 @@ export function TypographyStep({ tokens, onChange }: Props) {
 						<span className="text-xs text-muted-foreground">
 							Current: <strong>{tokens.typography.displayFamily}</strong>
 							{" · "}
-							<button className="text-button-background hover:underline" onClick={() => selectDisplayFont(undefined)}>
+							<button
+								className="text-button-background hover:underline"
+								onClick={() => selectDisplayFont(undefined)}>
 								Same as body
 							</button>
 						</span>

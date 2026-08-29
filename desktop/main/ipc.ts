@@ -6,7 +6,7 @@
  * A handler for a project that is not open returns null rather than falling back
  * to whichever one happens to be focused.
  */
-import { dialog, ipcMain, shell } from "electron"
+import { app, dialog, ipcMain, shell } from "electron"
 import * as fs from "fs/promises"
 import * as path from "path"
 
@@ -36,8 +36,8 @@ import {
 	searchGoogleFonts,
 	setPoster,
 	validateFoundationTokens,
-	withDerivedScales,
 	type WizardAnswer,
+	withDerivedScales,
 	writeFoundationTokens,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
@@ -192,7 +192,12 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return countAllTokenUses(path.join(projectPath, ".caret"), tokens)
 	})
 
-	ipcMain.handle("fonts:search", (_event, query: string) => searchGoogleFonts(query, { apiKey: getPrefs().googleFontsApiKey }))
+	ipcMain.handle("fonts:search", (_event, query: string) =>
+		searchGoogleFonts(query, {
+			apiKey: getPrefs().googleFontsApiKey,
+			cacheFile: path.join(app.getPath("userData"), "google-fonts-catalog.json"),
+		}),
+	)
 
 	// ── pages ─────────────────────────────────────────────────────────────────
 

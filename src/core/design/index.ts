@@ -192,6 +192,7 @@ export {
 	signalKey,
 	TOKEN_SIGNAL_THRESHOLD,
 } from "./corrections"
+export { leadingFor, onColorFor, withDerivedScales } from "./derive"
 export {
 	BUILTIN_CHECKS,
 	CHECKS_CONFIG_FILE,
@@ -244,21 +245,21 @@ export {
 	type TypefacePairing,
 	tagsFromAnswers,
 } from "./foundation-library"
-export { type FontOption, searchGoogleFonts } from "./google-fonts"
+export { type FontOption, type FontSearchResult, searchGoogleFonts } from "./google-fonts"
 export { type DesignHost, type NotifyLevel, nullDesignHost } from "./host"
 export {
 	buildFoundation,
+	COLLABORATIVE_QUESTION_CAP,
+	COVERAGE_AREAS,
 	type CommittedFoundation,
 	type ConductorInput,
 	clearWizardScratch,
+	coveredAreas,
 	type Decisions,
 	type FinalizedFoundation,
 	type FoundationProposal,
 	finalizeProposal,
 	IncompleteInterviewError,
-	COLLABORATIVE_QUESTION_CAP,
-	COVERAGE_AREAS,
-	coveredAreas,
 	nextWizardTurn,
 	normalizeHex,
 	ProposalError,
@@ -331,7 +332,6 @@ export {
 } from "./sync/sync-completion"
 export { runSync, type SyncOptions, type SyncResult, type SyncStatus } from "./sync/sync-orchestrator"
 export { readSyncState, writeSyncState } from "./sync/sync-state"
-export { leadingFor, onColorFor, withDerivedScales } from "./derive"
 export { contrastRatio, generateNeutralScale, generateTokenScale, hexToHsl, hslToHex, type TokenScaleType } from "./token-scales"
 export { readComponentTokens, readFoundationTokens, validateFoundationTokens, writeFoundationTokens } from "./tokens"
 export type {

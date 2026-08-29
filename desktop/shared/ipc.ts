@@ -418,6 +418,12 @@ export interface FontOptionWire {
 	variants: string[]
 }
 
+export interface FontSearchResultWire {
+	fonts: FontOptionWire[]
+	/** "google-fonts" is the full catalogue; "bundled" means offline, 20 fonts. */
+	source: "google-fonts" | "bundled"
+}
+
 /**
  * An asset as the renderer sees it.
  *
@@ -677,7 +683,7 @@ export interface IpcRequests {
 		seed: string,
 		options?: Record<string, unknown>,
 	) => Record<string, string>
-	"fonts:search": (query: string) => FontOptionWire[]
+	"fonts:search": (query: string) => FontSearchResultWire
 
 	"pages:list": (projectPath: string) => PageMetaWire[]
 
