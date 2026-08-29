@@ -2275,8 +2275,9 @@ function generateBridge(): string {
 		  }
 
 		  if (e.data.type === "undo-result" && undoSentFromThisFrame) {
-		    const { undone, label, error } = e.data.payload
-		    showToast(undone ? \`Undid: \${label}\` : (error || "Nothing to undo"), !undone)
+		    const { undone, label, error, redo } = e.data.payload
+		    const verb = redo ? "Redid" : "Undid"
+		    showToast(undone ? \`\${verb}: \${label}\` : (error || (redo ? "Nothing to redo" : "Nothing to undo")), !undone)
 		  }
 
 		  const handlers = listeners.get(e.data.type)
@@ -2290,7 +2291,7 @@ function generateBridge(): string {
 		    if (message.type === "param-edit" || message.type === "resize-commit" || message.type === "inline-edit") {
 		      editSentFromThisFrame = true
 		    }
-		    if (message.type === "design-undo") undoSentFromThisFrame = true
+		    if (message.type === "design-undo" || message.type === "design-redo") undoSentFromThisFrame = true
 		    window.parent.postMessage({ source: "caret-vite", ...message }, "*")
 		  },
 
@@ -2946,6 +2947,7 @@ function generateLayersPanel(): string {
 		    ["Drag a handle", "resize; flex and grid preview through a clamp"],
 		    ["Enter (in a panel row)", "commit the value"],
 		    ["\u2318Z / Ctrl+Z", "undo the last design change (one step per gesture)"],
+		    ["\u21e7\u2318Z / Ctrl+Shift+Z", "redo what you just undid"],
 		    ["L", "toggle the layers panel"],
 		    ["Esc", "close panels, cancel a drag, deselect"],
 		    ["?", "this map"],
@@ -3785,11 +3787,11 @@ function generateCaretGrabPlugin(): string {
 		  if (e.key === "Escape") hideParamPanel()
 		  // The design layer's unified undo. Not while typing — contentEditable
 		  // and inputs keep their native undo.
-		  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+		  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
 		    const active = document.activeElement as HTMLElement | null
 		    if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return
 		    e.preventDefault()
-		    bridge.send({ type: "design-undo", payload: {} })
+		    bridge.send({ type: e.shiftKey ? "design-redo" : "design-undo", payload: {} })
 		  }
 		})
 

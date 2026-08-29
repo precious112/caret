@@ -24,7 +24,7 @@ import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, hostFor } from "../services"
 import { recordMappings } from "../sync/mapping-manifest"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
-import { captureUndoStep, undoLastStep } from "../undo/design-undo"
+import { captureUndoStep, redoStep, undoLastStep } from "../undo/design-undo"
 import {
 	applyVariantChoice,
 	createVariantSet,
@@ -243,6 +243,16 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 				source: "caret-host",
 				type: "undo-result",
 				payload: { undone: undo.undone, label: undo.label ?? "", error: undo.error ?? "" },
+			})
+			break
+		}
+
+		case "design-redo": {
+			const redo = await redoStep(workspacePath)
+			hostFor(workspacePath).sendToCanvas({
+				source: "caret-host",
+				type: "undo-result",
+				payload: { undone: redo.undone, label: redo.label ?? "", error: redo.error ?? "", redo: true },
 			})
 			break
 		}

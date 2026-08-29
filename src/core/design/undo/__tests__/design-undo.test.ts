@@ -5,7 +5,7 @@ import * as path from "path"
 
 import "should"
 
-import { captureUndoStep, listUndoSteps, undoLastStep } from "../design-undo"
+import { captureUndoStep, listUndoSteps, redoStep, undoLastStep } from "../design-undo"
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf-8" })
@@ -38,17 +38,90 @@ describe("design undo — one stack for every design-layer actor", () => {
 		;(await fs.readFile(pagePath, "utf-8")).should.containEql("Original")
 	})
 
-	it("an undo is itself undoable — redo through the same stack", async () => {
-		await captureUndoStep(dir, "text edit on t")
-		await fs.writeFile(pagePath, `<h1 data-caret-id="t">Changed</h1>\n`)
+	it("repeated undo WALKS BACK through the history — never ping-pongs", async () => {
+		// The first model pushed the pre-undo state back on top, so a second ⌘Z
+		// restored what the first had just removed: black ↔ blue forever, with
+		// everything older buried. Found in the field the first time someone
+		// leaned on multi-undo. Three edits must unwind in order.
+		await captureUndoStep(dir, "edit one")
+		await fs.writeFile(pagePath, `v2\n`)
+		await captureUndoStep(dir, "edit two")
+		await fs.writeFile(pagePath, `v3\n`)
+		await captureUndoStep(dir, "edit three")
+		await fs.writeFile(pagePath, `v4\n`)
 
-		;(await undoLastStep(dir)).undone.should.be.true()
+		const u1 = await undoLastStep(dir)
+		u1.label?.should.equal("edit three")
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v3\n")
+
+		const u2 = await undoLastStep(dir)
+		u2.label?.should.equal("edit two")
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v2\n")
+
+		const u3 = await undoLastStep(dir)
+		u3.label?.should.equal("edit one")
 		;(await fs.readFile(pagePath, "utf-8")).should.containEql("Original")
 
-		const redo = await undoLastStep(dir)
-		redo.undone.should.be.true()
-		redo.label?.should.containEql('undo of "text edit on t"')
-		;(await fs.readFile(pagePath, "utf-8")).should.containEql("Changed")
+		const u4 = await undoLastStep(dir)
+		u4.undone.should.be.false()
+		u4.error?.should.containEql("Nothing to undo")
+	})
+
+	it("redo walks forward again, all the way to the live state", async () => {
+		await captureUndoStep(dir, "edit one")
+		await fs.writeFile(pagePath, `v2\n`)
+		await captureUndoStep(dir, "edit two")
+		await fs.writeFile(pagePath, `v3\n`)
+
+		await undoLastStep(dir)
+		await undoLastStep(dir)
+		;(await fs.readFile(pagePath, "utf-8")).should.containEql("Original")
+
+		const r1 = await redoStep(dir)
+		r1.undone.should.be.true()
+		r1.label?.should.equal("edit one")
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v2\n")
+
+		const r2 = await redoStep(dir)
+		r2.undone.should.be.true()
+		r2.label?.should.equal("edit two")
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v3\n")
+
+		const r3 = await redoStep(dir)
+		r3.undone.should.be.false()
+		r3.error?.should.containEql("Nothing to redo")
+
+		// Back at the live edge: a fresh undo starts a fresh walk.
+		const u = await undoLastStep(dir)
+		u.label?.should.equal("edit two")
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v2\n")
+	})
+
+	it("a new edit while undone discards the redo future", async () => {
+		await captureUndoStep(dir, "edit one")
+		await fs.writeFile(pagePath, `v2\n`)
+		await captureUndoStep(dir, "edit two")
+		await fs.writeFile(pagePath, `v3\n`)
+
+		await undoLastStep(dir) // back to v2
+		await captureUndoStep(dir, "a different edit")
+		await fs.writeFile(pagePath, `branch\n`)
+
+		const r = await redoStep(dir)
+		r.undone.should.be.false()
+		r.error?.should.containEql("Nothing to redo")
+
+		const u = await undoLastStep(dir)
+		u.undone.should.be.true()
+		;(await fs.readFile(pagePath, "utf-8")).should.equal("v2\n")
+	})
+
+	it("redo before any undo refuses honestly", async () => {
+		await captureUndoStep(dir, "edit one")
+		await fs.writeFile(pagePath, `v2\n`)
+		const r = await redoStep(dir)
+		r.undone.should.be.false()
+		r.error?.should.containEql("Nothing to redo")
 	})
 
 	it("removes files the step's edit created", async () => {

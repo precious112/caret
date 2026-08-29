@@ -252,6 +252,7 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"flow-edge-update": (p) => isStr(p.flowId) && isStr(p.fromPage) && isStr(p.oldToPage) && isStr(p.newToPage),
 	"design-sync-now": () => true,
 	"design-undo": () => true,
+	"design-redo": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
 	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
 	"param-resolve": (p) => isStr(p.filePath) && isStr(p.caretId) && isNum(p.viewportWidth),
@@ -284,6 +285,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "flow-edge-update"; payload: FlowEdgeUpdatePayload }
 	| { source: "caret-vite"; type: "design-sync-now"; payload: Record<string, never> }
 	| { source: "caret-vite"; type: "design-undo"; payload: Record<string, never> }
+	| { source: "caret-vite"; type: "design-redo"; payload: Record<string, never> }
 	| { source: "caret-vite"; type: "promote-token"; payload: PromoteTokenPayload }
 	| { source: "caret-vite"; type: "variant-request"; payload: VariantRequestPayload }
 	| { source: "caret-vite"; type: "param-edit"; payload: ParamEditPayload }
@@ -312,6 +314,8 @@ export interface UndoResultPayload {
 	undone: boolean
 	label: string
 	error: string
+	/** Set when this result answers a redo rather than an undo. */
+	redo?: boolean
 }
 
 export interface ParamResolveResultPayload {
