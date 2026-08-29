@@ -3918,6 +3918,25 @@ function generateCaretGrabPlugin(): string {
 
 		let lastResolvedSource: SourceLocation | null = null
 
+		/**
+		 * Same-id elements FROM THE SAME SOURCE FILE, in DOM order. Caret-ids are
+		 * unique per file, not per document: a page and its AppShell each have
+		 * their own "span-3", and both render into one document. Counting twins
+		 * with a bare id query shifted every .map() row's instance index by the
+		 * number of colliding elements rendered before it — the host then edited
+		 * the WRONG data item and refused with a mismatch (found in the field:
+		 * AppShell's wordmark span-3 sat before the tasting-tag chips).
+		 */
+		function sameFileTwins(el: Element, filePath: string): Element[] {
+		  const id = el.getAttribute("data-caret-id")
+		  if (!id) return [el]
+		  return Array.from(document.querySelectorAll('[data-caret-id="' + id + '"]')).filter((twin) => {
+		    if (twin === el) return true
+		    const source = resolveSourceFromFiber(twin)
+		    return !!source && source.filePath === filePath
+		  })
+		}
+
 		/** True once THIS frame has sent an inline edit — the feedback gate. */
 		let sentInlineEditHere = false
 		/** The text edit in flight, so a failure can put the original back. */
@@ -4332,8 +4351,9 @@ function generateCaretGrabPlugin(): string {
 		            // A .map() row (one template id, many rendered instances) IS
 		            // editable: the content edit routes to the row's data item
 		            // (Phase 8.6). Only single-instance dynamic text stays blocked.
-		            const rowId = el.getAttribute("data-caret-id")
-		            if (!rowId || document.querySelectorAll('[data-caret-id="' + rowId + '"]').length < 2) return false
+		            // Twins counted per source file — another file's same-named id
+		            // must not make a lone dynamic span look like a row.
+		            if (!el.getAttribute("data-caret-id") || sameFileTwins(el, source.filePath).length < 2) return false
 		          }
 		          return true
 		        },
@@ -4368,10 +4388,12 @@ function generateCaretGrabPlugin(): string {
 		            const newText = el.textContent || ""
 		            if (newText !== original) {
 		              log("edit-text: sending", filePath, JSON.stringify(original), "->", JSON.stringify(newText))
-		              // Same-id siblings mean a .map() template: say WHICH row this is,
-		              // so the host can route the content edit to that data item.
-		              const editId = el.getAttribute("data-caret-id") || ""
-		              const twins = editId ? Array.from(document.querySelectorAll('[data-caret-id="' + editId + '"]')) : []
+		              // Same-id siblings FROM THIS FILE mean a .map() template: say
+		              // WHICH row this is, so the host can route the content edit to
+		              // that data item. The index counts this file's instances only —
+		              // ids are per-file, and another component's same-named id in
+		              // the document must not shift it.
+		              const twins = sameFileTwins(el, filePath)
 		              sentInlineEditHere = true
 		              pendingTextRevert = { el, original, newText }
 		              bridge.send({
@@ -4383,7 +4405,7 @@ function generateCaretGrabPlugin(): string {
 		                  oldValue: original,
 		                  newValue: newText,
 		                  tagName: el.tagName.toLowerCase(),
-		                  caretId: editId,
+		                  caretId: el.getAttribute("data-caret-id") || "",
 		                  ...(twins.length > 1 ? { instanceIndex: twins.indexOf(el) } : {}),
 		                },
 		              })
