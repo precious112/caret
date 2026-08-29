@@ -81,6 +81,26 @@ describe("validateQuestion", () => {
 		assert.throws(() => validateQuestion(question({ options: [{ id: "a", label: "Only" }] }), []), WizardTurnError)
 	})
 
+	it("rejects a 'you decide' option — Skip and the recommendation carry delegation", () => {
+		// Field-measured (test4): the delegate option was the only escape when
+		// the user's value was not on offer, and clicking it sealed the area.
+		for (const label of ["You decide", "Whatever you think works", "Up to you"]) {
+			assert.throws(
+				() =>
+					validateQuestion(
+						question({
+							options: [
+								{ id: "a", label: "Deep green #2d6a4f" },
+								{ id: "b", label },
+							],
+						}),
+						[],
+					),
+				(err: unknown) => err instanceof WizardTurnError && /concrete outcome/.test(err.message),
+			)
+		}
+	})
+
 	it("rejects a colour option without a usable hex, and normalises the rest", () => {
 		assert.throws(
 			() =>
@@ -256,6 +276,16 @@ describe("nextWizardTurn", () => {
 	})
 
 	describe("collaborative mode", () => {
+		it("covers the secondary and the accent as separate areas", () => {
+			// As one "supporting-colors" area, a single delegated question
+			// satisfied the checklist while the accent was never mentioned —
+			// test4 committed with accent: null.
+			const ids = COVERAGE_AREAS.map((area) => area.id)
+			assert.ok(ids.includes("secondary-color"))
+			assert.ok(ids.includes("accent-color"))
+			assert.ok(!ids.includes("supporting-colors"))
+		})
+
 		/** One answered question per coverage area, each properly tagged. */
 		function fullCoverage(): StoredQA[] {
 			return COVERAGE_AREAS.map((area, index) => ({

@@ -229,7 +229,7 @@ function Question({
 			{question.why && <p className="mt-1.5 max-w-2xl leading-relaxed text-shell-muted">{question.why}</p>}
 
 			<div className="mt-6">
-				<Widget base={base} onPick={setPick} question={question} />
+				<Widget base={base} collab={state.mode === "collaborative"} onPick={setPick} question={question} />
 			</div>
 
 			<div className="mt-7 flex items-center gap-2">
@@ -241,12 +241,16 @@ function Question({
 					type="button">
 					Continue
 				</button>
+				{/* Skip, not "You decide": skipping means the recommendation stands.
+				    The old label made this the only escape when someone's value was
+				    not among the options — the custom inputs are that escape now. */}
 				<button
 					className="rounded-lg px-3 py-2 text-shell-muted transition-colors hover:bg-white/5"
 					data-testid="wizard-skip"
 					onClick={() => answer({ value: "", skipped: true })}
+					title="Skip this question — the recommended choice is used"
 					type="button">
-					You decide
+					Skip
 				</button>
 				{onFinishNow && (
 					<button
@@ -469,22 +473,25 @@ function Reason({ reason }: { reason?: string }) {
 function Widget({
 	question,
 	base,
+	collab,
 	onPick,
 }: {
 	question: WizardQuestionWire
 	base: WizardSpecWire
+	/** Collaborative mode: numbers on screen, own-value inputs everywhere. */
+	collab?: boolean
 	onPick(pick: Pick | null): void
 }) {
 	switch (question.kind) {
 		case "options":
 		case "boolean":
-			return <OptionsWidget base={base} onPick={onPick} question={question} />
+			return <OptionsWidget base={base} collab={collab} onPick={onPick} question={question} />
 		case "color":
 			return <ColorWidget base={base} onPick={onPick} question={question} />
 		case "font":
 			return <FontWidget base={base} onPick={onPick} question={question} />
 		case "scale":
-			return <ScaleWidget base={base} onPick={onPick} question={question} />
+			return <ScaleWidget base={base} collab={collab} onPick={onPick} question={question} />
 		case "chips":
 			return <ChipsWidget onPick={onPick} question={question} />
 		case "text":
@@ -494,25 +501,51 @@ function Widget({
 	}
 }
 
+/**
+ * The concrete numbers a spec carries, in plain words. Collaborative mode
+ * prints these under options and scale steps: someone with design experience
+ * is choosing values, and "comfortable" hiding 17px is how test4 committed a
+ * base size its user never chose.
+ */
+function specNumbers(spec: WizardSpecWire | undefined): string {
+	if (!spec) return ""
+	const parts: string[] = []
+	if (spec.baseSize !== undefined) parts.push(`${spec.baseSize}px body text`)
+	if (spec.spacingUnit !== undefined) parts.push(`${spec.spacingUnit}px spacing unit`)
+	if (spec.radius !== undefined) parts.push(`${spec.radius}px corners`)
+	if (spec.accent) parts.push(spec.accent)
+	return parts.join(" · ")
+}
+
 function OptionsWidget({
 	question,
 	base,
+	collab,
 	onPick,
 }: {
 	question: WizardQuestionWire
 	base: WizardSpecWire
+	collab?: boolean
 	onPick(pick: Pick | null): void
 }) {
 	const options = question.options ?? []
 	const [selected, setSelected] = useState(question.recommendedId ?? options[0]?.id ?? "")
+	const [own, setOwn] = useState("")
 
 	useFonts(options.flatMap((option) => familiesOf({ ...base, ...option.spec })))
 
 	useEffect(() => {
+		// Their own typed value wins over the cards: the value they want may
+		// simply not be on offer, and this field is how they say it here rather
+		// than after the interview, token by token.
+		if (own.trim()) {
+			onPick({ answer: { value: own.trim(), label: own.trim(), wasOther: true } })
+			return
+		}
 		const option = options.find((candidate) => candidate.id === selected)
 		if (option) onPick({ answer: { value: option.id, label: option.label }, reason: option.reason })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selected])
+	}, [selected, own])
 
 	return (
 		<div>
@@ -525,14 +558,35 @@ function OptionsWidget({
 				{options.map((option) => (
 					<OptionCard
 						key={option.id}
-						onSelect={() => setSelected(option.id)}
+						onSelect={() => {
+							setOwn("")
+							setSelected(option.id)
+						}}
 						option={option}
-						recommended={option.id === question.recommendedId}
-						selected={option.id === selected}>
+						recommended={option.id === question.recommendedId && !own.trim()}
+						selected={option.id === selected && !own.trim()}>
 						<Specimen spec={{ ...base, ...option.spec }} tall />
+						{collab && specNumbers(option.spec) && (
+							<p className="mt-1.5 text-[11px] text-shell-muted" data-testid="wizard-option-numbers">
+								{specNumbers(option.spec)}
+							</p>
+						)}
 					</OptionCard>
 				))}
 			</div>
+
+			{collab && question.kind !== "boolean" && (
+				<input
+					className={cn(
+						"mt-4 w-full rounded-xl border bg-shell-panel px-4 py-2.5 text-[12.5px] outline-none",
+						own.trim() ? "border-caret-accent" : "border-shell-border focus:border-caret-accent/60",
+					)}
+					data-testid="wizard-options-own"
+					onChange={(event) => setOwn(event.target.value)}
+					placeholder="None of these — type exactly what you want (values welcome: px, hex, ratios)…"
+					value={own}
+				/>
+			)}
 			<Reason reason={options.find((option) => option.id === selected)?.reason} />
 		</div>
 	)
@@ -786,10 +840,12 @@ function FontWidget({
 function ScaleWidget({
 	question,
 	base,
+	collab,
 	onPick,
 }: {
 	question: WizardQuestionWire
 	base: WizardSpecWire
+	collab?: boolean
 	onPick(pick: Pick | null): void
 }) {
 	const steps = question.steps ?? []
@@ -843,7 +899,16 @@ function ScaleWidget({
 					))}
 				</div>
 
-				{question.other === "text" && (
+				{/* Collaborative mode shows what the chosen step actually means in
+				    numbers: "comfortable" silently meaning 17px is how test4 got a
+				    base size its user never chose. */}
+				{collab && specNumbers(steps[index]?.spec) && !custom.trim() && (
+					<p className="mt-2 text-[11.5px] text-shell-muted" data-testid="wizard-scale-numbers">
+						{steps[index]?.label}: {specNumbers(steps[index]?.spec)}
+					</p>
+				)}
+
+				{(collab || question.other === "text") && (
 					<input
 						className={cn(
 							"mt-3 w-full rounded-lg border bg-shell-panel px-3 py-1.5 text-[12.5px] outline-none",
@@ -851,7 +916,11 @@ function ScaleWidget({
 						)}
 						data-testid="wizard-scale-other"
 						onChange={(event) => setCustom(event.target.value)}
-						placeholder="Or say it in your own words…"
+						placeholder={
+							collab
+								? "None of these — type exactly what you want (values welcome: px, ratios)…"
+								: "Or say it in your own words…"
+						}
 						value={custom}
 					/>
 				)}

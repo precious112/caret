@@ -60,7 +60,11 @@ export const COVERAGE_AREAS: ReadonlyArray<{ id: string; label: string }> = [
 	{ id: "body-type", label: "the body typeface" },
 	{ id: "type-scale", label: "type size and weight" },
 	{ id: "brand-color", label: "the brand colour" },
-	{ id: "supporting-colors", label: "supporting and accent colours" },
+	// Two areas, not one: as a single area, one delegated "supporting colours"
+	// question satisfied the checklist while the accent was never mentioned —
+	// field-measured (test4's committed foundation has accent: null).
+	{ id: "secondary-color", label: "a supporting colour" },
+	{ id: "accent-color", label: "an accent colour" },
 	{ id: "neutral", label: "the greys" },
 	{ id: "surface", label: "light or dark" },
 	{ id: "semantics", label: "success/warning/error colours" },
@@ -81,6 +85,10 @@ export function coveredAreas(history: StoredQA[]): string[] {
 /** "Yes, all of these" and its relatives — see the `assumptions` check below. */
 const BLANKET_CONFIRM =
 	/^(yes\b|all of (these|the above)|confirm all|these are all|that('| i)s all correct|sounds right|looks right|agree)/i
+
+/** "You decide" and its relatives — see the delegation check below. */
+const DELEGATE_OPTION =
+	/\byou (decide|choose|pick)\b|\b(up to you|your call|whatever you think|whatever works|surprise me|dealer'?s choice|(you|caret) (pick|choose)s? for me|let (you|caret) (decide|choose|pick))\b/i
 
 export class WizardTurnError extends Error {
 	constructor(message: string) {
@@ -127,10 +135,20 @@ corner character — by asking the fewest, best questions, then hand back the pa
   answered question tagged with it:
 ${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n")}
   Tag every question with \`covers: [...]\` naming the areas it settles. One question may
-  settle several (a palette question can carry \`brand-color\` and \`supporting-colors\`), but
+  settle several (a palette question can carry \`brand-color\` and \`secondary-color\`), but
   a tag is a claim — only tag what the question genuinely asks about.
-- The palette is more than one colour: ask about supporting and accent colours explicitly
-  ("none" is a legitimate answer, but it must be their answer).
+- The palette is more than one colour: ask about the supporting colour and the accent
+  colour explicitly ("none" is a legitimate answer, but it must be their answer).
+- **Name the numbers.** Plain language stays, but this person wants to see exactly what
+  they are choosing: every option that embodies a value states it — hexes, pixel sizes,
+  ratios, spacing units ("Comfortable — 16px body text, headings step up ×1.25"). An
+  option without its number cannot be held to anything.
+- **Never offer an option that means "you decide" / "whatever you think".** Your
+  \`recommendedId\` already carries your proposal; every option names a concrete outcome.
+  The UI has a Skip button — a skipped question means your recommendation stands, and its
+  concrete value still goes in \`decisions\`.
+- Answers may arrive as the user's own typed value instead of one of your options. Take
+  them verbatim — exact values from the user are the point of this mode.
 - You will be told the count; at ${COLLABORATIVE_QUESTION_CAP} you must finish.
 - Still mark a \`recommendedId\` — **except on \`assumptions\`, which must not have one.** A
   recommendation is your proposal to react to, not a decision made for them.
@@ -141,6 +159,8 @@ ${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n"
 - **Never ask what their description already answers.** Infer it, and confirm inferences with
   one \`assumptions\` question rather than several individual ones.
 - Aim for 4–7 questions total. You will be told the count; at ${QUESTION_CAP} you must finish.
+- Never offer an option that means "you decide" — the Skip button and your \`recommendedId\`
+  already cover that; every option names a concrete outcome.
 - Always mark a \`recommendedId\` — **except on \`assumptions\`, which must not have one.**
   Someone pressing straight through your questions must end up with a foundation you would
   defend.
@@ -246,14 +266,14 @@ rule for how colour is used, vibeTags, and a 2–3 sentence summary addressed to
 Optional when the product calls for them: a \`secondary\` hex, an \`accent\` hex, an
 \`elevationCharacter\` (flat/subtle/pronounced), a \`displayWeight\` and \`bodyWeight\`.
 Caret derives all scales and writes the file — you name parameters only.${
-	mode === "collaborative"
-		? `
+		mode === "collaborative"
+			? `
 
 The finish must also carry \`decisions\`: one entry per coverage area (\`area\`, \`choice\`,
 \`reason\`), each reason grounded in what THEY answered — this is the record that lets them
 audit the design system later. A finish that skips an area or its decision is rejected.`
-		: ""
-}
+			: ""
+	}
 
 ## Known-good references (use or ignore freely)
 
@@ -276,7 +296,7 @@ function turnPrompt(
 		? history
 				.map((qa) => {
 					const answer = qa.answer.skipped
-						? "(they said: you decide)"
+						? "(skipped — they left this one to your recommendation)"
 						: `${qa.answer.label ?? qa.answer.value}${qa.answer.wasOther ? " (their own, not one of your options)" : ""}`
 					return `Q: ${qa.question.question}\nA: ${answer}`
 				})
@@ -354,6 +374,17 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 		})
 
 		if (options.some((option) => !option.label)) throw new WizardTurnError(`an option in "${question.id}" has no label.`)
+
+		// A "you decide" option is a non-answer taking up an answer's seat: the
+		// user clicks it because their value is not on offer, and the question
+		// closes with nothing said. Skip and `recommendedId` carry delegation.
+		const delegating = options.find((option) => DELEGATE_OPTION.test(`${option.label} ${option.reason ?? ""}`))
+		if (delegating && question.kind !== "assumptions") {
+			throw new WizardTurnError(
+				`"${delegating.label}" means "you decide", which the Skip button and your recommendedId already cover — ` +
+					`every option must name a concrete outcome.`,
+			)
+		}
 
 		const minimum = question.kind === "assumptions" ? 1 : 2
 		if (options.length < minimum) {

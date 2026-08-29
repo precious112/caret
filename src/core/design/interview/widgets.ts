@@ -111,7 +111,7 @@ export interface WizardAnswer {
 	label?: string
 	/** True when the user went through the escape hatch rather than an option. */
 	wasOther?: boolean
-	/** True when the user said "you decide". */
+	/** True when the user skipped the question: the recommendation stands. */
 	skipped?: boolean
 }
 
