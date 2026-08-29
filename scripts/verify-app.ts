@@ -2390,8 +2390,9 @@ async function main(): Promise<void> {
 				}
 				if (!menuClicked) return { error: "react-grab's menu never offered Edit color" }
 
-				// The picker input exists now (the native dialog may be open beside
-				// it — it is not needed). Feed it the picked colour.
+				// Caret's own colour popover is open now. Type the hex the way a user
+				// would (React-controlled input → prototype setter + input event) and
+				// commit with Enter — the write happens on settle, not per keystroke.
 				deadline = Date.now() + 8000
 				let fed = false
 				while (Date.now() < deadline && !fed) {
@@ -2399,19 +2400,19 @@ async function main(): Promise<void> {
 					fed = await pageFrame
 						.executeJavaScript(
 							`(() => {
-								const input = document.querySelector('input[type="color"]')
+								const input = document.querySelector('#caret-color-popover [data-color-hex]')
 								if (!input) return false
 								const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
 								setter.call(input, '#123456')
 								input.dispatchEvent(new Event('input', { bubbles: true }))
-								input.dispatchEvent(new Event('change', { bubbles: true }))
+								input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
 								return true
 							})()`,
 						)
 						.catch(() => false)
 					if (!fed) await new Promise((r) => setTimeout(r, 250))
 				}
-				if (!fed) return { error: "Edit color never produced a colour input to feed" }
+				if (!fed) return { error: "Edit color never opened Caret's colour popover" }
 
 				// The detach toast, with its measured reach, then the real click.
 				deadline = Date.now() + 20000
@@ -3539,19 +3540,19 @@ export default function ShaderDemo() {
 						fed = await pageFrame
 							.executeJavaScript(
 								`(() => {
-									const input = document.querySelector('input[type="color"]')
+									const input = document.querySelector('#caret-color-popover [data-color-hex]')
 									if (!input) return false
 									const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
 									setter.call(input, '#654321')
 									input.dispatchEvent(new Event('input', { bubbles: true }))
-									input.dispatchEvent(new Event('change', { bubbles: true }))
+									input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
 									return true
 								})()`,
 							)
 							.catch(() => false)
 						if (!fed) await new Promise((r) => setTimeout(r, 250))
 					}
-					if (!fed) return { error: `Edit color never produced an input to feed on ${caretId}` }
+					if (!fed) return { error: `Edit color never opened the colour popover on ${caretId}` }
 					await new Promise((r) => setTimeout(r, 800))
 				}
 

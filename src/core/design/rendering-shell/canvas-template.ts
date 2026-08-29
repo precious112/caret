@@ -3937,16 +3937,311 @@ function generateCaretGrabPlugin(): string {
 		  })
 		}
 
+		/* ── the colour popover — replaces the browser's <input type=color> ─────
+		 * The Chromium colour popup broke three ways inside the embedded canvas
+		 * view: paste never reached its hex field (the popup sits outside the
+		 * app menu's ⌘V routing), clearing the field streamed garbage values
+		 * straight to disk (every input event was a file write), and it anchored
+		 * to a hidden input at 0,0. So colour edits get a surface Caret owns:
+		 * the foundation's own tokens as swatches, a hex field that accepts
+		 * typing AND paste, the system eyedropper, and an SV/hue area. The
+		 * element previews live through an inline style; the FILE is written
+		 * once, when a colour is settled on (swatch click, Enter in the hex
+		 * field, drag release, eyedropper pick) — a stray drag or a cleared
+		 * field can no longer land on disk. */
+		let colorPopoverState: {
+		  host: HTMLDivElement
+		  el: HTMLElement
+		  cssProp: string
+		  priorInline: string
+		  outside: (e: Event) => void
+		} | null = null
+		let colorPreviewRestoreTimer: number | null = null
+
+		// The colour the user settled on. The detach toast's promote action reads
+		// this rather than the hex that rode in the edit-result.
+		let lastPickedHex = ""
+
+		function cssColorToHex(c: string): string {
+		  const m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/)
+		  if (!m) return c && c.startsWith("#") ? c : "#000000"
+		  return "#" + [m[1], m[2], m[3]].map((v) => parseInt(v).toString(16).padStart(2, "0")).join("")
+		}
+
+		function hexToHsv(hex: string): { h: number; s: number; v: number } {
+		  const n = hex.replace("#", "")
+		  const full = n.length === 3 ? n.split("").map((c) => c + c).join("") : n
+		  const r = parseInt(full.slice(0, 2), 16) / 255
+		  const g = parseInt(full.slice(2, 4), 16) / 255
+		  const b = parseInt(full.slice(4, 6), 16) / 255
+		  const max = Math.max(r, g, b)
+		  const min = Math.min(r, g, b)
+		  const d = max - min
+		  let h = 0
+		  if (d !== 0) {
+		    if (max === r) h = ((g - b) / d) % 6
+		    else if (max === g) h = (b - r) / d + 2
+		    else h = (r - g) / d + 4
+		    h *= 60
+		    if (h < 0) h += 360
+		  }
+		  return { h, s: max === 0 ? 0 : d / max, v: max }
+		}
+
+		function hsvToHex(h: number, s: number, v: number): string {
+		  const c = v * s
+		  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+		  const m = v - c
+		  let r = 0, g = 0, b = 0
+		  if (h < 60) { r = c; g = x } else if (h < 120) { r = x; g = c } else if (h < 180) { g = c; b = x }
+		  else if (h < 240) { g = x; b = c } else if (h < 300) { r = x; b = c } else { r = c; b = x }
+		  return "#" + [r + m, g + m, b + m].map((ch) => Math.round(ch * 255).toString(16).padStart(2, "0")).join("")
+		}
+
+		function normalizeHexInput(raw: string): string | null {
+		  const cleaned = raw.trim().replace(/^#/, "")
+		  if (!/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(cleaned)) return null
+		  const full = cleaned.length === 3 ? cleaned.split("").map((c) => c + c).join("") : cleaned
+		  return "#" + full.toLowerCase()
+		}
+
+		/** The foundation's bindable colours, read from the theme's own CSS vars. */
+		function tokenSwatchGroups(): Array<{ label: string; entries: Array<{ token: string; hex: string }> }> {
+		  const rootStyle = window.getComputedStyle(document.documentElement)
+		  const steps = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"]
+		  const groups: Array<{ label: string; entries: Array<{ token: string; hex: string }> }> = []
+		  for (const family of ["brand", "secondary", "accent", "neutral"]) {
+		    const entries: Array<{ token: string; hex: string }> = []
+		    for (const step of steps) {
+		      const value = rootStyle.getPropertyValue("--color-" + family + "-" + step).trim()
+		      if (value) entries.push({ token: family + "-" + step, hex: value })
+		    }
+		    if (entries.length > 0) groups.push({ label: family, entries })
+		  }
+		  const semantic: Array<{ token: string; hex: string }> = []
+		  for (const name of ["success", "warning", "error", "info"]) {
+		    const value = rootStyle.getPropertyValue("--color-" + name).trim()
+		    if (value) semantic.push({ token: name, hex: value })
+		  }
+		  if (semantic.length > 0) groups.push({ label: "semantic", entries: semantic })
+		  return groups
+		}
+
+		function closeColorPopover(restorePreview: boolean) {
+		  const state = colorPopoverState
+		  if (!state) return
+		  colorPopoverState = null
+		  document.removeEventListener("pointerdown", state.outside, true)
+		  state.host.remove()
+		  if (restorePreview) {
+		    if (state.priorInline) state.el.style.setProperty(state.cssProp, state.priorInline)
+		    else state.el.style.removeProperty(state.cssProp)
+		  } else {
+		    // A commit keeps the preview just long enough for HMR to apply the
+		    // real class underneath, then hands back to the stylesheet.
+		    if (colorPreviewRestoreTimer !== null) window.clearTimeout(colorPreviewRestoreTimer)
+		    colorPreviewRestoreTimer = window.setTimeout(() => {
+		      if (state.priorInline) state.el.style.setProperty(state.cssProp, state.priorInline)
+		      else state.el.style.removeProperty(state.cssProp)
+		    }, 1500)
+		  }
+		  try { (window as any).__REACT_GRAB__?.activate?.() } catch {}
+		}
+
+		function openColorPopover(el: HTMLElement, filePath: string, lineNumber: number) {
+		  closeColorPopover(true)
+		  ;(window as any).__REACT_GRAB__?.deactivate?.()
+
+		  // The runtime is the only honest source for the starting colour — a
+		  // token class (bg-brand-500) carries no parseable hex. But a fully
+		  // transparent background is "no background", not black: fall through
+		  // to the text colour rather than opening on #000000.
+		  const computed = window.getComputedStyle(el)
+		  const bg = computed.backgroundColor
+		  const bgTransparent = !bg || bg === "transparent" || /rgba\\([^)]*,\\s*0\\)\\s*$/.test(bg)
+		  const cssProp = bgTransparent ? "color" : "background-color"
+		  let hsv = hexToHsv(cssColorToHex(bgTransparent ? computed.color : bg))
+
+		  const host = document.createElement("div")
+		  host.id = "caret-color-popover"
+		  host.setAttribute("data-react-grab-ignore-events", "")
+		  host.style.cssText = "position:fixed;z-index:99999;width:236px;background:rgba(20,20,30,0.97);border:1px solid #3a3a4a;border-radius:12px;padding:12px;font:12px/1.4 system-ui,sans-serif;color:#e5e7eb;box-shadow:0 8px 32px rgba(0,0,0,0.4);pointer-events:auto;"
+		  const eye = (window as any).EyeDropper ? '<button data-color-eye title="Pick from screen" style="all:unset;cursor:pointer;font-size:14px;padding:2px 4px">💧</button>' : ""
+		  const groupsHtml = tokenSwatchGroups()
+		    .map(function (group) {
+		      const swatches = group.entries
+		        .map(function (entry) {
+		          return '<span data-color-token="' + entry.hex + '" title="' + entry.token + " " + entry.hex + '" style="display:inline-block;width:15px;height:15px;border-radius:3px;margin:1px;cursor:pointer;border:1px solid rgba(255,255,255,0.15);background:' + entry.hex + '"></span>'
+		        })
+		        .join("")
+		      return '<div style="margin-top:6px"><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:0.06em;color:#8b93a7">' + group.label + "</div><div>" + swatches + "</div></div>"
+		    })
+		    .join("")
+		  host.innerHTML =
+		    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong style="font-size:11.5px">Colour</strong><button data-color-close style="all:unset;cursor:pointer;color:#8b93a7;font-size:14px;line-height:1">×</button></div>' +
+		    '<canvas data-color-sv width="212" height="118" style="display:block;border-radius:6px;cursor:crosshair"></canvas>' +
+		    '<canvas data-color-hue width="212" height="12" style="display:block;border-radius:6px;cursor:crosshair;margin-top:8px"></canvas>' +
+		    '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">' +
+		    '<span data-color-preview style="display:inline-block;width:22px;height:22px;border-radius:5px;border:1px solid rgba(255,255,255,0.2)"></span>' +
+		    '<input data-color-hex spellcheck="false" style="flex:1;min-width:0;background:#12121c;border:1px solid #3a3a4a;border-radius:6px;color:#e5e7eb;font:11.5px ui-monospace,monospace;padding:4px 6px;outline:none" />' +
+		    eye +
+		    "</div>" +
+		    groupsHtml
+		  document.body.appendChild(host)
+
+		  // Beside the element, clamped to the viewport — never on it, never at 0,0.
+		  const rect = el.getBoundingClientRect()
+		  const size = host.getBoundingClientRect()
+		  let x = rect.right + 12
+		  if (x + size.width > window.innerWidth - 8) x = rect.left - size.width - 12
+		  if (x < 8) x = Math.min(Math.max(8, rect.left), window.innerWidth - size.width - 8)
+		  const y = Math.min(Math.max(8, rect.top), window.innerHeight - size.height - 8)
+		  host.style.left = Math.round(x) + "px"
+		  host.style.top = Math.round(y) + "px"
+
+		  const sv = host.querySelector("[data-color-sv]") as HTMLCanvasElement
+		  const hue = host.querySelector("[data-color-hue]") as HTMLCanvasElement
+		  const hexInput = host.querySelector("[data-color-hex]") as HTMLInputElement
+		  const preview = host.querySelector("[data-color-preview]") as HTMLElement
+
+		  function currentHex(): string { return hsvToHex(hsv.h, hsv.s, hsv.v) }
+
+		  function drawSv() {
+		    const ctx = sv.getContext("2d")
+		    if (!ctx) return
+		    ctx.fillStyle = hsvToHex(hsv.h, 1, 1)
+		    ctx.fillRect(0, 0, sv.width, sv.height)
+		    const white = ctx.createLinearGradient(0, 0, sv.width, 0)
+		    white.addColorStop(0, "rgba(255,255,255,1)")
+		    white.addColorStop(1, "rgba(255,255,255,0)")
+		    ctx.fillStyle = white
+		    ctx.fillRect(0, 0, sv.width, sv.height)
+		    const black = ctx.createLinearGradient(0, 0, 0, sv.height)
+		    black.addColorStop(0, "rgba(0,0,0,0)")
+		    black.addColorStop(1, "rgba(0,0,0,1)")
+		    ctx.fillStyle = black
+		    ctx.fillRect(0, 0, sv.width, sv.height)
+		    ctx.beginPath()
+		    ctx.arc(hsv.s * sv.width, (1 - hsv.v) * sv.height, 5, 0, Math.PI * 2)
+		    ctx.strokeStyle = "#fff"
+		    ctx.lineWidth = 2
+		    ctx.stroke()
+		  }
+
+		  function drawHue() {
+		    const ctx = hue.getContext("2d")
+		    if (!ctx) return
+		    for (let i = 0; i < hue.width; i++) {
+		      ctx.fillStyle = "hsl(" + Math.round((i / hue.width) * 360) + ",100%,50%)"
+		      ctx.fillRect(i, 0, 1, hue.height)
+		    }
+		    const x = (hsv.h / 360) * hue.width
+		    ctx.fillStyle = "#fff"
+		    ctx.fillRect(Math.round(x) - 1, 0, 2, hue.height)
+		  }
+
+		  function refresh(fromInput?: boolean) {
+		    drawSv()
+		    drawHue()
+		    const hex = currentHex()
+		    preview.style.background = hex
+		    if (!fromInput) hexInput.value = hex
+		    applyPreview(hex)
+		  }
+
+		  function applyPreview(hex: string) {
+		    el.style.setProperty(cssProp, hex)
+		  }
+
+		  function commit(hex: string) {
+		    lastPickedHex = hex
+		    sentInlineEditHere = true
+		    bridge.send({
+		      type: "inline-edit",
+		      payload: {
+		        editType: "color",
+		        filePath,
+		        lineNumber,
+		        oldValue: "",
+		        newValue: hex,
+		        caretId: el.getAttribute("data-caret-id") || "",
+		      },
+		    })
+		    closeColorPopover(false)
+		  }
+
+		  function dragOn(canvas: HTMLCanvasElement, update: (e: PointerEvent) => void) {
+		    canvas.addEventListener("pointerdown", (e) => {
+		      e.preventDefault()
+		      canvas.setPointerCapture(e.pointerId)
+		      update(e)
+		      const move = (ev: PointerEvent) => update(ev)
+		      const up = () => {
+		        canvas.removeEventListener("pointermove", move)
+		        canvas.removeEventListener("pointerup", up)
+		        commit(currentHex())
+		      }
+		      canvas.addEventListener("pointermove", move)
+		      canvas.addEventListener("pointerup", up)
+		    })
+		  }
+
+		  dragOn(sv, (e) => {
+		    const box = sv.getBoundingClientRect()
+		    hsv.s = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width))
+		    hsv.v = Math.min(1, Math.max(0, 1 - (e.clientY - box.top) / box.height))
+		    refresh()
+		  })
+		  dragOn(hue, (e) => {
+		    const box = hue.getBoundingClientRect()
+		    hsv.h = Math.min(359.9, Math.max(0, ((e.clientX - box.left) / box.width) * 360))
+		    refresh()
+		  })
+
+		  hexInput.addEventListener("input", () => {
+		    const hex = normalizeHexInput(hexInput.value)
+		    if (hex) {
+		      hsv = hexToHsv(hex)
+		      refresh(true)
+		    }
+		  })
+		  hexInput.addEventListener("keydown", (e) => {
+		    e.stopPropagation()
+		    if (e.key === "Enter") {
+		      const hex = normalizeHexInput(hexInput.value)
+		      if (hex) commit(hex)
+		    }
+		    if (e.key === "Escape") closeColorPopover(true)
+		  })
+
+		  host.addEventListener("click", (e) => {
+		    const target = e.target as HTMLElement
+		    if (target.closest("[data-color-close]")) closeColorPopover(true)
+		    const swatch = target.closest("[data-color-token]") as HTMLElement | null
+		    if (swatch) commit(swatch.getAttribute("data-color-token") || currentHex())
+		    if (target.closest("[data-color-eye]")) {
+		      new (window as any).EyeDropper().open().then(
+		        (picked: { sRGBHex: string }) => commit(picked.sRGBHex),
+		        () => {},
+		      )
+		    }
+		  })
+
+		  const outside = (e: Event) => {
+		    if (!(e.target as Element)?.closest?.("#caret-color-popover")) closeColorPopover(true)
+		  }
+		  window.setTimeout(() => document.addEventListener("pointerdown", outside, true), 0)
+
+		  colorPopoverState = { host, el, cssProp, priorInline: el.style.getPropertyValue(cssProp), outside }
+		  refresh()
+		  hexInput.focus()
+		  hexInput.select()
+		}
+
 		/** True once THIS frame has sent an inline edit — the feedback gate. */
 		let sentInlineEditHere = false
 		/** The text edit in flight, so a failure can put the original back. */
 		let pendingTextRevert: { el: Element; original: string; newText: string } | null = null
-
-		// The most recent colour the picker emitted. The detach toast's promote
-		// action reads this rather than the hex that rode in the edit-result:
-		// the picker fires per input event during a drag, only the FIRST of which
-		// replaces the token class — the colour the user settled on is the last.
-		let lastPickedHex = ""
 
 		const dynamicRangesMap: Map<string, Array<{ startLine: number; startCol: number; endLine: number; endCol: number; diagnostics: string[] }>> = new Map()
 
@@ -4450,55 +4745,7 @@ function generateCaretGrabPlugin(): string {
 		          if (!filePath) { logError("edit-color: no filePath"); return }
 		          const lineNumber = source?.lineNumber || 0
 		          log("edit-color action:", filePath, "line:", lineNumber)
-
-		          // The runtime is the only honest source for the starting colour — a
-		          // token class (bg-brand-500) carries no parseable hex. But a fully
-		          // transparent background is "no background", not black: fall through
-		          // to the text colour rather than opening the picker on #000000.
-		          const computed = window.getComputedStyle(el)
-		          const bg = computed.backgroundColor
-		          const bgTransparent = !bg || bg === "transparent" || /rgba\\([^)]*,\\s*0\\)\\s*$/.test(bg)
-		          const currentColor = (bgTransparent ? computed.color : bg) || "#000000"
-
-		          const toHex = (c: string): string => {
-		            const m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/)
-		            if (!m) return c.startsWith("#") ? c : "#000000"
-		            return "#" + [m[1], m[2], m[3]].map(v => parseInt(v).toString(16).padStart(2, "0")).join("")
-		          }
-
-		          const input = document.createElement("input")
-		          input.type = "color"
-		          input.value = toHex(currentColor)
-		          input.style.position = "fixed"
-		          input.style.opacity = "0"
-		          input.style.pointerEvents = "none"
-		          document.body.appendChild(input)
-
-		          input.addEventListener("input", (e) => {
-		            lastPickedHex = (e.target as HTMLInputElement).value
-		            sentInlineEditHere = true
-		            bridge.send({
-		              type: "inline-edit",
-		              payload: {
-		                editType: "color",
-		                filePath,
-		                lineNumber,
-		                oldValue: "",
-		                newValue: lastPickedHex,
-		                caretId: el.getAttribute("data-caret-id") || "",
-		              },
-		            })
-		          })
-
-		          const rg = (window as any).__REACT_GRAB__
-		          if (rg) rg.deactivate()
-
-		          input.addEventListener("change", () => {
-		            document.body.removeChild(input)
-		            if (rg) rg.activate()
-		          })
-
-		          input.click()
+		          openColorPopover(el, filePath, lineNumber)
 		        },
 		      },
 		      {
