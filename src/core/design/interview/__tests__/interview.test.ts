@@ -81,6 +81,72 @@ describe("validateQuestion", () => {
 		assert.throws(() => validateQuestion(question({ options: [{ id: "a", label: "Only" }] }), []), WizardTurnError)
 	})
 
+	it("rejects a question whose kind is missing or unknown — the wire is not trusted", () => {
+		// The schema requires a kind, but the backend does not enforce the
+		// schema: a kind-less spacing question reached the renderer and drew an
+		// empty screen with Continue disabled forever (test4).
+		const options = [
+			{ id: "a", label: "Snug" },
+			{ id: "b", label: "Roomy" },
+		]
+		for (const kind of [undefined, "slider", "number"]) {
+			assert.throws(
+				() => validateQuestion(question({ kind: kind as never, options }), []),
+				(err: unknown) => err instanceof WizardTurnError && /must be one of/.test(err.message),
+			)
+		}
+	})
+
+	it("requires the colour widget for a question that settles a colour", () => {
+		// test4's accent question came as plain option cards, so the user typed
+		// a hex into a text field while the picker sat unused.
+		assert.throws(
+			() =>
+				validateQuestion(
+					question({
+						covers: ["accent-color"],
+						options: [
+							{ id: "a", label: "Warm amber" },
+							{ id: "b", label: "No accent" },
+						],
+					}),
+					[],
+				),
+			(err: unknown) => err instanceof WizardTurnError && /kind "color"/.test(err.message),
+		)
+	})
+
+	it("lets a colour question carry one hex-less 'none' option, but not only those", () => {
+		const valid = validateQuestion(
+			question({
+				kind: "color",
+				covers: ["accent-color"],
+				options: [
+					{ id: "a", label: "Marigold", hex: "#e9a13b" },
+					{ id: "b", label: "No accent colour" },
+				],
+			}),
+			[],
+		)
+		assert.equal(valid.options?.[0].hex, "#e9a13b")
+		assert.equal(valid.options?.[1].hex, undefined)
+
+		assert.throws(
+			() =>
+				validateQuestion(
+					question({
+						kind: "color",
+						options: [
+							{ id: "a", label: "None" },
+							{ id: "b", label: "Also none" },
+						],
+					}),
+					[],
+				),
+			(err: unknown) => err instanceof WizardTurnError && /at least one option with a hex/.test(err.message),
+		)
+	})
+
 	it("rejects a 'you decide' option — Skip and the recommendation carry delegation", () => {
 		// Field-measured (test4): the delegate option was the only escape when
 		// the user's value was not on offer, and clicking it sealed the area.
@@ -342,7 +408,7 @@ describe("nextWizardTurn", () => {
 		it("sanitizes unknown coverage tags instead of rejecting the question", () => {
 			const valid = validateQuestion(
 				question({
-					covers: ["brand-color", "made-up-area"],
+					covers: ["spacing", "made-up-area"],
 					options: [
 						{ id: "a", label: "A" },
 						{ id: "b", label: "B" },
@@ -350,7 +416,7 @@ describe("nextWizardTurn", () => {
 				}),
 				[],
 			)
-			assert.deepEqual(valid.covers, ["brand-color"])
+			assert.deepEqual(valid.covers, ["spacing"])
 		})
 	})
 })

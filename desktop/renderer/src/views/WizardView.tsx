@@ -498,6 +498,12 @@ function Widget({
 			return <TextWidget onPick={onPick} question={question} />
 		case "assumptions":
 			return <AssumptionsWidget onPick={onPick} question={question} />
+		default:
+			// The validator refuses unknown kinds, but a question that slips
+			// through anyway must never draw an EMPTY screen with Continue dead
+			// (field-measured: a kind-less question did exactly that). Free text
+			// answers any question the conductor can ask.
+			return <TextWidget onPick={onPick} question={question} />
 	}
 }
 
@@ -614,7 +620,9 @@ function ColorWidget({
 			return
 		}
 		const option = options.find((candidate) => candidate.id === selected)
-		if (option?.hex) onPick({ answer: { value: option.hex, label: option.label }, reason: option.reason })
+		// A hex-less option is the "none" shape ("no accent colour") — it picks
+		// by label, so choosing it doesn't leave Continue dead.
+		if (option) onPick({ answer: { value: option.hex ?? option.label, label: option.label }, reason: option.reason })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selected, custom])
 

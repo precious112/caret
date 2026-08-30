@@ -86,6 +86,21 @@ export function coveredAreas(history: StoredQA[]): string[] {
 const BLANKET_CONFIRM =
 	/^(yes\b|all of (these|the above)|confirm all|these are all|that('| i)s all correct|sounds right|looks right|agree)/i
 
+/** Every kind the renderer has a widget for; anything else draws nothing. */
+const KNOWN_KINDS: ReadonlyArray<WizardQuestion["kind"]> = [
+	"options",
+	"color",
+	"font",
+	"scale",
+	"chips",
+	"text",
+	"boolean",
+	"assumptions",
+]
+
+/** Areas whose answer is a colour — their questions must use the colour widget. */
+const COLOR_AREAS = new Set(["brand-color", "secondary-color", "accent-color", "semantics"])
+
 /** "You decide" and its relatives — see the delegation check below. */
 const DELEGATE_OPTION =
 	/\byou (decide|choose|pick)\b|\b(up to you|your call|whatever you think|whatever works|surprise me|dealer'?s choice|(you|caret) (pick|choose)s? for me|let (you|caret) (decide|choose|pick))\b/i
@@ -138,7 +153,9 @@ ${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n"
   settle several (a palette question can carry \`brand-color\` and \`secondary-color\`), but
   a tag is a claim — only tag what the question genuinely asks about.
 - The palette is more than one colour: ask about the supporting colour and the accent
-  colour explicitly ("none" is a legitimate answer, but it must be their answer).
+  colour explicitly ("none" is a legitimate answer, but it must be their answer). Colour
+  questions use kind \`color\` — it carries the picker, hex field and eyedropper; an option
+  that means "none" simply omits its hex.
 - **Name the numbers.** Plain language stays, but this person wants to see exactly what
   they are choosing: every option that embodies a value states it — hexes, pixel sizes,
   ratios, spacing units ("Comfortable — 16px body text, headings step up ×1.25"). An
@@ -354,6 +371,29 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 	if (history.some((qa) => qa.question.id === question.id)) question.id = `${question.id}-${history.length + 1}`
 	if (!question.question?.trim()) throw new WizardTurnError("the question text is empty.")
 
+	// The schema names the kinds, but the backend does not enforce the schema —
+	// a question arrived with NO kind at all (field-measured: test4's spacing
+	// question), matched nothing in the renderer, and drew an empty screen with
+	// Continue disabled forever. Everything the renderer needs gets checked
+	// HERE, never trusted to the wire.
+	if (!KNOWN_KINDS.includes(question.kind)) {
+		throw new WizardTurnError(
+			`the question has kind ${question.kind ? `"${String(question.kind)}"` : "missing"} — it must be one of: ${KNOWN_KINDS.join(", ")}.`,
+		)
+	}
+
+	// A colour decision answered through a plain card or a bare text box loses
+	// the picker, the hex field and the eyedropper — the user typed a hex into
+	// a text input while a purpose-built widget sat unused (field-measured:
+	// test4's accent question came as kind "options").
+	const settlesColour = (question.covers ?? []).some((id) => COLOR_AREAS.has(id))
+	if (settlesColour && !["color", "boolean", "assumptions"].includes(question.kind)) {
+		throw new WizardTurnError(
+			`"${question.id}" settles a colour but is kind "${question.kind}" — colour questions use kind "color" ` +
+				`(swatch options plus the built-in picker); an option that means "none" may simply omit its hex.`,
+		)
+	}
+
 	// Coverage tags: sanitized, never rejected over — an unknown tag is noise,
 	// not a broken screen.
 	if (question.covers) {
@@ -394,10 +434,22 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 			throw new WizardTurnError(`"boolean" needs exactly 2 options, got ${options.length}.`)
 		}
 		if (question.kind === "color") {
+			// An option without a hex is the "none" shape ("no accent colour") —
+			// legal, so a colour question never has to fall back to plain cards.
+			// A hex that is PRESENT but unusable is still a refusal.
+			let withHex = 0
 			for (const option of options) {
+				if (option.hex === undefined || option.hex === null || option.hex === "") {
+					delete option.hex
+					continue
+				}
 				const hex = normalizeHex(option.hex)
 				if (!hex) throw new WizardTurnError(`colour option "${option.label}" has no valid hex.`)
 				option.hex = hex
+				withHex++
+			}
+			if (withHex === 0) {
+				throw new WizardTurnError(`a colour question needs at least one option with a hex.`)
 			}
 		}
 
