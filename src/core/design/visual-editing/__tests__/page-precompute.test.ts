@@ -565,3 +565,54 @@ describe("precomputePage — splice-backed writes", () => {
 		precomputePage(corrected, "test.tsx").modified.should.be.false()
 	})
 })
+
+describe("precomputePage — conditional rendering is not dynamic text", () => {
+	it("a && card of static markup produces NO dynamic range — the field false positive", () => {
+		// The exact shape that poisoned a whole page: a filterable grid wraps
+		// each literal card in a visibility conditional, one range covered the
+		// grid, and every static chip inside refused "Edit text".
+		const source = `export default function Page() {
+  const show = true
+  return (
+    <ul data-caret-id="grid">
+      {show && (
+        <li>
+          <span data-caret-id="chip">Easy</span>
+        </li>
+      )}
+    </ul>
+  )
+}`
+		const result = precomputePage(source, "test.tsx")
+		result.dynamicRanges.filter((r) => r.diagnostics.includes("dynamic-text")).should.be.empty()
+	})
+
+	it("a ternary whose branches are both markup stays clean; a string branch still flags", () => {
+		const markupOnly = `export default function Page() {
+  const on = true
+  return <div data-caret-id="wrap">{on ? <b data-caret-id="a">Yes</b> : <i data-caret-id="b">No</i>}</div>
+}`
+		precomputePage(markupOnly, "test.tsx")
+			.dynamicRanges.filter((r) => r.diagnostics.includes("dynamic-text"))
+			.should.be.empty()
+
+		// `{cond ? "Easy" : "Hard"}` paints text from an expression position —
+		// the inline splice cannot edit it, so it must keep flagging.
+		const stringBranch = `export default function Page() {
+  const on = true
+  return <span data-caret-id="chip">{on ? "Easy" : "Hard"}</span>
+}`
+		precomputePage(stringBranch, "test.tsx")
+			.dynamicRanges.filter((r) => r.diagnostics.includes("dynamic-text"))
+			.should.not.be.empty()
+	})
+
+	it("genuinely dynamic text keeps flagging — identifiers, members, calls", () => {
+		const source = `export default function Page({ plant }) {
+  return <p data-caret-id="name">{plant.name}</p>
+}`
+		precomputePage(source, "test.tsx")
+			.dynamicRanges.filter((r) => r.diagnostics.includes("dynamic-text"))
+			.should.not.be.empty()
+	})
+})

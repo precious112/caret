@@ -169,15 +169,51 @@ function toKebabId(prefix: string, hint: string | null): string {
 	return prefix
 }
 
+/**
+ * Whether an expression can actually PAINT text when it renders.
+ *
+ * The distinction this draws: `{cond && <li>…</li>}` is conditional
+ * *presence* of static markup — every word inside is a string literal in the
+ * file, and inline editing works on all of it. Flagging it as dynamic text
+ * poisoned entire subtrees (field-measured: a filterable card grid wrapped
+ * each card in `&&`, one range covered ~480 lines, and every static chip in
+ * it refused "Edit text"). Only branches that can render as text — strings,
+ * numbers, identifiers, calls — make text dynamic; markup, null and booleans
+ * are structure.
+ */
+function rendersAsText(expr: { type: string } & Record<string, unknown>): boolean {
+	switch (expr.type) {
+		case "JSXElement":
+		case "JSXFragment":
+		case "NullLiteral":
+		case "BooleanLiteral":
+			return false
+		case "LogicalExpression":
+			// `a && b` renders `b`; a truthy guard never paints. (A falsy string
+			// left side can technically render — rare enough to accept.)
+			return rendersAsText(expr.right as never)
+		case "ConditionalExpression":
+			return rendersAsText(expr.consequent as never) || rendersAsText(expr.alternate as never)
+		case "ParenthesizedExpression":
+			return rendersAsText(expr.expression as never)
+		default:
+			return true
+	}
+}
+
 function hasDynamicTextChild(node: recast.types.namedTypes.JSXElement): boolean {
 	for (const child of node.children || []) {
-		if (
-			child.type === "JSXExpressionContainer" &&
-			child.expression.type !== "StringLiteral" &&
-			child.expression.type !== "JSXEmptyExpression"
-		) {
-			return true
+		if (child.type !== "JSXExpressionContainer") continue
+		const expr = child.expression
+		if (expr.type === "StringLiteral" || expr.type === "JSXEmptyExpression") continue
+		// Conditional structure whose every rendering branch is markup/null/
+		// boolean carries no dynamic text of its own. A branch that IS a string
+		// (`{cond ? "Easy" : "Hard"}`) still flags: it paints text from an
+		// expression position, which the inline splice cannot edit.
+		if ((expr.type === "LogicalExpression" || expr.type === "ConditionalExpression") && !rendersAsText(expr as never)) {
+			continue
 		}
+		return true
 	}
 	return false
 }
