@@ -230,6 +230,7 @@ function Question({
 
 			<div className="mt-6">
 				<Widget base={base} collab={state.mode === "collaborative"} onPick={setPick} question={question} />
+				{state.mode === "collaborative" && <AreaOwnInput onPick={setPick} question={question} />}
 			</div>
 
 			<div className="mt-7 flex items-center gap-2">
@@ -508,6 +509,98 @@ function Widget({
 }
 
 /**
+ * The typed own-value input, chosen by the question's AREA — never a generic
+ * text box. If the value's type is knowable downstream it was knowable here,
+ * so the input enforces it at capture: spacing gets a px stepper, type-scale
+ * gets base px + ratio, and enum areas (surface/neutral/radius/depth) get
+ * nothing, because anything outside their enum cannot be committed anyway.
+ * Colours and fonts have their own purpose-built escapes inside their widgets.
+ * The answer carries `data.px`/`data.ratio` — typed at birth, no extraction.
+ */
+function AreaOwnInput({ question, onPick }: { question: WizardQuestionWire; onPick(pick: Pick | null): void }) {
+	const area = question.covers?.length === 1 ? question.covers[0] : undefined
+	const [px, setPx] = useState("")
+	const [ratio, setRatio] = useState("")
+
+	const numericArea =
+		(area === "spacing" || area === "type-scale") && (question.kind === "options" || question.kind === "scale")
+
+	useEffect(() => {
+		if (!numericArea) return
+		const pxValue = px.trim() === "" ? undefined : Number(px)
+		const ratioValue = ratio.trim() === "" ? undefined : Number(ratio)
+		const pxOk = pxValue !== undefined && Number.isFinite(pxValue) && pxValue > 0
+		const ratioOk = ratioValue !== undefined && Number.isFinite(ratioValue) && ratioValue >= 1.05 && ratioValue <= 1.5
+		if (!pxOk && !ratioOk) return
+		const parts: string[] = []
+		const data: { px?: number; ratio?: number } = {}
+		if (pxOk) {
+			data.px = pxValue
+			parts.push(area === "spacing" ? `base unit ${pxValue}px` : `${pxValue}px body text`)
+		}
+		if (ratioOk) {
+			data.ratio = ratioValue
+			parts.push(`×${ratioValue} steps`)
+		}
+		const label = parts.join(" · ")
+		onPick({ answer: { value: label, label, wasOther: true, data } })
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [px, ratio])
+
+	if (!numericArea) return null
+
+	const field = (
+		value: string,
+		set: (v: string) => void,
+		props: { placeholder: string; min: number; max: number; step: number },
+	) => (
+		<input
+			className={cn(
+				"w-24 rounded-lg border bg-shell-panel px-2.5 py-1.5 text-[12.5px] outline-none",
+				value.trim() ? "border-caret-accent" : "border-shell-border focus:border-caret-accent/60",
+			)}
+			max={props.max}
+			min={props.min}
+			onChange={(event) => set(event.target.value)}
+			placeholder={props.placeholder}
+			step={props.step}
+			type="number"
+			value={value}
+		/>
+	)
+
+	return (
+		<div
+			className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-shell-border px-4 py-3"
+			data-testid="wizard-own-value">
+			<span className="text-[12px] text-shell-muted">None of these — use my own:</span>
+			{area === "spacing" ? (
+				<label className="flex items-center gap-2 text-[12px]">
+					{field(px, setPx, { placeholder: "8", min: 2, max: 16, step: 1 })} px base unit
+				</label>
+			) : (
+				<>
+					<label className="flex items-center gap-2 text-[12px]">
+						{field(px, setPx, { placeholder: "16", min: 12, max: 24, step: 1 })} px body text
+					</label>
+					<label className="flex items-center gap-2 text-[12px]">
+						{field(ratio, setRatio, { placeholder: "1.25", min: 1.05, max: 1.5, step: 0.005 })} step ratio
+					</label>
+				</>
+			)}
+			{(px.trim() || ratio.trim()) && (
+				<span className="text-[11.5px] text-caret-accent" data-testid="wizard-own-value-parsed">
+					→{" "}
+					{area === "spacing"
+						? `base unit ${px || "?"}px`
+						: [px && `${px}px body`, ratio && `×${ratio}`].filter(Boolean).join(" · ")}
+				</span>
+			)}
+		</div>
+	)
+}
+
+/**
  * The concrete numbers a spec carries, in plain words. Collaborative mode
  * prints these under options and scale steps: someone with design experience
  * is choosing values, and "comfortable" hiding 17px is how test4 committed a
@@ -536,22 +629,14 @@ function OptionsWidget({
 }) {
 	const options = question.options ?? []
 	const [selected, setSelected] = useState(question.recommendedId ?? options[0]?.id ?? "")
-	const [own, setOwn] = useState("")
 
 	useFonts(options.flatMap((option) => familiesOf({ ...base, ...option.spec })))
 
 	useEffect(() => {
-		// Their own typed value wins over the cards: the value they want may
-		// simply not be on offer, and this field is how they say it here rather
-		// than after the interview, token by token.
-		if (own.trim()) {
-			onPick({ answer: { value: own.trim(), label: own.trim(), wasOther: true } })
-			return
-		}
 		const option = options.find((candidate) => candidate.id === selected)
 		if (option) onPick({ answer: { value: option.id, label: option.label }, reason: option.reason })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selected, own])
+	}, [selected])
 
 	return (
 		<div>
@@ -559,18 +644,20 @@ function OptionsWidget({
 			    these options differ by a spacing unit or a radius step — a few
 			    pixels — and at a third of the column the specimens read as
 			    identical, so the user chose by label instead of by looking. A
-			    full-width tall specimen is the difference, made visible. */}
+			    full-width tall specimen is the difference, made visible.
+
+			    No generic own-value text box here: where an area has a typed
+			    value (spacing px, base size, ratio), the Question renders a
+			    purpose-built numeric input for it; where the area is an enum,
+			    anything outside the options cannot be committed anyway. */}
 			<div className="grid gap-4">
 				{options.map((option) => (
 					<OptionCard
 						key={option.id}
-						onSelect={() => {
-							setOwn("")
-							setSelected(option.id)
-						}}
+						onSelect={() => setSelected(option.id)}
 						option={option}
-						recommended={option.id === question.recommendedId && !own.trim()}
-						selected={option.id === selected && !own.trim()}>
+						recommended={option.id === question.recommendedId}
+						selected={option.id === selected}>
 						<Specimen spec={{ ...base, ...option.spec }} tall />
 						{collab && specNumbers(option.spec) && (
 							<p className="mt-1.5 text-[11px] text-shell-muted" data-testid="wizard-option-numbers">
@@ -580,19 +667,6 @@ function OptionsWidget({
 					</OptionCard>
 				))}
 			</div>
-
-			{collab && question.kind !== "boolean" && (
-				<input
-					className={cn(
-						"mt-4 w-full rounded-xl border bg-shell-panel px-4 py-2.5 text-[12.5px] outline-none",
-						own.trim() ? "border-caret-accent" : "border-shell-border focus:border-caret-accent/60",
-					)}
-					data-testid="wizard-options-own"
-					onChange={(event) => setOwn(event.target.value)}
-					placeholder="None of these — type exactly what you want (values welcome: px, hex, ratios)…"
-					value={own}
-				/>
-			)}
 			<Reason reason={options.find((option) => option.id === selected)?.reason} />
 		</div>
 	)
@@ -615,14 +689,25 @@ function ColorWidget({
 	useFonts(familiesOf(base))
 
 	useEffect(() => {
+		// The typed payload (`data`) is written HERE, by the widget, at capture:
+		// the hex was validated before it could become `custom`, and a hex-less
+		// option is the "none" shape identified by what it IS, not by parsing
+		// its label downstream.
 		if (custom) {
-			onPick({ answer: { value: custom, label: "your own colour", wasOther: true } })
+			onPick({ answer: { value: custom, label: "your own colour", wasOther: true, data: { hex: custom } } })
 			return
 		}
 		const option = options.find((candidate) => candidate.id === selected)
-		// A hex-less option is the "none" shape ("no accent colour") — it picks
-		// by label, so choosing it doesn't leave Continue dead.
-		if (option) onPick({ answer: { value: option.hex ?? option.label, label: option.label }, reason: option.reason })
+		if (option) {
+			onPick({
+				answer: {
+					value: option.hex ?? option.label,
+					label: option.label,
+					data: option.hex ? { hex: option.hex } : { none: true },
+				},
+				reason: option.reason,
+			})
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selected, custom])
 
@@ -738,12 +823,18 @@ function FontWidget({
 	])
 
 	useEffect(() => {
+		// `data.family` is the typed channel: a card's label IS the family, and
+		// a search pick is the catalogue's exact name.
 		if (customFamily) {
-			onPick({ answer: { value: customFamily, label: customFamily, wasOther: true } })
+			onPick({ answer: { value: customFamily, label: customFamily, wasOther: true, data: { family: customFamily } } })
 			return
 		}
 		const option = options.find((candidate) => candidate.id === selected)
-		if (option) onPick({ answer: { value: option.label, label: option.label }, reason: option.reason })
+		if (option)
+			onPick({
+				answer: { value: option.label, label: option.label, data: { family: option.label } },
+				reason: option.reason,
+			})
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selected, customFamily])
 
@@ -786,7 +877,10 @@ function FontWidget({
 
 			{!customFamily && <Reason reason={options.find((option) => option.id === selected)?.reason} />}
 
-			{question.other === "font" && (
+			{/* Always rendered — the escape hatch is determined by the KIND, never
+			    by a model-chosen field (the deprecated `other`). A font question
+			    without the catalogue search once left "Young Serif" untypeable. */}
+			{
 				<div
 					className={cn(
 						"mt-4 rounded-xl border px-4 py-3 transition-colors",
@@ -836,7 +930,7 @@ function FontWidget({
 						</p>
 					)}
 				</div>
-			)}
+			}
 		</div>
 	)
 }
@@ -858,21 +952,14 @@ function ScaleWidget({
 }) {
 	const steps = question.steps ?? []
 	const [index, setIndex] = useState(question.defaultStep ?? Math.floor(steps.length / 2))
-	const [custom, setCustom] = useState("")
 
 	useFonts(familiesOf(base))
 
 	useEffect(() => {
-		// Their own words win over the slider: a scale offers a handful of points
-		// on one axis, and the thing they actually want may not be on it.
-		if (custom.trim()) {
-			onPick({ answer: { value: custom.trim(), label: custom.trim(), wasOther: true } })
-			return
-		}
 		const step = steps[index]
 		if (step) onPick({ answer: { value: step.label, label: step.label } })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [index, custom])
+	}, [index])
 
 	const spec = { ...base, ...steps[index]?.spec }
 
@@ -891,16 +978,15 @@ function ScaleWidget({
 					{steps.map((step, stepIndex) => (
 						<button
 							className={cn(
-								"h-8 flex-1 rounded-lg border text-[11.5px] transition-colors",
-								stepIndex === index && !custom.trim()
+								// Flexible height + tight leading: a fixed h-8 clipped
+								// two-line labels ("Square, like printed paper") into mush.
+								"min-h-8 flex-1 rounded-lg border px-2 py-1 text-[11.5px] leading-tight transition-colors",
+								stepIndex === index
 									? "border-caret-accent bg-caret-accent/15 text-caret-accent"
 									: "border-shell-border text-shell-muted hover:bg-white/5",
 							)}
 							key={step.label}
-							onClick={() => {
-								setCustom("")
-								setIndex(stepIndex)
-							}}
+							onClick={() => setIndex(stepIndex)}
 							type="button">
 							{step.label}
 						</button>
@@ -910,27 +996,10 @@ function ScaleWidget({
 				{/* Collaborative mode shows what the chosen step actually means in
 				    numbers: "comfortable" silently meaning 17px is how test4 got a
 				    base size its user never chose. */}
-				{collab && specNumbers(steps[index]?.spec) && !custom.trim() && (
+				{collab && specNumbers(steps[index]?.spec) && (
 					<p className="mt-2 text-[11.5px] text-shell-muted" data-testid="wizard-scale-numbers">
 						{steps[index]?.label}: {specNumbers(steps[index]?.spec)}
 					</p>
-				)}
-
-				{(collab || question.other === "text") && (
-					<input
-						className={cn(
-							"mt-3 w-full rounded-lg border bg-shell-panel px-3 py-1.5 text-[12.5px] outline-none",
-							custom.trim() ? "border-caret-accent" : "border-shell-border focus:border-caret-accent/60",
-						)}
-						data-testid="wizard-scale-other"
-						onChange={(event) => setCustom(event.target.value)}
-						placeholder={
-							collab
-								? "None of these — type exactly what you want (values welcome: px, ratios)…"
-								: "Or say it in your own words…"
-						}
-						value={custom}
-					/>
 				)}
 			</div>
 		</div>
@@ -996,7 +1065,9 @@ function ChipsWidget({ question, onPick }: { question: WizardQuestionWire; onPic
 				))}
 			</div>
 
-			{question.other === "text" && (
+			{/* Always available — chips collect facts, and the model cannot know
+			    every fact. Not gated on the deprecated model-chosen `other`. */}
+			{
 				<div className="mt-3 flex items-center gap-2">
 					<input
 						className="w-56 rounded-lg border border-shell-border bg-shell-panel px-3 py-1.5 text-[12.5px] outline-none focus:border-caret-accent/60"
@@ -1013,7 +1084,7 @@ function ChipsWidget({ question, onPick }: { question: WizardQuestionWire; onPic
 						Add
 					</button>
 				</div>
-			)}
+			}
 		</div>
 	)
 }
@@ -1195,6 +1266,19 @@ function Specimen({ spec, tall, morph }: { spec: WizardSpecWire; tall?: boolean;
 	const baseSize = spec.baseSize ?? 15
 	const transition = morph ? "all 200ms ease" : undefined
 
+	// A depth option is invisible unless the content sits on a CARD that casts
+	// the proposed shadow — the flat specimen made every depth option identical.
+	const card: React.CSSProperties = spec.shadow
+		? {
+				background: surface.bg,
+				border: "1px solid rgba(0,0,0,0.06)",
+				borderRadius: radius,
+				padding: unit * 2.5,
+				boxShadow: spec.shadow === "none" ? undefined : spec.shadow,
+				transition,
+			}
+		: {}
+
 	return (
 		<div
 			className="flex-1"
@@ -1205,32 +1289,34 @@ function Specimen({ spec, tall, morph }: { spec: WizardSpecWire; tall?: boolean;
 				padding: tall ? unit * 4 : unit * 2.5,
 				transition,
 			}}>
-			<p
-				style={{
-					fontFamily: stack(spec.displayFamily ?? spec.bodyFamily),
-					fontSize: tall ? 34 : 21,
-					lineHeight: 1.15,
-					fontWeight: 500,
-					transition,
-				}}>
-				Built for the way you work
-			</p>
-			<p className="opacity-70" style={{ fontSize: baseSize, marginTop: unit * 1.5, lineHeight: 1.55, transition }}>
-				A short paragraph, so you can see how it reads at the size it will actually be used.
-			</p>
-			<span
-				className="inline-block"
-				style={{
-					background: spec.accent ?? "#6b7280",
-					color: readableOn(spec.accent ?? "#6b7280"),
-					borderRadius: Math.min(radius, 24),
-					marginTop: unit * 2.5,
-					padding: `${unit}px ${unit * 2.5}px`,
-					fontSize: baseSize - 1,
-					transition,
-				}}>
-				Get started
-			</span>
+			<div style={card}>
+				<p
+					style={{
+						fontFamily: stack(spec.displayFamily ?? spec.bodyFamily),
+						fontSize: tall ? 34 : 21,
+						lineHeight: 1.15,
+						fontWeight: 500,
+						transition,
+					}}>
+					Built for the way you work
+				</p>
+				<p className="opacity-70" style={{ fontSize: baseSize, marginTop: unit * 1.5, lineHeight: 1.55, transition }}>
+					A short paragraph, so you can see how it reads at the size it will actually be used.
+				</p>
+				<span
+					className="inline-block"
+					style={{
+						background: spec.accent ?? "#6b7280",
+						color: readableOn(spec.accent ?? "#6b7280"),
+						borderRadius: Math.min(radius, 24),
+						marginTop: unit * 2.5,
+						padding: `${unit}px ${unit * 2.5}px`,
+						fontSize: baseSize - 1,
+						transition,
+					}}>
+					Get started
+				</span>
+			</div>
 		</div>
 	)
 }
@@ -1313,11 +1399,27 @@ function specFromHistory(history: WizardQAWire[]): WizardSpecWire {
 			(option) => option.id === qa.answer.value || option.hex === qa.answer.value || option.label === qa.answer.value,
 		)
 		if (picked?.spec) Object.assign(spec, stripUndefined(picked.spec))
+		if (qa.question.kind === "scale") {
+			const step = qa.question.steps?.find((candidate) => candidate.label === qa.answer.value)
+			if (step?.spec) Object.assign(spec, stripUndefined(step.spec))
+		}
 
-		if (qa.question.kind === "color") spec.accent = qa.answer.value || spec.accent
+		// Typed payloads and coverage tags bind by MEANING. The old code bound
+		// fonts by ORDER ("first font question must be headings") — the model
+		// asked body first and the preview showed the faces inverted for the
+		// whole interview (field report). Only a real hex may touch the colour
+		// slot: a "none" pick's label is not a colour.
+		const area = qa.question.covers?.length === 1 ? qa.question.covers[0] : undefined
+		const data = qa.answer.data
+		if (data?.hex) spec.accent = data.hex
+		if (data?.px !== undefined && area === "spacing") spec.spacingUnit = data.px
+		if (data?.px !== undefined && area === "type-scale") spec.baseSize = data.px
 		if (qa.question.kind === "font") {
-			const family = qa.answer.value
-			if (picked?.spec?.bodyFamily) {
+			const family = data?.family ?? qa.answer.value
+			if (area === "display-type") spec.displayFamily = family
+			else if (area === "body-type") spec.bodyFamily = family
+			else if (picked?.spec?.bodyFamily) {
+				// ai-led (no coverage tags): a pairing card names both roles.
 				spec.displayFamily = family
 				spec.bodyFamily = picked.spec.bodyFamily
 			} else if (!spec.displayFamily) {
@@ -1326,10 +1428,6 @@ function specFromHistory(history: WizardQAWire[]): WizardSpecWire {
 			} else {
 				spec.bodyFamily = family
 			}
-		}
-		if (qa.question.kind === "scale") {
-			const step = qa.question.steps?.find((candidate) => candidate.label === qa.answer.value)
-			if (step?.spec) Object.assign(spec, stripUndefined(step.spec))
 		}
 	}
 	return spec

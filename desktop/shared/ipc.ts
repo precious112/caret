@@ -205,6 +205,7 @@ export interface WizardSpecWire {
 	radius?: number
 	spacingUnit?: number
 	baseSize?: number
+	shadow?: string
 }
 
 export type WizardKindWire = "options" | "color" | "font" | "scale" | "chips" | "text" | "boolean" | "assumptions"
@@ -244,6 +245,8 @@ export interface WizardAnswerWire {
 	value: string
 	label?: string
 	wasOther?: boolean
+	/** Typed payload written by the widget at capture — see core `AnswerData`. */
+	data?: { hex?: string; family?: string; px?: number; ratio?: number; none?: boolean }
 	skipped?: boolean
 }
 

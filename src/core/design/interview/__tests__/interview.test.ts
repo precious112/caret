@@ -20,7 +20,15 @@ import { strict as assert } from "assert"
 import type { CodingBackend } from "../../agent/backend"
 import { TYPEFACE_PAIRINGS } from "../../foundation-library"
 import { buildFoundation, IncompleteInterviewError } from "../commit"
-import { COVERAGE_AREAS, nextWizardTurn, validateQuestion, WizardTurnError } from "../conductor"
+import {
+	bindSettledValues,
+	COVERAGE_AREAS,
+	checkValueEcho,
+	nextWizardTurn,
+	settledValues,
+	validateQuestion,
+	WizardTurnError,
+} from "../conductor"
 import { finalizeProposal, ProposalError } from "../finalize"
 import { tagsFromDescription } from "../steps"
 import type { FoundationProposal, StoredQA, WizardQuestion } from "../widgets"
@@ -470,6 +478,141 @@ describe("nextWizardTurn", () => {
 			)
 			assert.deepEqual(valid.covers, ["spacing"])
 		})
+	})
+})
+
+describe("the settled-values ledger", () => {
+	/** A QA whose answer carries a typed payload, tagged with one area. */
+	function qa(area: string, answer: Partial<StoredQA["answer"]>, kind: WizardQuestion["kind"] = "color"): StoredQA {
+		return {
+			question: question({ id: `q-${area}`, kind, covers: [area], options: undefined }),
+			answer: { questionId: `q-${area}`, question: `About ${area}?`, kind, value: "", ...answer } as StoredQA["answer"],
+		}
+	}
+
+	it("builds typed entries from data.* only — labels never parse", () => {
+		const settled = settledValues([
+			qa("brand-color", { value: "#2f6b4a", data: { hex: "#2f6b4a" }, wasOther: true }),
+			// A colour NAMED like a negation must not become "none": no data.none,
+			// no none entry — this is the regex-scavenging trap, closed.
+			qa("secondary-color", { value: "Nordic Noir", label: "Nordic Noir" }),
+			qa("accent-color", { value: "No accent", label: "No accent", data: { none: true } }),
+			qa("display-type", { value: "Young Serif", data: { family: "Young Serif" }, wasOther: true }, "font"),
+			qa("spacing", { value: "4px", data: { px: 4 }, wasOther: true }, "options"),
+			qa("type-scale", { value: "16 · 1.25", data: { px: 16, ratio: 1.25 }, wasOther: true }, "options"),
+			qa("depth", { value: "", skipped: true }, "options"),
+		])
+		const byKey = new Map(settled.map((entry) => [`${entry.area}:${"field" in entry ? entry.field : ""}`, entry]))
+		assert.deepEqual(byKey.get("brand-color:"), { area: "brand-color", kind: "hex", value: "#2f6b4a", own: true })
+		assert.deepEqual(byKey.get("secondary-color:"), {
+			area: "secondary-color",
+			kind: "choice",
+			value: "Nordic Noir",
+			own: false,
+		})
+		assert.deepEqual(byKey.get("accent-color:"), { area: "accent-color", kind: "none" })
+		assert.deepEqual(byKey.get("display-type:"), { area: "display-type", kind: "family", value: "Young Serif", own: true })
+		assert.deepEqual(byKey.get("spacing:spacingUnit"), {
+			area: "spacing",
+			kind: "number",
+			field: "spacingUnit",
+			value: 4,
+			own: true,
+		})
+		assert.deepEqual(byKey.get("type-scale:baseSize"), {
+			area: "type-scale",
+			kind: "number",
+			field: "baseSize",
+			value: 16,
+			own: true,
+		})
+		assert.deepEqual(byKey.get("type-scale:scaleRatio"), {
+			area: "type-scale",
+			kind: "number",
+			field: "scaleRatio",
+			value: 1.25,
+			own: true,
+		})
+		assert.deepEqual(byKey.get("depth:"), { area: "depth", kind: "delegated" })
+	})
+
+	it("echo check refuses a finish that drops or rewrites a settled value, naming the field", () => {
+		const settled = settledValues([
+			qa("secondary-color", { value: "#b25a3c", data: { hex: "#b25a3c" }, wasOther: true }),
+			qa("accent-color", { value: "No accent", data: { none: true } }),
+			qa("spacing", { value: "4px", data: { px: 4 }, wasOther: true }, "options"),
+		])
+		assert.throws(
+			() => checkValueEcho({ ...PROPOSAL, secondary: undefined, accent: "#f0b429", spacingUnit: 8 }, settled),
+			(err: unknown) =>
+				err instanceof WizardTurnError &&
+				/`secondary` — the user answered #b25a3c but the proposal has nothing/.test(err.message) &&
+				/`accent` — the user chose none/.test(err.message) &&
+				/`spacingUnit` — the user answered 4/.test(err.message),
+		)
+		// The same proposal, echoing correctly, passes.
+		checkValueEcho({ ...PROPOSAL, secondary: "#b25a3c", accent: undefined, spacingUnit: 4 }, settled)
+	})
+
+	it("bind writes the ledger into the proposal and rewrites the matching decision", async () => {
+		const settled = settledValues([
+			qa("secondary-color", { value: "#b25a3c", data: { hex: "#b25a3c" }, wasOther: true }),
+			qa("accent-color", { value: "No accent", data: { none: true } }),
+		])
+		const foundation = {
+			...PROPOSAL,
+			accent: "#f0b429",
+			decisions: [{ area: "secondary-color", choice: "a warm clay", reason: "fits" }],
+		}
+		await bindSettledValues(foundation, settled)
+		assert.equal(foundation.secondary, "#b25a3c")
+		assert.equal(foundation.accent, undefined)
+		assert.equal(foundation.decisions?.[0].choice, "#b25a3c")
+	})
+
+	it("the retry carries the rejected payload — a stateless attempt cannot correct what it never saw", async () => {
+		const prompts: string[] = []
+		const bad = { action: "ask", question: question({ kind: "slider" as never, options: [{ id: "a", label: "A" }] }) }
+		const good = {
+			action: "ask",
+			question: question({
+				options: [
+					{ id: "a", label: "A" },
+					{ id: "b", label: "B" },
+				],
+			}),
+		}
+		let call = 0
+		const backend = {
+			id: "opencode",
+			async structured(request: { prompt: string }) {
+				prompts.push(request.prompt)
+				return { value: [bad, good][Math.min(call++, 1)], emulated: false }
+			},
+		} as unknown as CodingBackend
+		const turn = await nextWizardTurn({ workingDirectory: "/tmp/x", description: "d", history: [], backend })
+		assert.equal(turn.action, "ask")
+		assert.ok(prompts[1].includes('"slider"'), "retry prompt must echo the rejected payload")
+		assert.ok(prompts[1].includes("Why it was rejected:"))
+	})
+
+	it("a hallucinated 'you decide' card is sanitized, not retried — the recommendation re-points", () => {
+		const valid = validateQuestion(
+			question({
+				options: [
+					{ id: "a", label: "Deep green #2d6a4f" },
+					{ id: "b", label: "Warm clay #b45309" },
+					{ id: "c", label: "You decide" },
+				],
+				recommendedId: "c",
+			}),
+			[],
+		)
+		assert.deepEqual(
+			valid.options?.map((option) => option.id),
+			["a", "b"],
+		)
+		assert.equal(valid.recommendedId, "a")
 	})
 })
 

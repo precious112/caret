@@ -45,6 +45,12 @@ export interface SpecimenParams {
 	radius?: number
 	spacingUnit?: number
 	baseSize?: number
+	/**
+	 * CSS box-shadow the preview card casts — how a depth option shows itself.
+	 * Before this existed, a shadow question's three options rendered as three
+	 * identical cards (field report), because the spec had no way to differ.
+	 */
+	shadow?: string
 }
 
 export interface WizardOption {
@@ -81,9 +87,9 @@ export interface WizardQuestion {
 	 */
 	covers?: string[]
 	/**
-	 * Which escape hatch the renderer offers beyond the listed options.
-	 * `color` → picker + hex + eyedropper; `font` → Google Fonts search;
-	 * `text` → free input. Absent means the options are exhaustive.
+	 * DEPRECATED, ignored by the renderer and absent from the schema: the
+	 * escape hatch is determined by `kind` + the coverage area in the harness,
+	 * never chosen by the model. Kept only so old scratch files still parse.
 	 */
 	other?: "color" | "font" | "text"
 	/** `scale` only. */
@@ -94,6 +100,14 @@ export interface WizardQuestion {
 	/** `text` only. */
 	placeholder?: string
 	multiline?: boolean
+}
+
+export interface AnswerData {
+	hex?: string
+	family?: string
+	px?: number
+	ratio?: number
+	none?: boolean
 }
 
 export interface WizardAnswer {
@@ -111,6 +125,15 @@ export interface WizardAnswer {
 	label?: string
 	/** True when the user went through the escape hatch rather than an option. */
 	wasOther?: boolean
+	/**
+	 * The typed payload, written by the WIDGET at the moment of capture — the
+	 * hex field writes `hex` after validating it, the font search writes
+	 * `family` from the catalogue, a hex-less "none" option writes `none` by
+	 * its identity, the numeric inputs write `px`/`ratio`. The ledger consumes
+	 * ONLY this — never a regex over `value` or `label`, which is how a colour
+	 * named "Nordic Noir" stays a colour and not a "no".
+	 */
+	data?: AnswerData
 	/** True when the user skipped the question: the recommendation stands. */
 	skipped?: boolean
 }
@@ -191,6 +214,7 @@ const SPEC_SCHEMA = {
 		radius: { type: "number" },
 		spacingUnit: { type: "number" },
 		baseSize: { type: "number" },
+		shadow: { type: "string" },
 	},
 } as const
 
@@ -211,7 +235,11 @@ export const WIZARD_TURN_SCHEMA: Record<string, unknown> = {
 				why: { type: "string" },
 				recommendedId: { type: "string" },
 				covers: { type: "array", items: { type: "string" } },
-				other: { enum: ["color", "font", "text"] },
+				// `other` (the model-chosen escape hatch) is deliberately NOT in the
+				// schema: the input surface is determined by `kind` + the coverage
+				// area, in the harness. A field here would hand the model a decision
+				// it is prone to hallucinate wrong (field-measured: an accent
+				// question shipped without a picker).
 				leftLabel: { type: "string" },
 				rightLabel: { type: "string" },
 				defaultStep: { type: "number" },

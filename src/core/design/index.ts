@@ -269,6 +269,7 @@ export {
 	type SpecimenParams,
 	type StepId,
 	type StoredQA,
+	settledValues,
 	tagsFromDescription,
 	validateQuestion,
 	type WidgetKind,

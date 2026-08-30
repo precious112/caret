@@ -13,13 +13,17 @@
  */
 export { buildFoundation, type CommittedFoundation, IncompleteInterviewError } from "./commit"
 export {
+	bindSettledValues,
 	COLLABORATIVE_QUESTION_CAP,
-	type ConductorInput,
 	COVERAGE_AREAS,
+	type ConductorInput,
+	checkValueEcho,
 	coveredAreas,
 	nextWizardTurn,
 	QUESTION_CAP,
 	questionCapFor,
+	type SettledValue,
+	settledValues,
 	validateQuestion,
 	type WizardMode,
 	WizardTurnError,

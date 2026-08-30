@@ -16,6 +16,7 @@
 import { Logger } from "@/shared/services/Logger"
 import type { CodingBackend, ReasoningEffort } from "../agent/backend"
 import { PALETTE_RECIPES, TYPEFACE_PAIRINGS } from "../foundation-library"
+import { searchGoogleFonts } from "../google-fonts"
 import { finalizeProposal } from "./finalize"
 import {
 	type FoundationProposal,
@@ -102,12 +103,24 @@ const KNOWN_KINDS: ReadonlyArray<WizardQuestion["kind"]> = [
 const COLOR_AREAS = new Set(["brand-color", "secondary-color", "accent-color", "semantics"])
 
 /**
- * Areas whose answer is a concrete value the user may want to type exactly —
- * a family name or a hex. These must never be settled by an assumptions
- * confirmation: test4's opening assumptions claimed `brand-color`, so the
- * dedicated brand question never came and the exact hex was never the user's.
+ * Areas whose answer is a concrete value the user may want to give exactly —
+ * a family name, a hex, a px, a ratio. These must never be settled by an
+ * assumptions confirmation: test4's opening assumptions claimed `brand-color`
+ * so the dedicated brand question never came, and the first live probe run
+ * caught `spacing` riding an assumptions screen the same way — the typed px
+ * input never got its chance. Enum areas (surface, neutral, radius, depth,
+ * semantics-as-defaults) stay assumptions-coverable: a confirmed enum choice
+ * is individually correctable in that screen, and nothing typed is lost.
  */
-const VALUE_AREAS = new Set(["display-type", "body-type", "brand-color", "secondary-color", "accent-color"])
+const VALUE_AREAS = new Set([
+	"display-type",
+	"body-type",
+	"brand-color",
+	"secondary-color",
+	"accent-color",
+	"spacing",
+	"type-scale",
+])
 
 /** "You decide" and its relatives — see the delegation check below. */
 const DELEGATE_OPTION =
@@ -146,6 +159,16 @@ The person answering is a developer who knows exactly what they are building and
 designer. Your job: decide the foundations their project needs — typefaces, colour, density,
 corner character — by asking the fewest, best questions, then hand back the parameters.`
 
+	// One prompt must never argue with itself: the vibe-coder rule ("never show
+	// numbers") directly contradicted the collaborative contract ("name the
+	// numbers") a few sections apart, in the same prompt.
+	const scaleNumbersRule =
+		mode === "collaborative"
+			? `Show the numbers: the label carries the feel AND its value ("Comfortable — 16px body
+  text"). The step's \`spec\` carries them for the preview.`
+			: `**Never show numbers** — the step's \`spec\` carries them, the label says
+  how it feels ("tight", "roomy").`
+
 	const behave =
 		mode === "collaborative"
 			? `## How to behave
@@ -162,9 +185,9 @@ ${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n"
   \`covers\` area. No pairing cards ("heading + body at once"), no combined last-two-things
   questions — a bundled question breaks the purpose-built input for each decision.
 - **Assumptions confirm context; they never settle values.** An \`assumptions\` question may
-  cover character areas (\`surface\`, \`neutral\`, \`semantics\`, \`spacing\`, \`radius\`, \`depth\`,
-  \`type-scale\`) but never the typefaces or the brand/supporting/accent colours — those
-  always get their own question with their own widget.
+  cover character areas (\`surface\`, \`neutral\`, \`semantics\`, \`radius\`, \`depth\`) but never
+  the typefaces, the brand/supporting/accent colours, \`spacing\` or \`type-scale\` — value
+  areas always get their own question with their own input.
 - The palette is more than one colour: ask about the supporting colour and the accent
   colour explicitly ("none" is a legitimate answer, but it must be their answer). Colour
   questions use kind \`color\` — it carries the picker, hex field and eyedropper; an option
@@ -252,23 +275,20 @@ that contradicts itself, so read what the user actually sees before you choose.
 - \`boolean\` — **exactly 2 options, choose ONE.** A fork: dark-first or light-first. Each
   needs a \`spec\`. Use it when there are only two honest answers.
 
-- \`color\` — swatch cards; each option carries a \`hex\`. Choose one. Set \`other: "color"\` and
-  the screen adds a colour picker, a hex field and an eyedropper, so they are never stuck with
-  only your swatches.
+- \`color\` — swatch cards; each option carries a \`hex\`. Choose one. The screen AUTOMATICALLY
+  adds a colour picker, a hex field and an eyedropper — they are never stuck with only your
+  swatches. An option that means "none" simply omits its hex.
 
-- \`font\` — type-specimen cards; each option's \`label\` IS the family name. Choose one. Put the
-  body family in \`spec.bodyFamily\` if you are proposing a pairing. Set \`other: "font"\` and
-  the screen adds a search across all of Google Fonts.
+- \`font\` — type-specimen cards; each option's \`label\` IS the family name. Choose one. The
+  screen AUTOMATICALLY adds a search across all of Google Fonts.
 
 - \`scale\` — a slider between two extremes: \`leftLabel\`, \`rightLabel\`, and 3–5 \`steps\`, each
   carrying a \`spec\`. The preview morphs as they move it. Use it for density, rounding, how
-  loud headings are. **Never show numbers** — the step's \`spec\` carries them, the label says
-  how it feels ("tight", "roomy"). Set \`other: "text"\` so they can describe what they want
-  instead, if none of the steps is it.
+  loud headings are. ${scaleNumbersRule}
 
 - \`chips\` — **multi-select facts, pick as many as apply.** Which kinds of pages exist, which
-  states matter. Not for taste — only for facts about what they are building. \`other: "text"\`
-  lets them add their own.
+  states matter. Not for taste — only for facts about what they are building. The screen lets
+  them add their own.
 
 - \`text\` — one free input. Only for facts you cannot possibly infer, like their product's
   name or a site whose look they admire.
@@ -333,6 +353,20 @@ function turnPrompt(
 				.join("\n\n")
 		: "(nothing asked yet)"
 
+	// The ledger leads; the transcript is context. The model must never
+	// re-derive state from prose — every settled value is stated as a fact it
+	// copies, which is what makes the finish a copy job instead of a memory job.
+	const settled = settledValues(history)
+	const ledger = settled.length
+		? `## Settled so far — authoritative
+
+These came from answered questions. They are decisions, not suggestions.
+
+${ledgerLines(settled)}
+
+`
+		: ""
+
 	let coverageNote = ""
 	if (mode === "collaborative" && !force) {
 		const covered = new Set(coveredAreas(history))
@@ -350,7 +384,7 @@ function turnPrompt(
 ${description.trim()}
 """
 
-The interview so far (${questionCount} question(s) asked):
+${ledger}## The full transcript (context for wording and reasons, not for state — ${questionCount} question(s) asked)
 
 ${transcript}${coverageNote}
 
@@ -358,7 +392,7 @@ ${
 	force
 		? 'You must return `action: "finish"` now, constructed from everything above. Do not ask anything else.'
 		: "Return the single next turn: one question, or finish if you can already defend every parameter."
-}${complaint ? `\n\nYour previous reply was rejected: ${complaint}\nReturn a corrected turn.` : ""}`
+}${settled.length ? " The finish must echo every authoritative value above verbatim." : ""}${complaint ? `\n\n${complaint}\nReturn a corrected turn.` : ""}`
 }
 
 /** A slug that renders and sorts sanely, whatever the model sent. */
@@ -453,15 +487,25 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 
 		if (options.some((option) => !option.label)) throw new WizardTurnError(`an option in "${question.id}" has no label.`)
 
-		// A "you decide" option is a non-answer taking up an answer's seat: the
-		// user clicks it because their value is not on offer, and the question
-		// closes with nothing said. Skip and `recommendedId` carry delegation.
-		const delegating = options.find((option) => DELEGATE_OPTION.test(`${option.label} ${option.reason ?? ""}`))
-		if (delegating && question.kind !== "assumptions") {
-			throw new WizardTurnError(
-				`"${delegating.label}" means "you decide", which the Skip button and your recommendedId already cover — ` +
-					`every option must name a concrete outcome.`,
-			)
+		// A "you decide" option is a non-answer taking up an answer's seat —
+		// delegation is harness-owned (the Skip button renders on every
+		// question). Mechanically repairable, so it is SANITIZED, not retried:
+		// dropped silently, the recommendation re-pointed. Only when dropping
+		// would leave nothing to pick does the question earn a refusal, because
+		// then only its author can supply the missing content.
+		if (question.kind !== "assumptions") {
+			const concrete = options.filter((option) => !DELEGATE_OPTION.test(`${option.label} ${option.reason ?? ""}`))
+			if (concrete.length < options.length) {
+				const minimumAfterDrop = question.kind === "boolean" ? 2 : 2
+				if (concrete.length < minimumAfterDrop) {
+					throw new WizardTurnError(
+						`after dropping the "you decide" option(s), "${question.id}" has ${concrete.length} option(s) left — ` +
+							`give at least 2 concrete outcomes (Skip already covers delegation).`,
+					)
+				}
+				options.length = 0
+				options.push(...concrete)
+			}
 		}
 
 		const minimum = question.kind === "assumptions" ? 1 : 2
@@ -575,11 +619,205 @@ function checkCollaborativeFinish(foundation: FoundationProposal, history: Store
 	}
 }
 
+/**
+ * A typed family may differ from the catalogue's exact casing ("young serif"),
+ * and the Google Fonts URL is case-sensitive — a near-miss loads nothing and
+ * falls back silently. Resolved against the catalogue when reachable;
+ * verbatim otherwise.
+ */
+async function canonicalFamily(name: string): Promise<string> {
+	const trimmed = name.trim()
+	try {
+		const result = await searchGoogleFonts(trimmed)
+		const hit = result.fonts.find((font) => font.family.toLowerCase() === trimmed.toLowerCase())
+		return hit?.family ?? trimmed
+	} catch {
+		return trimmed
+	}
+}
+
+/* ── The settled-values ledger ─────────────────────────────────────────────
+ *
+ * Caret, not the model, is the source of truth for what the user answered.
+ * The ledger is computed deterministically from the answer history each turn
+ * (a stateless reduction — same history, same ledger), rendered into the
+ * prompt as authoritative facts, validated against the finish, and — if the
+ * model still gets it wrong after being told — written into the proposal
+ * directly. The field failure this closes: hexes typed into the colour widget
+ * arrived in the committed foundation as nothing at all, because the only
+ * path from answer to file ran through the model's paraphrase. */
+
+/** Value areas ↔ the single proposal field that must echo them. */
+const AREA_FIELDS = {
+	"brand-color": "brand",
+	"secondary-color": "secondary",
+	"accent-color": "accent",
+	"display-type": "displayFamily",
+	"body-type": "bodyFamily",
+} as const
+
+export type SettledValue =
+	| { area: string; kind: "hex"; value: string; own: boolean }
+	| { area: string; kind: "family"; value: string; own: boolean }
+	| { area: string; kind: "number"; field: "spacingUnit" | "baseSize" | "scaleRatio"; value: number; own: boolean }
+	| { area: string; kind: "choice"; value: string; own: boolean }
+	| { area: string; kind: "none" }
+	| { area: string; kind: "delegated" }
+
+/**
+ * One entry per atomically-tagged area (numbers may add a second for
+ * type-scale); a later answer to the same area wins. Typed entries come ONLY
+ * from `answer.data` — written by the widget that validated the value at
+ * capture. Nothing here parses question text or labels: a regex scavenger
+ * would re-introduce guessing one layer down (a colour named "Nordic Noir" is
+ * not a "no"), and the widgets already knew the type when they captured it.
+ */
+export function settledValues(history: StoredQA[]): SettledValue[] {
+	const entries = new Map<string, SettledValue>()
+	for (const qa of history) {
+		const area = qa.question.covers?.length === 1 ? qa.question.covers[0] : undefined
+		if (!area) continue
+		if (qa.answer.skipped) {
+			for (const key of [...entries.keys()]) if (key.startsWith(`${area}:`)) entries.delete(key)
+			entries.set(`${area}:`, { area, kind: "delegated" })
+			continue
+		}
+		const own = qa.answer.wasOther === true
+		const data = qa.answer.data
+		const label = qa.answer.label?.trim() || qa.answer.value?.trim() || ""
+
+		// A fresh real answer to a re-asked area clears its delegation.
+		entries.delete(`${area}:`)
+
+		if (data?.hex && area in AREA_FIELDS) {
+			entries.set(`${area}:`, { area, kind: "hex", value: data.hex, own })
+		} else if (data?.none && area in AREA_FIELDS) {
+			entries.set(`${area}:`, { area, kind: "none" })
+		} else if (data?.family && (area === "display-type" || area === "body-type")) {
+			entries.set(`${area}:`, { area, kind: "family", value: data.family, own })
+		} else if (data?.px !== undefined && area === "spacing") {
+			entries.set(`${area}:`, { area, kind: "number", field: "spacingUnit", value: data.px, own })
+		} else if (area === "type-scale" && (data?.px !== undefined || data?.ratio !== undefined)) {
+			if (data.px !== undefined) entries.set(`${area}:px`, { area, kind: "number", field: "baseSize", value: data.px, own })
+			if (data.ratio !== undefined) {
+				entries.set(`${area}:ratio`, { area, kind: "number", field: "scaleRatio", value: data.ratio, own })
+			}
+		} else if (label) {
+			// No typed payload: an option pick or fuzzy text. Recorded for the
+			// prompt ledger so the model sees it, but never machine-bound.
+			entries.set(`${area}:`, { area, kind: "choice", value: label, own })
+		}
+	}
+	return [...entries.values()]
+}
+
+/** The ledger as prompt lines — authoritative facts, not conversation. */
+function ledgerLines(settled: SettledValue[]): string {
+	return settled
+		.map((entry) => {
+			switch (entry.kind) {
+				case "hex":
+					return `- \`${entry.area}\`: ${entry.value}${entry.own ? " — the user's own value" : ""}. Echo this hex EXACTLY in the finish.`
+				case "family":
+					return `- \`${entry.area}\`: "${entry.value}"${entry.own ? " — the user's own pick" : ""}. Echo this family name EXACTLY.`
+				case "number":
+					return `- \`${entry.area}\`: ${entry.field} = ${entry.value}${entry.own ? " — the user's own value" : ""}. Echo this number EXACTLY.`
+				case "none":
+					return `- \`${entry.area}\`: none — the user chose not to have one. The finish must leave it out.`
+				case "delegated":
+					return `- \`${entry.area}\`: skipped — your recommendation stands. Record the concrete value you recommend.`
+				case "choice":
+					return `- \`${entry.area}\`: they chose "${entry.value}"${entry.own ? " (their own words)" : ""}.`
+			}
+		})
+		.join("\n")
+}
+
+/**
+ * The finish must echo every hex, family and "none" the user settled. A
+ * mismatch is field-level, actionable feedback the retry can act on — the
+ * re-ask pattern: name the field, the user's value, and what arrived instead.
+ */
+export function checkValueEcho(foundation: FoundationProposal, settled: SettledValue[]): void {
+	const problems: string[] = []
+	const record = foundation as unknown as Record<string, unknown>
+	for (const entry of settled) {
+		if (entry.kind === "number") {
+			const got = record[entry.field]
+			if (typeof got !== "number" || Math.abs(got - entry.value) > 0.001) {
+				problems.push(`\`${entry.field}\` — the user answered ${entry.value} but the proposal has ${got ?? "nothing"}`)
+			}
+			continue
+		}
+		const field = AREA_FIELDS[entry.area as keyof typeof AREA_FIELDS]
+		if (!field) continue
+		const got = record[field]
+		if (entry.kind === "hex") {
+			const gotHex = normalizeHex(typeof got === "string" ? got : undefined)
+			if (gotHex !== entry.value) {
+				problems.push(`\`${field}\` — the user answered ${entry.value} but the proposal has ${gotHex ?? "nothing"}`)
+			}
+		} else if (entry.kind === "none") {
+			if (got) problems.push(`\`${field}\` — the user chose none but the proposal has ${got}`)
+		} else if (entry.kind === "family") {
+			if (typeof got !== "string" || got.trim().toLowerCase() !== entry.value.toLowerCase()) {
+				problems.push(
+					`\`${field}\` — the user picked "${entry.value}" but the proposal has ${got ? `"${got}"` : "nothing"}`,
+				)
+			}
+		}
+	}
+	if (problems.length) {
+		throw new WizardTurnError(
+			`the finish does not echo the user's answers:\n- ${problems.join("\n- ")}\n` +
+				`These are decisions, not suggestions — copy the user's values exactly.`,
+		)
+	}
+}
+
+/**
+ * The deterministic backstop: when the model has already been told once and
+ * still mismatches, the ledger is written into the proposal directly, and the
+ * matching decisions entry is rewritten so the log cannot contradict the file.
+ * The interview must never end missing a value the user actually gave.
+ */
+export async function bindSettledValues(foundation: FoundationProposal, settled: SettledValue[]): Promise<void> {
+	const record = foundation as unknown as Record<string, unknown>
+	const syncDecision = (area: string, value: string) => {
+		const entry = foundation.decisions?.find((decision) => decision.area === area)
+		if (entry && !entry.choice.includes(value)) entry.choice = value
+	}
+	for (const entry of settled) {
+		if (entry.kind === "number") {
+			record[entry.field] = entry.value
+			syncDecision(entry.area, String(entry.value))
+			continue
+		}
+		const field = AREA_FIELDS[entry.area as keyof typeof AREA_FIELDS]
+		if (!field) continue
+		if (entry.kind === "hex") {
+			record[field] = entry.value
+			syncDecision(entry.area, entry.value)
+		} else if (entry.kind === "none") {
+			delete record[field]
+			syncDecision(entry.area, "none")
+		} else if (entry.kind === "family") {
+			record[field] = await canonicalFamily(entry.value)
+			syncDecision(entry.area, record[field] as string)
+		}
+	}
+}
+
 export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn> {
 	const mode = input.mode ?? "ai-led"
 	const force = input.force === "finish" || input.history.length >= questionCapFor(mode)
+	const settled = settledValues(input.history)
 
-	const attempt = async (complaint?: string): Promise<WizardTurn> => {
+	// Each attempt is a fresh, stateless call: without this, the retry is
+	// asked to correct a reply it has never seen.
+	let rejectedPayload = ""
+
+	const attempt = async (complaint?: string, repair = false): Promise<WizardTurn> => {
 		const result = await input.backend.structured<{
 			action: string
 			question?: WizardQuestion
@@ -594,6 +832,7 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 		})
 
 		const value = result.value
+		rejectedPayload = JSON.stringify(value ?? null)
 		if (value?.action === "ask" && !force) {
 			if (!value.question) throw new WizardTurnError('action was "ask" but no question was included.')
 			return { action: "ask", question: validateQuestion(value.question, input.history) }
@@ -603,6 +842,13 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 			// "Just finish it" is the user's escape and the cap is the backstop —
 			// both must terminate, so only a model-chosen finish has to earn it.
 			if (mode === "collaborative" && !force) checkCollaborativeFinish(value.foundation, input.history)
+			// The user's answers are the source of truth for value areas. First
+			// attempt: the model must echo them (field-level rejection teaches
+			// it). Second attempt or a forced finish: Caret writes the ledger
+			// into the proposal directly — the interview is structurally unable
+			// to end without the user's values.
+			if (repair || force) await bindSettledValues(value.foundation, settled)
+			else checkValueEcho(value.foundation, settled)
 			// Finalize is the validator: it throws ProposalError with a quotable
 			// sentence, and its success proves the proposal derives cleanly.
 			finalizeProposal(value.foundation, input.description)
@@ -614,8 +860,9 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 	try {
 		return await attempt()
 	} catch (err) {
-		const complaint = err instanceof Error ? err.message : String(err)
-		Logger.warn(`[wizard] turn rejected (${complaint}), retrying once`)
-		return attempt(complaint)
+		const why = err instanceof Error ? err.message : String(err)
+		Logger.warn(`[wizard] turn rejected (${why}), retrying once`)
+		const complaint = `Your previous reply (rejected):\n${rejectedPayload}\n\nWhy it was rejected: ${why}`
+		return attempt(complaint, true)
 	}
 }
