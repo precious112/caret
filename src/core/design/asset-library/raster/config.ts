@@ -59,7 +59,14 @@ export function resolveRasterConfig(sources: RasterSources = {}): GeminiConfig |
 		return {
 			backend: "vertex",
 			project,
-			location: sources.vertexLocation?.trim() || env.GOOGLE_CLOUD_LOCATION?.trim() || "global",
+			// `global` rides Dynamic Shared Quota, which is what throttles under
+			// load; CARET_VERTEX_LOCATION=us-central1 pins a regional endpoint
+			// with its own quota, without touching the machine's gcloud config.
+			location:
+				sources.vertexLocation?.trim() ||
+				env.CARET_VERTEX_LOCATION?.trim() ||
+				env.GOOGLE_CLOUD_LOCATION?.trim() ||
+				"global",
 			model: "flash-image",
 		}
 	}

@@ -82,6 +82,55 @@ export interface ImageUsage {
 	totalTokens: number
 }
 
+/* ── Pacing and retries ──────────────────────────────────────────────────
+ *
+ * The image quota is per-minute and small, and the agent legitimately asks
+ * for many images at once — eight portraits fired in parallel produced four
+ * instant 429s (field-measured, test4), and the agent then burned its own
+ * turns doing traffic control. Retries are the harness's problem: every
+ * request goes through one process-wide queue with spacing between calls,
+ * and a retryable failure backs off and tries again INSIDE the queue slot,
+ * so callers see success-that-took-longer, not quota noise. A non-retryable
+ * failure (a refused prompt) is never retried — that spends money to be
+ * told the same thing again. */
+
+const PACING = {
+	/** Gap between requests. The per-minute quota is the thing being respected. */
+	minSpacingMs: 6_000,
+	/** Backoff before each retry of a retryable failure. Length = max retries. */
+	backoffMs: [4_000, 10_000, 20_000, 40_000],
+	/** ±fraction of jitter on each backoff, so retries never re-synchronize. */
+	jitter: 0.2,
+	sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+	now: () => Date.now(),
+}
+
+/** Test hook (and tuning): override timing without touching the queue logic. */
+export function configureRasterPacing(overrides: Partial<typeof PACING>): void {
+	Object.assign(PACING, overrides)
+}
+
+let queueTail: Promise<void> = Promise.resolve()
+let lastRequestAt = 0
+
+/** One at a time, spaced apart — parallel callers queue instead of colliding. */
+async function paced<T>(task: () => Promise<T>): Promise<T> {
+	const previous = queueTail
+	let release!: () => void
+	queueTail = new Promise<void>((resolve) => {
+		release = resolve
+	})
+	await previous
+	try {
+		const wait = lastRequestAt + PACING.minSpacingMs - PACING.now()
+		if (wait > 0) await PACING.sleep(wait)
+		return await task()
+	} finally {
+		lastRequestAt = PACING.now()
+		release()
+	}
+}
+
 export class GeminiImages {
 	private readonly config: GeminiConfig
 
@@ -96,14 +145,28 @@ export class GeminiImages {
 	}
 
 	/**
-	 * Generates one image.
+	 * Generates one image — queued, spaced, and retried.
 	 *
 	 * Every failure is a `reason` a person can act on, and `retryable` says
 	 * whether trying again could plausibly help — a quota error can, a refused
-	 * prompt cannot. Callers use that to choose between a retry and telling the
-	 * user, instead of guessing from a message string.
+	 * prompt cannot. Retryable failures are retried HERE, with backoff, inside
+	 * the queue slot; a `retryable: true` result reaching a caller means the
+	 * whole budget was spent and the service is genuinely exhausted right now.
 	 */
 	async generate(request: ImageRequest): Promise<ImageResult> {
+		return paced(async () => {
+			let result = await this.generateOnce(request)
+			for (let retry = 0; !result.ok && result.retryable && retry < PACING.backoffMs.length; retry++) {
+				const base = PACING.backoffMs[retry]
+				const jitter = base * PACING.jitter * (Math.random() * 2 - 1)
+				await PACING.sleep(Math.max(0, Math.round(base + jitter)))
+				result = await this.generateOnce(request)
+			}
+			return result
+		})
+	}
+
+	private async generateOnce(request: ImageRequest): Promise<ImageResult> {
 		const misconfigured = this.check()
 		if (misconfigured) return { ok: false, reason: misconfigured, retryable: false }
 

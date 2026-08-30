@@ -662,6 +662,12 @@ export interface GeneratedVariantWire {
 	surface: string
 	/** Set when this variant could not be produced. The lane's own words. */
 	error?: string
+	/**
+	 * With `error`: true means the service was exhausted (quota) after the
+	 * client spent its whole retry budget — re-running later can work. False
+	 * or absent means retrying would only repeat the refusal.
+	 */
+	retryable?: boolean
 }
 
 /** Renderer → main. Each entry is an `ipcRenderer.invoke` channel. */

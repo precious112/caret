@@ -380,6 +380,20 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				const takes = await requestTakes(ctx.projectPath, request, "")
 				const usable = takes.filter((take) => !take.error)
 				if (usable.length === 0) {
+					// Quota exhaustion must not stall the build: the client already
+					// queued, spaced and retried with backoff, so this is genuine
+					// exhaustion — the agent's move is to continue, not to re-strategize
+					// around infrastructure (field: an agent spent turns inventing its
+					// own sequential retry policy over raw 429 notes).
+					if (takes.some((take) => take.retryable)) {
+						return ok({
+							generated: false,
+							note:
+								"The image service is out of quota right now — Caret already retried with waits between attempts. " +
+								"Do NOT retry now and do not stall the page on this asset: keep building, and mention to the user " +
+								"that this image can be regenerated later from the Assets tab with the same description.",
+						})
+					}
 					const why = takes[0]?.error ?? "nothing came back"
 					return ok({ generated: false, note: `Generation did not produce anything: ${why}` })
 				}

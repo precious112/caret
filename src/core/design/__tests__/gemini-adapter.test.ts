@@ -2,7 +2,7 @@ import { describe, it } from "mocha"
 import "should"
 
 import { mockFetchForTesting } from "@/shared/net"
-import { composePrompt, GeminiImages } from "../asset-library/raster/gemini"
+import { composePrompt, configureRasterPacing, GeminiImages } from "../asset-library/raster/gemini"
 
 const request = {
 	prompt: "An overhead photograph of a wooden workbench, low warm light, empty space top-left.",
@@ -26,6 +26,11 @@ const IMAGE_REPLY = {
 }
 
 describe("the Gemini image adapter", () => {
+	// Real pacing sleeps for minutes across the retry budget; tests exercise the
+	// logic, not the clock.
+	before(() => configureRasterPacing({ minSpacingMs: 0, backoffMs: [0, 0, 0, 0], jitter: 0 }))
+	after(() => configureRasterPacing({ minSpacingMs: 6_000, backoffMs: [4_000, 10_000, 20_000, 40_000], jitter: 0.2 }))
+
 	it("routes Vertex at the project and location, and the API key at the public host", () => {
 		const vertex = new GeminiImages({ backend: "vertex", project: "proj-1", location: "global" })
 		vertex
@@ -162,5 +167,69 @@ describe("the Gemini image adapter", () => {
 		)
 		result.ok.should.be.false()
 		;(result as { retryable: boolean }).retryable.should.be.true()
+	})
+
+	// ── pacing and retries: the quota bugs, held down ──────────────────────
+	// Field-measured (test4): eight portraits fired in parallel produced four
+	// instant 429s, and the agent burned its turns doing traffic control.
+
+	it("retries a 429 with backoff and succeeds — the caller never sees the throttle", async () => {
+		let calls = 0
+		const result = await mockFetchForTesting(
+			async () => {
+				calls++
+				return calls < 3 ? reply({ error: { message: "Resource exhausted" } }, 429) : reply(IMAGE_REPLY)
+			},
+			async () => new GeminiImages({ backend: "api-key", apiKey: "k" }).generate(request),
+		)
+		result.ok.should.be.true()
+		calls.should.equal(3)
+	})
+
+	it("spends the whole budget on persistent 429s, then reports retryable exhaustion", async () => {
+		let calls = 0
+		const result = await mockFetchForTesting(
+			async () => {
+				calls++
+				return reply({ error: { message: "Resource exhausted" } }, 429)
+			},
+			async () => new GeminiImages({ backend: "api-key", apiKey: "k" }).generate(request),
+		)
+		result.ok.should.be.false()
+		;(result as { retryable: boolean }).retryable.should.be.true()
+		calls.should.equal(5) // the initial call + the full backoff ladder
+	})
+
+	it("never retries a refusal — that spends money to be told the same thing again", async () => {
+		let calls = 0
+		const result = await mockFetchForTesting(
+			async () => {
+				calls++
+				return reply({ error: { message: "Prompt was blocked." } }, 400)
+			},
+			async () => new GeminiImages({ backend: "api-key", apiKey: "k" }).generate(request),
+		)
+		result.ok.should.be.false()
+		;(result as { retryable: boolean }).retryable.should.be.false()
+		calls.should.equal(1)
+	})
+
+	it("serializes parallel requests — a burst becomes a queue, never a collision", async () => {
+		let inFlight = 0
+		let peak = 0
+		await mockFetchForTesting(
+			async () => {
+				inFlight++
+				peak = Math.max(peak, inFlight)
+				await new Promise((resolve) => setTimeout(resolve, 15))
+				inFlight--
+				return reply(IMAGE_REPLY)
+			},
+			async () => {
+				const client = new GeminiImages({ backend: "api-key", apiKey: "k" })
+				await Promise.all([client.generate(request), client.generate(request), client.generate(request)])
+			},
+		)
+		peak.should.equal(1)
 	})
 })

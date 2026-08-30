@@ -240,21 +240,23 @@ async function generateRasterVariants(
 			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: "not a raster recipe" }
 		}
 
-		const ask = () => client.generate({ prompt: request.prompt, avoid: request.avoid, aspect: request.aspect })
-
-		let result = await ask()
-		if (!result.ok && result.retryable) {
-			// The pool keeps the burst small; this catches what still slips
-			// through, for the price of one extra call and only for the variant
-			// that actually failed. A refusal is never retried — that spends money
-			// to be told the same thing again.
-			await new Promise((resolve) => setTimeout(resolve, 6000))
-			result = await ask()
-		}
+		// Pacing, spacing and backoff retries all live in the client now — one
+		// process-wide queue every caller shares. A failure surfacing here means
+		// the whole retry budget is spent; `retryable` distinguishes "exhausted
+		// right now, worth re-running later" from a refusal that never will be.
+		const result = await client.generate({ prompt: request.prompt, avoid: request.avoid, aspect: request.aspect })
 
 		if (!result.ok) {
 			Logger.warn(`[generate] raster variant ${variant.variant} failed: ${result.reason}`)
-			return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: result.reason }
+			return {
+				variant: variant.variant,
+				preview: "",
+				width: 0,
+				height: 0,
+				surface,
+				error: result.reason,
+				retryable: result.retryable,
+			}
 		}
 
 		// Keyed recipes are keyed *before* the variant is shown, so the picture
