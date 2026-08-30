@@ -394,6 +394,55 @@ describe("AgentConversation stall watchdog", () => {
 		assert.ok(outcome.text.includes("installed"), "the answered turn did not finish its work")
 	})
 
+	it("a running tool is quiet work, not a stalled provider", async () => {
+		// Field-measured: asset generation queues, spaces and retries (quota),
+		// so one generate call legitimately runs many silent minutes — and the
+		// watchdog killed the healthy turn twice ("the provider went silent").
+		let finishTool!: () => void
+		const gate = new Promise<void>((resolve) => {
+			finishTool = resolve
+		})
+		const { backend, aborts } = stalledBackend([
+			() =>
+				(async function* (): AsyncGenerator<BackendEvent> {
+					yield { type: "tool-start", callId: "c1", name: "caret_generate_asset", summary: "a sauce bottle" }
+					await gate
+					yield { type: "tool-end", callId: "c1", name: "caret_generate_asset", ok: true }
+					yield { type: "text", text: "bottle generated" }
+					yield { type: "done", text: "" }
+				})(),
+		])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40, toolStallMs: 5_000 })
+
+		const run = conversation.run(REQUEST)
+		// Several full stall windows pass with the tool running — the queue working.
+		await new Promise((resolve) => setTimeout(resolve, 150))
+		finishTool()
+		const outcome = await run
+
+		assert.equal(outcome.ok, true, "a turn waiting on its own tool was reported as a failure")
+		assert.equal(aborts(), 0, "the watchdog aborted a turn whose tool was still working")
+		assert.ok(outcome.text.includes("bottle generated"), "the finished turn lost its reply")
+	})
+
+	it("a tool that outlives even the tool ceiling still trips the watchdog", async () => {
+		// The bound matters: a stream that died mid-tool never delivers the
+		// tool-end, and without the ceiling the exemption would hang forever.
+		const { backend, aborts } = stalledBackend([
+			() =>
+				(async function* (): AsyncGenerator<BackendEvent> {
+					yield { type: "tool-start", callId: "c1", name: "caret_generate_asset", summary: "a sauce bottle" }
+					await new Promise(() => {}) // the wire is dead; tool-end never comes
+				})(),
+		])
+		const conversation = new AgentConversation({ ...deps(backend), stallMs: 30, toolStallMs: 90 })
+
+		const outcome = await conversation.run(REQUEST)
+
+		assert.equal(outcome.ok, false, "a dead-mid-tool stream was reported as a success")
+		assert.ok(aborts() >= 1, "the dead stream was never aborted")
+	})
+
 	it("fails the turn with its name on it when the stream stalls twice", async () => {
 		const { backend, aborts } = stalledBackend([() => hangingAfter([{ type: "text", text: "start" }])])
 		const conversation = new AgentConversation({ ...deps(backend), stallMs: 40 })

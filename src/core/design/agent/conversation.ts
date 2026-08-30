@@ -130,6 +130,8 @@ export interface ConversationDeps {
 	onTurnComplete?(outcome: RunOutcome, request: RunRequest): void
 	/** Overrides the stall watchdog's threshold. Tests only. */
 	stallMs?: number
+	/** Overrides the running-tool stall ceiling. Tests only. */
+	toolStallMs?: number
 }
 
 export interface RunRequest {
@@ -181,12 +183,22 @@ export interface RunOutcome {
 const PUSH_INTERVAL_MS = 60
 
 /**
- * True silence for this long trips the stall watchdog. Four minutes clears the
- * slowest legitimate gap observed — a long-running tool emits nothing between
- * tool-start and tool-end — while a dead socket, which emits nothing forever,
- * cannot hide inside it.
+ * True silence for this long trips the stall watchdog — when nothing is known
+ * to be working. A dead socket emits nothing forever and cannot hide inside it.
  */
 const DEFAULT_STALL_MS = 4 * 60_000
+
+/**
+ * The higher ceiling while a TOOL is running. A tool emits nothing between
+ * tool-start and tool-end, and that silence is Caret's own work, not the
+ * provider's health — field-measured: asset generation now queues, spaces and
+ * retries (quota), so one turn's generate calls legitimately run many minutes,
+ * and the 4-minute watchdog killed healthy turns twice in a row ("the
+ * provider went silent"). Bounded rather than exempt, above the MCP layer's
+ * own 10-minute tool timeout: a stream that died mid-tool never delivers the
+ * tool-end, and this ceiling is what still catches it.
+ */
+const TOOL_STALL_MS = 12 * 60_000
 
 /**
  * What the retry says. Generic across modes on purpose: a plan turn should
@@ -418,6 +430,7 @@ export class AgentConversation {
 		// dead socket is transport weather, not a decision anyone needs to make;
 		// a second stall fails the turn with its name on it.
 		const stallMs = this.deps.stallMs ?? DEFAULT_STALL_MS
+		const toolStallMs = this.deps.toolStallMs ?? TOOL_STALL_MS
 		let stalled = false
 		let stallRetried = false
 		let nudged = false
@@ -425,6 +438,7 @@ export class AgentConversation {
 			let input: { text: string; images?: string[] } = { text: request.prompt, images: request.images }
 			while (true) {
 				stalled = false
+				let lastActivity = Date.now()
 				const stream = session.send(input)[Symbol.asyncIterator]()
 				// Held across stall laps: when the timer fires while a permission ask
 				// is waiting on the user, the SAME next() promise is re-raced —
@@ -440,6 +454,11 @@ export class AgentConversation {
 						// watchdog killed a healthy turn and blamed the stream. The
 						// backend holds asks with no timeout; while one is open, so do we.
 						if (this.hasPendingAsk()) continue
+						// A running tool is Caret's own work — quiet by nature, not a
+						// provider death. Higher ceiling rather than exemption: if the
+						// stream died mid-tool, the tool-end never arrives, and the
+						// ceiling (past the MCP layer's own tool timeout) catches it.
+						if (this.hasRunningTool() && Date.now() - lastActivity < toolStallMs) continue
 						stalled = true
 						break
 					}
@@ -447,6 +466,7 @@ export class AgentConversation {
 					if (step.done) break
 					const event = step.value
 					this.lastEventAt = Date.now()
+					lastActivity = Date.now()
 					if (event.type !== "done") sawAnyEvent = true
 					if (
 						event.type === "text" ||
@@ -664,6 +684,11 @@ export class AgentConversation {
 	 */
 	private hasPendingAsk(): boolean {
 		return this.transcript.entries.some((entry) => entry.kind === "permission" && entry.status === "pending")
+	}
+
+	/** A tool the backend is still executing — quiet work, not provider silence. */
+	private hasRunningTool(): boolean {
+		return this.transcript.entries.some((entry) => entry.kind === "tool" && entry.status === "running")
 	}
 
 	/** The user answering a permission prompt Caret chose to surface. */
