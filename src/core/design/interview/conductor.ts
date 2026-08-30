@@ -101,6 +101,14 @@ const KNOWN_KINDS: ReadonlyArray<WizardQuestion["kind"]> = [
 /** Areas whose answer is a colour — their questions must use the colour widget. */
 const COLOR_AREAS = new Set(["brand-color", "secondary-color", "accent-color", "semantics"])
 
+/**
+ * Areas whose answer is a concrete value the user may want to type exactly —
+ * a family name or a hex. These must never be settled by an assumptions
+ * confirmation: test4's opening assumptions claimed `brand-color`, so the
+ * dedicated brand question never came and the exact hex was never the user's.
+ */
+const VALUE_AREAS = new Set(["display-type", "body-type", "brand-color", "secondary-color", "accent-color"])
+
 /** "You decide" and its relatives — see the delegation check below. */
 const DELEGATE_OPTION =
 	/\byou (decide|choose|pick)\b|\b(up to you|your call|whatever you think|whatever works|surprise me|dealer'?s choice|(you|caret) (pick|choose)s? for me|let (you|caret) (decide|choose|pick))\b/i
@@ -149,9 +157,14 @@ corner character — by asking the fewest, best questions, then hand back the pa
 - **You must cover every one of these areas before finishing**, each with at least one
   answered question tagged with it:
 ${COVERAGE_AREAS.map((area) => `  - \`${area.id}\` — ${area.label}`).join("\n")}
-  Tag every question with \`covers: [...]\` naming the areas it settles. One question may
-  settle several (a palette question can carry \`brand-color\` and \`secondary-color\`), but
-  a tag is a claim — only tag what the question genuinely asks about.
+  Tag every question with \`covers: [...]\` naming the area it settles.
+- **One decision per question.** Every question except \`assumptions\` carries exactly ONE
+  \`covers\` area. No pairing cards ("heading + body at once"), no combined last-two-things
+  questions — a bundled question breaks the purpose-built input for each decision.
+- **Assumptions confirm context; they never settle values.** An \`assumptions\` question may
+  cover character areas (\`surface\`, \`neutral\`, \`semantics\`, \`spacing\`, \`radius\`, \`depth\`,
+  \`type-scale\`) but never the typefaces or the brand/supporting/accent colours — those
+  always get their own question with their own widget.
 - The palette is more than one colour: ask about the supporting colour and the accent
   colour explicitly ("none" is a legitimate answer, but it must be their answer). Colour
   questions use kind \`color\` — it carries the picker, hex field and eyedropper; an option
@@ -382,6 +395,39 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 		)
 	}
 
+	// Coverage tags: sanitized FIRST, never rejected over — an unknown tag is
+	// noise, not a broken screen, and it must not count toward the atomicity
+	// check below.
+	if (question.covers) {
+		const known = new Set(COVERAGE_AREAS.map((area) => area.id))
+		const covers = question.covers.filter((id) => known.has(id))
+		question.covers = covers.length ? covers : undefined
+	}
+
+	// One decision per question. A bundled question breaks the purpose-built
+	// input for each decision: test4's pairing card asked for heading AND body
+	// faces at once, and the font search — which picks one family — could not
+	// answer it, leaving only free text. Assumptions are the one exception
+	// (each statement is independently confirmable), but they confirm context,
+	// never values: the same run's opening assumptions claimed `brand-color`,
+	// so no dedicated brand question ever came and the hex was never the
+	// user's. Both rules only bite where `covers` exists — collaborative mode.
+	if (question.kind !== "assumptions" && (question.covers?.length ?? 0) > 1) {
+		throw new WizardTurnError(
+			`"${question.id}" claims to settle ${question.covers?.length} areas (${question.covers?.join(", ")}) — ` +
+				`one decision per question. Split it, one \`covers\` area each.`,
+		)
+	}
+	if (question.kind === "assumptions") {
+		const claimed = (question.covers ?? []).filter((id) => VALUE_AREAS.has(id))
+		if (claimed.length) {
+			throw new WizardTurnError(
+				`an assumptions question may not settle ${claimed.join(", ")} — typefaces and palette colours ` +
+					`always get their own question with their own widget. Drop those tags and ask properly.`,
+			)
+		}
+	}
+
 	// A colour decision answered through a plain card or a bare text box loses
 	// the picker, the hex field and the eyedropper — the user typed a hex into
 	// a text input while a purpose-built widget sat unused (field-measured:
@@ -392,14 +438,6 @@ export function validateQuestion(raw: WizardQuestion, history: StoredQA[]): Wiza
 			`"${question.id}" settles a colour but is kind "${question.kind}" — colour questions use kind "color" ` +
 				`(swatch options plus the built-in picker); an option that means "none" may simply omit its hex.`,
 		)
-	}
-
-	// Coverage tags: sanitized, never rejected over — an unknown tag is noise,
-	// not a broken screen.
-	if (question.covers) {
-		const known = new Set(COVERAGE_AREAS.map((area) => area.id))
-		const covers = question.covers.filter((id) => known.has(id))
-		question.covers = covers.length ? covers : undefined
 	}
 
 	const needsOptions = ["options", "color", "font", "chips", "boolean", "assumptions"].includes(question.kind)

@@ -97,6 +97,58 @@ describe("validateQuestion", () => {
 		}
 	})
 
+	it("refuses a question bundling several coverage areas — one decision per question", () => {
+		// test4's pairing card asked heading AND body faces at once; the font
+		// search picks one family, so only free text could answer it.
+		assert.throws(
+			() =>
+				validateQuestion(
+					question({
+						kind: "font",
+						covers: ["display-type", "body-type"],
+						options: [
+							{ id: "a", label: "Young Serif" },
+							{ id: "b", label: "Fraunces" },
+						],
+					}),
+					[],
+				),
+			(err: unknown) => err instanceof WizardTurnError && /one decision per question/.test(err.message),
+		)
+	})
+
+	it("refuses an assumptions screen that claims to settle typefaces or palette colours", () => {
+		// test4's opening assumptions claimed brand-color, so the dedicated
+		// brand question never came and the exact hex was never the user's.
+		assert.throws(
+			() =>
+				validateQuestion(
+					question({
+						kind: "assumptions",
+						covers: ["surface", "brand-color"],
+						options: [{ id: "a", label: "Screens sit on a light background" }],
+					}),
+					[],
+				),
+			(err: unknown) => err instanceof WizardTurnError && /may not settle/.test(err.message),
+		)
+	})
+
+	it("lets an assumptions screen confirm several character areas at once", () => {
+		const valid = validateQuestion(
+			question({
+				kind: "assumptions",
+				covers: ["surface", "neutral", "semantics"],
+				options: [
+					{ id: "a", label: "Screens sit on a light background" },
+					{ id: "b", label: "The greys lean warm" },
+				],
+			}),
+			[],
+		)
+		assert.deepEqual(valid.covers, ["surface", "neutral", "semantics"])
+	})
+
 	it("requires the colour widget for a question that settles a colour", () => {
 		// test4's accent question came as plain option cards, so the user typed
 		// a hex into a text field while the picker sat unused.

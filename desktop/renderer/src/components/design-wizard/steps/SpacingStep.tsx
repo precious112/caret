@@ -51,13 +51,20 @@ export function SpacingStep({ tokens, onChange }: Props) {
 
 			<div className="flex flex-col gap-2">
 				<label className="text-xs font-medium text-muted-foreground">The steps pages space with</label>
-				<div className="flex flex-col gap-2">
+				{/* Label column first, fixed width and right-aligned, bars growing
+				    from one shared edge — labels trailing the bars read as a
+				    diagonal of floating numbers (reported in the field, where the
+				    bars were also invisible for theme reasons). */}
+				<div className="flex flex-col gap-1.5">
 					{tokens.spacing.scale
 						.filter((px) => px > 0)
 						.map((px) => (
-							<div className="flex items-center gap-3" key={px}>
-								<div className="h-3 rounded-sm bg-button-background/60" style={{ width: `${Math.min(px, 200)}px` }} />
-								<span className="text-[10px] text-muted-foreground">{px}px</span>
+							<div className="flex items-center gap-2.5" key={px}>
+								<span className="w-12 text-right font-mono text-[10.5px] text-muted-foreground">{px}px</span>
+								<div
+									className="h-2.5 rounded-sm bg-button-background/60"
+									style={{ width: `${Math.min(px, 200)}px` }}
+								/>
 							</div>
 						))}
 				</div>

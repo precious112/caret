@@ -19,16 +19,15 @@
  */
 import { Loader2, Pencil } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
-
+import { draftFromSaved, type FoundationTokensDraft, mergeDraftOverSaved } from "../components/design-wizard/draft"
 import { ColorStep } from "../components/design-wizard/steps/ColorStep"
 import { DepthStep } from "../components/design-wizard/steps/DepthStep"
 import { RadiusStep } from "../components/design-wizard/steps/RadiusStep"
 import { SpacingStep } from "../components/design-wizard/steps/SpacingStep"
 import { TypographyStep } from "../components/design-wizard/steps/TypographyStep"
 import { VibeStep } from "../components/design-wizard/steps/VibeStep"
-import { draftFromSaved, type FoundationTokensDraft, mergeDraftOverSaved } from "../components/design-wizard/draft"
-import { DesignServiceClient } from "../services/design-client"
 import { cn } from "../lib/utils"
+import { DesignServiceClient } from "../services/design-client"
 
 type SectionId = "vibe" | "color" | "type" | "spacing" | "radius" | "depth"
 
@@ -112,13 +111,24 @@ export function DesignSystemView({ onRerunInterview, onEditByHand }: Props) {
 	const meta = raw.meta as
 		| { rule?: string; summary?: string; decisions?: Array<{ area: string; choice: string; reason: string }> }
 		| undefined
+	// A colour role neither present nor recorded as decided is a GAP the title
+	// must flag — only judgeable when a decisions log exists at all.
+	const hasDecisionLog = (meta?.decisions?.length ?? 0) > 0
+	const colorHasGap =
+		hasDecisionLog &&
+		((!raw.color?.secondary && !areaDecided(meta?.decisions, "secondary-color", "supporting-colors")) ||
+			(!raw.color?.accent && !areaDecided(meta?.decisions, "accent-color")))
 	const displayFamily = raw.typography?.displayFamily || raw.typography?.fontFamily
 	const name = displayFamily === raw.typography?.fontFamily ? displayFamily : `${displayFamily} · ${raw.typography?.fontFamily}`
 
-	const section = (id: SectionId, title: string, view: React.ReactNode, editor: React.ReactNode) => (
+	const section = (id: SectionId, title: string, view: React.ReactNode, editor: React.ReactNode, hasGap?: boolean) => (
 		<section className="border-t border-shell-border py-6" data-testid={`ds-section-${id}`}>
 			<div className="flex items-center justify-between">
-				<h2 className="text-[11px] tracking-wider text-shell-muted uppercase">{title}</h2>
+				<h2 className="flex items-center gap-2 text-[11px] tracking-wider text-shell-muted uppercase">
+					{/* The gap marker: findable while scrolling past sections. */}
+					{hasGap && <span className="size-1.5 rounded-full bg-shell-warn" data-testid={`ds-gap-${id}`} />}
+					{title}
+				</h2>
 				{editing !== id && (
 					<button
 						className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-shell-muted transition-colors hover:bg-white/5 hover:text-shell-text"
@@ -193,10 +203,11 @@ export function DesignSystemView({ onRerunInterview, onEditByHand }: Props) {
 					{section(
 						"color",
 						"Colour",
-						<ColorSection color={raw.color} />,
+						<ColorSection color={raw.color} decisions={meta?.decisions} />,
 						<div className="ds-editor">
 							<ColorStep onChange={updateDraft} tokens={draft} />
 						</div>,
+						colorHasGap,
 					)}
 					{section(
 						"type",
@@ -282,7 +293,12 @@ function SwatchRow({ label, seed, scale, on }: { label: string; seed?: string; s
 				<details className="ml-24">
 					<summary className="flex cursor-pointer list-none gap-0.5 [&::-webkit-details-marker]:hidden">
 						{steps.map(([step, value]) => (
-							<span className="inline-block h-5 w-6 first:rounded-l last:rounded-r" key={step} style={{ background: value }} title={`${step}: ${value}`} />
+							<span
+								className="inline-block h-5 w-6 first:rounded-l last:rounded-r"
+								key={step}
+								style={{ background: value }}
+								title={`${step}: ${value}`}
+							/>
 						))}
 					</summary>
 					<div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
@@ -298,20 +314,74 @@ function SwatchRow({ label, seed, scale, on }: { label: string; seed?: string; s
 	)
 }
 
-function ColorSection({ color }: { color: Record<string, any> }) {
+/**
+ * How an ABSENT colour role reads. Absence has two meanings and they must not
+ * look alike: a role the interview settled as "none" is a decision (muted,
+ * calm); a role the interview never asked about is a gap (amber, glaring —
+ * test4 committed with the accent never mentioned and nothing on this page
+ * said so). Legacy foundations without a decisions log stay quiet: absence
+ * there carries no evidence either way, and amber nagging on every manual
+ * foundation would be noise.
+ */
+function AbsentRole({ label, decided, hasLog }: { label: string; decided: boolean; hasLog: boolean }) {
+	if (!hasLog) return null
+	if (decided) {
+		return (
+			<div className="flex items-center gap-2">
+				<span className="w-24 text-[12px] text-shell-muted">{label}</span>
+				<span className="text-[12px] text-shell-muted">None — chosen</span>
+			</div>
+		)
+	}
+	return (
+		<div className="flex items-center gap-2" data-testid={`ds-notset-${label.toLowerCase()}`}>
+			<span className="w-24 text-[12px] text-shell-muted">{label}</span>
+			<span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-shell-warn/55 px-2.5 py-0.5 text-[12px] text-shell-warn">
+				Not set
+				<span className="text-[11.5px] text-shell-muted">— the interview never settled this. Edit to pick one.</span>
+			</span>
+		</div>
+	)
+}
+
+/** Decision-log lookup tolerant of the pre-split area name. */
+function areaDecided(decisions: Array<{ area: string }> | undefined, ...areas: string[]): boolean {
+	return (decisions ?? []).some((decision) => areas.includes(decision.area))
+}
+
+function ColorSection({ color, decisions }: { color: Record<string, any>; decisions?: Array<{ area: string }> }) {
 	const on = color.on ?? {}
+	const hasLog = (decisions?.length ?? 0) > 0
 	return (
 		<div className="flex flex-col gap-3">
 			<SwatchRow label="Brand" on={on.brand} scale={color.brand?.scale} seed={color.brand?.seed} />
-			{color.secondary && <SwatchRow label="Supporting" on={on.secondary} scale={color.secondary.scale} seed={color.secondary.seed} />}
-			{color.accent && <SwatchRow label="Accent" on={on.accent} scale={color.accent.scale} seed={color.accent.seed} />}
+			{color.secondary ? (
+				<SwatchRow label="Supporting" on={on.secondary} scale={color.secondary.scale} seed={color.secondary.seed} />
+			) : (
+				<AbsentRole
+					decided={areaDecided(decisions, "secondary-color", "supporting-colors")}
+					hasLog={hasLog}
+					label="Supporting"
+				/>
+			)}
+			{color.accent ? (
+				<SwatchRow label="Accent" on={on.accent} scale={color.accent.scale} seed={color.accent.seed} />
+			) : (
+				/* The pre-split "supporting-colors" tag vouches only for the
+				   secondary — that is what its one question actually asked; the
+				   accent riding the same tag unasked is the bug the split fixed. */
+				<AbsentRole decided={areaDecided(decisions, "accent-color")} hasLog={hasLog} label="Accent" />
+			)}
 			<SwatchRow label={`Neutral (${color.neutral?.character ?? "?"})`} scale={color.neutral?.scale} />
 			<div className="flex items-center gap-2">
 				<span className="w-24 text-[12px] text-shell-muted">Semantic</span>
 				<div className="flex items-center gap-2.5">
 					{Object.entries(color.semantic ?? {}).map(([key, value]) => (
 						<span className="flex items-center gap-1 text-[11px] text-shell-muted" key={key}>
-							<span className="inline-block size-3.5 rounded border border-white/10" style={{ background: value as string }} />
+							<span
+								className="inline-block size-3.5 rounded border border-white/10"
+								style={{ background: value as string }}
+							/>
 							{key}
 						</span>
 					))}
@@ -321,7 +391,15 @@ function ColorSection({ color }: { color: Record<string, any> }) {
 				<span className="w-24">Surface</span>
 				<span>{color.surface === "dark" ? "Dark pages" : "Light pages"}</span>
 				{on.surfaceMuted && color.neutral?.scale && (
-					<ContrastBadge bg={color.surface === "dark" ? (color.neutral.scale["950"] ?? "#0a0a0a") : (color.neutral.scale["50"] ?? "#ffffff")} fg={on.surfaceMuted} label="muted text" />
+					<ContrastBadge
+						bg={
+							color.surface === "dark"
+								? (color.neutral.scale["950"] ?? "#0a0a0a")
+								: (color.neutral.scale["50"] ?? "#ffffff")
+						}
+						fg={on.surfaceMuted}
+						label="muted text"
+					/>
 				)}
 			</div>
 		</div>
@@ -340,21 +418,37 @@ function TypeSection({ typography }: { typography: Record<string, any> }) {
 		<div className="flex flex-col gap-3">
 			<p
 				className="truncate leading-tight"
-				style={{ fontFamily: `"${display}", ${typography.displayFallback || "serif"}`, fontSize: 34, fontWeight: displayWeight, lineHeight: leadings["3xl"] ?? 1.15 }}>
+				style={{
+					fontFamily: `"${display}", ${typography.displayFallback || "serif"}`,
+					fontSize: 34,
+					fontWeight: displayWeight,
+					lineHeight: leadings["3xl"] ?? 1.15,
+				}}>
 				The quick brown fox jumps
 			</p>
 			<p
 				className="max-w-xl"
-				style={{ fontFamily: `"${typography.fontFamily}", ${typography.fallback || "sans-serif"}`, fontSize: typography.baseSize ?? 16, fontWeight: typography.weights?.body?.[0] ?? 400, lineHeight: leadings.base ?? 1.5 }}>
+				style={{
+					fontFamily: `"${typography.fontFamily}", ${typography.fallback || "sans-serif"}`,
+					fontSize: typography.baseSize ?? 16,
+					fontWeight: typography.weights?.body?.[0] ?? 400,
+					lineHeight: leadings.base ?? 1.5,
+				}}>
 				Body text at its real size, in the body face, with the leading pages actually get.
 			</p>
 			<p className="text-[12px] text-shell-muted">
-				{display !== typography.fontFamily ? `${display} for headings, ${typography.fontFamily} for body` : typography.fontFamily} · base{" "}
-				{typography.baseSize}px · ratio {typography.scaleRatio}
-				{typography.weights ? ` · weights ${typography.weights.display?.join("/")} display, ${typography.weights.body?.join("/")} body` : ""}
+				{display !== typography.fontFamily
+					? `${display} for headings, ${typography.fontFamily} for body`
+					: typography.fontFamily}{" "}
+				· base {typography.baseSize}px · ratio {typography.scaleRatio}
+				{typography.weights
+					? ` · weights ${typography.weights.display?.join("/")} display, ${typography.weights.body?.join("/")} body`
+					: ""}
 			</p>
 			<details>
-				<summary className="cursor-pointer text-[12px] text-shell-muted transition-colors hover:text-shell-text">Full scale</summary>
+				<summary className="cursor-pointer text-[12px] text-shell-muted transition-colors hover:text-shell-text">
+					Full scale
+				</summary>
 				<table className="mt-2 text-[11.5px]">
 					<tbody>
 						{scale.map(([label, size]) => (
@@ -377,19 +471,25 @@ function SpacingSection({ spacing }: { spacing: Record<string, any> }) {
 	// as four identical bars, which read as data and was noise.
 	const steps: number[] = (spacing?.scale ?? []).filter((v: number) => v > 0)
 	return (
-		<div className="flex flex-col gap-2">
+		<div className="flex flex-col gap-3">
+			{/* The decision leads, as a value — never prose. "The airier of the
+			    two" buried the one fact this section records. */}
+			<p className="text-[15px]">
+				<span className="font-mono font-semibold">{spacing?.baseUnit ?? 4}px</span> base unit
+				{steps.length > 0 && (
+					<span className="ml-2 text-[12.5px] text-shell-muted">
+						{steps.length} steps, {steps[0]}–{steps[steps.length - 1]}px
+					</span>
+				)}
+			</p>
 			<div className="flex items-end gap-2">
 				{steps.map((px) => (
 					<div className="flex flex-col items-center gap-1" key={px}>
 						<span className="w-3.5 rounded-sm bg-caret-accent/60" style={{ height: Math.round(Math.sqrt(px) * 7) }} />
-						<span className="text-[9px] text-shell-muted">{px}</span>
+						<span className="font-mono text-[10.5px] text-shell-muted">{px}</span>
 					</div>
 				))}
 			</div>
-			<p className="text-[12px] text-shell-muted">
-				The gaps pages are allowed to use, in px — nothing between them, so spacing never drifts. On{" "}
-				{spacing?.baseUnit === 8 ? "an 8px rhythm (the airier of the two)" : `a ${spacing?.baseUnit ?? 4}px rhythm`}.
-			</p>
 		</div>
 	)
 }
@@ -397,35 +497,59 @@ function SpacingSection({ spacing }: { spacing: Record<string, any> }) {
 /** Scale positions ↔ the utility names pages write. 0 is `none` and the last is `full`. */
 const RADIUS_STEP_NAMES = ["none", "sm", "md", "lg", "xl", "full"]
 
+/** One honest phrase per character — data, not decoration. */
+const RADIUS_GLOSS: Record<string, string> = {
+	sharp: "square corners",
+	soft: "gently rounded",
+	round: "clearly rounded",
+	pill: "fully rounded ends",
+}
+
 function RadiusSection({ radius }: { radius: Record<string, any> }) {
 	const steps: Array<{ px: number; name: string }> = (radius?.scale ?? [])
 		.map((px: number, index: number) => ({ px, name: RADIUS_STEP_NAMES[index] ?? String(index) }))
 		.filter((step: { px: number }) => step.px < 9999)
 	return (
-		<div className="flex flex-col gap-2">
-			<div className="flex items-center gap-3">
+		<div className="flex flex-col gap-3">
+			<p className="text-[15px]">
+				<span className="font-semibold capitalize">{radius?.character ?? "?"}</span>
+				{RADIUS_GLOSS[radius?.character] && (
+					<span className="ml-2 text-[12.5px] text-shell-muted">{RADIUS_GLOSS[radius?.character]}</span>
+				)}
+			</p>
+			<div className="flex items-center gap-3.5">
 				{steps.map((step) => (
 					<div className="flex flex-col items-center gap-1" key={step.name}>
-						<span className="size-9 border-2 border-caret-accent/60 bg-shell-panel" style={{ borderRadius: step.px }} />
-						<span className="text-[9px] text-shell-muted">
+						<span
+							className="size-9 border-2 border-caret-accent/60 bg-shell-panel"
+							style={{ borderRadius: step.px }}
+						/>
+						<span className="font-mono text-[10.5px] text-shell-muted">
 							{step.name} · {step.px}px
 						</span>
 					</div>
 				))}
+				<div className="flex flex-col items-center gap-1">
+					<span className="size-9 rounded-full border-2 border-caret-accent/60 bg-shell-panel" />
+					<span className="font-mono text-[10.5px] text-shell-muted">full</span>
+				</div>
 			</div>
-			<p className="text-[12px] text-shell-muted">
-				All of these are in play — small elements take the small steps, cards and dialogs the large ones (plus fully
-				round for pills). <span className="capitalize">"{radius?.character}"</span> is the character that set the
-				ladder.
-			</p>
 		</div>
 	)
 }
 
-function DepthSection({ elevation, border, motion }: { elevation?: Record<string, any>; border?: Record<string, any>; motion?: Record<string, any> }) {
-	const shadows: Array<[string, string]> = Object.entries(elevation?.scale ?? {}).filter(([, value]) => value && value !== "none") as Array<
-		[string, string]
-	>
+function DepthSection({
+	elevation,
+	border,
+	motion,
+}: {
+	elevation?: Record<string, any>
+	border?: Record<string, any>
+	motion?: Record<string, any>
+}) {
+	const shadows: Array<[string, string]> = Object.entries(elevation?.scale ?? {}).filter(
+		([, value]) => value && value !== "none",
+	) as Array<[string, string]>
 	return (
 		<div className="flex flex-col gap-3">
 			<div className="flex items-center gap-4">
@@ -440,8 +564,8 @@ function DepthSection({ elevation, border, motion }: { elevation?: Record<string
 			</div>
 			{border && (
 				<p className="text-[12px] text-shell-muted">
-					Hairlines {border.width}px in <span className="font-mono">{border.color}</span> · focus ring {border.focusRing?.width}px in{" "}
-					<span className="font-mono">{border.focusRing?.color}</span>
+					Hairlines {border.width}px in <span className="font-mono">{border.color}</span> · focus ring{" "}
+					{border.focusRing?.width}px in <span className="font-mono">{border.focusRing?.color}</span>
 				</p>
 			)}
 			{motion && (
@@ -456,7 +580,9 @@ function DepthSection({ elevation, border, motion }: { elevation?: Record<string
 function VibeSection({ vibe }: { vibe: Record<string, any> }) {
 	return (
 		<div className="flex flex-col gap-2">
-			{vibe?.description && <p className="max-w-2xl text-[12.5px] italic leading-relaxed text-shell-muted">"{vibe.description}"</p>}
+			{vibe?.description && (
+				<p className="max-w-2xl text-[12.5px] italic leading-relaxed text-shell-muted">"{vibe.description}"</p>
+			)}
 			<div className="flex flex-wrap gap-1.5">
 				{(vibe?.tags ?? []).map((tag: string) => (
 					<span className="rounded-full border border-shell-border px-2 py-0.5 text-[11px] text-shell-muted" key={tag}>
