@@ -30,6 +30,9 @@ import {
 /** Aim well under this; the cap is the backstop, not the target. */
 export const QUESTION_CAP = 10
 
+/** Automatic in-harness attempts per turn before the UI may show a failure. */
+export const MAX_TURN_ATTEMPTS = 5
+
 /**
  * The collaborative interview must touch every coverage area, so its backstop
  * sits far higher — the cap is still a backstop, not a quota.
@@ -593,6 +596,12 @@ export interface ConductorInput {
 	force?: "finish"
 	/** Absent means the original minimal interview. */
 	mode?: WizardMode
+	/**
+	 * Called before each attempt (1-based). The UI uses it to keep the loading
+	 * state honest on long retry runs — the user sees "still working", never a
+	 * failure, until every attempt is spent.
+	 */
+	onAttempt?: (attempt: number, max: number) => void
 }
 
 /**
@@ -815,9 +824,10 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 
 	// Each attempt is a fresh, stateless call: without this, the retry is
 	// asked to correct a reply it has never seen.
-	let rejectedPayload = ""
+	let rejectedPayload = "(no reply was parsed)"
 
 	const attempt = async (complaint?: string, repair = false): Promise<WizardTurn> => {
+		rejectedPayload = "(no reply was parsed)"
 		const result = await input.backend.structured<{
 			action: string
 			question?: WizardQuestion
@@ -857,12 +867,22 @@ export async function nextWizardTurn(input: ConductorInput): Promise<WizardTurn>
 		throw new WizardTurnError(`action was "${value?.action}", expected "ask" or "finish".`)
 	}
 
-	try {
-		return await attempt()
-	} catch (err) {
-		const why = err instanceof Error ? err.message : String(err)
-		Logger.warn(`[wizard] turn rejected (${why}), retrying once`)
-		const complaint = `Your previous reply (rejected):\n${rejectedPayload}\n\nWhy it was rejected: ${why}`
-		return attempt(complaint, true)
+	// Retries are the HARNESS's problem, not the user's: five automatic
+	// attempts, each carrying the previous rejection, before anything is
+	// allowed to reach the screen as a failure. The UI keeps showing loading
+	// (with an honest "taking longer than usual" once attempts pile up) — a
+	// user was shown "That didn't work" after a single internal retry, for a
+	// malformed reply the next attempt would likely have fixed.
+	let complaint: string | undefined
+	for (let attemptIndex = 1; ; attemptIndex++) {
+		input.onAttempt?.(attemptIndex, MAX_TURN_ATTEMPTS)
+		try {
+			return await attempt(complaint, attemptIndex > 1)
+		} catch (err) {
+			const why = err instanceof Error ? err.message : String(err)
+			Logger.warn(`[wizard] attempt ${attemptIndex}/${MAX_TURN_ATTEMPTS} rejected (${why})`)
+			if (attemptIndex >= MAX_TURN_ATTEMPTS) throw err
+			complaint = `Your previous reply (rejected):\n${rejectedPayload}\n\nWhy it was rejected: ${why}`
+		}
 	}
 }

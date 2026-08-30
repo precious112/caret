@@ -112,6 +112,7 @@ const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {
 	"canvas:message": true,
 	"notification:show": true,
 	"interview:prompt": true,
+	"wizard:progress": true,
 	"assets:changed": true,
 	"agent:state": true,
 	"generate:progress": true,

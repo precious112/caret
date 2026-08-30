@@ -30,7 +30,7 @@ import type {
 	WizardSpecWire,
 	WizardStateWire,
 } from "../../../shared/ipc"
-import { invoke } from "../ipc"
+import { invoke, on } from "../ipc"
 import { cn } from "../lib/utils"
 
 interface Props {
@@ -50,6 +50,17 @@ interface Props {
 export function WizardView({ projectPath, initialState, onCommitted, onSwitchToManual, onNothingInFlight }: Props) {
 	const [state, setState] = useState<WizardStateWire | null>(initialState ?? null)
 	const [busy, setBusy] = useState(!initialState)
+	// The harness retries invisibly (up to MAX_TURN_ATTEMPTS); this is the only
+	// trace the user gets — an honest "taking longer than usual" once attempts
+	// pile up, never a failure screen while attempts remain.
+	const [attempt, setAttempt] = useState(1)
+	useEffect(
+		() =>
+			on("wizard:progress", (progress) => {
+				if (progress.projectPath === projectPath) setAttempt(progress.attempt)
+			}),
+		[projectPath],
+	)
 
 	useEffect(() => {
 		if (initialState) return
@@ -74,6 +85,7 @@ export function WizardView({ projectPath, initialState, onCommitted, onSwitchToM
 
 	async function transition(run: () => Promise<WizardStateWire>): Promise<void> {
 		setBusy(true)
+		setAttempt(1)
 		try {
 			setState(await run())
 		} catch (err) {
@@ -96,7 +108,7 @@ export function WizardView({ projectPath, initialState, onCommitted, onSwitchToM
 				<div className="min-w-0 flex-1">
 					{state.phase === "needs-backend" && <NeedsBackend detail={state.detail} onManual={onSwitchToManual} />}
 
-					{state.phase === "question" && busy && <Thinking asked={state.asked} />}
+					{state.phase === "question" && busy && <Thinking asked={state.asked} attempt={attempt} />}
 					{state.phase === "question" && !busy && (
 						<Question
 							key={state.current.id}
@@ -175,11 +187,21 @@ function NeedsBackend({ detail, onManual }: { detail: string; onManual(): void }
 	)
 }
 
-function Thinking({ asked }: { asked: number }) {
+function Thinking({ asked, attempt }: { asked: number; attempt?: number }) {
 	return (
-		<div className="fade-in flex items-center gap-3 py-16 text-shell-muted" data-testid="wizard-thinking">
-			<Loader2 className="animate-spin text-caret-accent" size={15} />
-			{asked === 0 ? "Reading your description and deciding what to ask…" : "Choosing what to ask next…"}
+		<div className="fade-in flex flex-col gap-2 py-16" data-testid="wizard-thinking">
+			<div className="flex items-center gap-3 text-shell-muted">
+				<Loader2 className="animate-spin text-caret-accent" size={15} />
+				{asked === 0 ? "Reading your description and deciding what to ask…" : "Choosing what to ask next…"}
+			</div>
+			{/* The retries themselves stay invisible; past the early attempts the
+			    user gets honesty, not an error — the failure screen exists only
+			    for a fully spent turn. */}
+			{(attempt ?? 1) >= 3 && (
+				<p className="pl-7 text-[12.5px] text-shell-muted" data-testid="wizard-thinking-slow">
+					This is taking longer than usual — still working on it.
+				</p>
+			)}
 		</div>
 	)
 }

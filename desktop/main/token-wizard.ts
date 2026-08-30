@@ -10,10 +10,12 @@
  * memory is what makes Back free, disk is what survives the window. Both are
  * cheap; losing a five-question interview to a crash is not.
  */
+import { BrowserWindow } from "electron"
+
 import {
+	COVERAGE_AREAS,
 	type CodingBackend,
 	clearWizardScratch,
-	COVERAGE_AREAS,
 	coveredAreas,
 	type FoundationProposal,
 	finalizeProposal,
@@ -106,6 +108,19 @@ function stateFor(session: WizardSession): WizardStateWire {
 	return { phase: "describe", description: session.description }
 }
 
+/**
+ * Retries are invisible until spent: every window showing this project keeps
+ * its loading state, and past the early attempts the renderer swaps in an
+ * honest "taking longer than usual". Broadcast to every window (each filters
+ * by projectPath) rather than a [0]-style pick — see the BrowserWindow race
+ * note in the certification lessons.
+ */
+function notifyProgress(projectPath: string, attempt: number, max: number): void {
+	for (const window of BrowserWindow.getAllWindows()) {
+		if (!window.isDestroyed()) window.webContents.send("wizard:progress", { projectPath, attempt, max })
+	}
+}
+
 /** Runs one model turn and stores whatever it decided. */
 async function advance(projectPath: string, session: WizardSession, force?: "finish"): Promise<WizardStateWire> {
 	const { backend, detail } = await resolveBackend()
@@ -121,6 +136,7 @@ async function advance(projectPath: string, session: WizardSession, force?: "fin
 			history: session.history,
 			force,
 			mode: session.mode,
+			onAttempt: (attempt, max) => notifyProgress(projectPath, attempt, max),
 		})
 
 		if (turn.action === "ask") session.pending = turn.question

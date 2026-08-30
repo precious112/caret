@@ -939,6 +939,8 @@ export interface IpcEvents {
 	"canvas:message": (projectPath: string, message: DesignOutboundWire) => void
 	"notification:show": (request: NotificationRequest) => void
 	"interview:prompt": (prompt: InterviewPromptWire) => void
+	/** Wizard retry heartbeat: the UI stays on loading until attempts are spent. */
+	"wizard:progress": (progress: { projectPath: string; attempt: number; max: number }) => void
 	/** The asset index changed — by the UI, an agent, or a file dropped in Finder. */
 	"assets:changed": (projectPath: string) => void
 	/** The chat moved on: a token streamed, a permission was raised, a turn ended. */
