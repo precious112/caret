@@ -529,7 +529,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 				)}
 
 				{stage === "mark" && <MarkFlow onClose={onClose} project={project} subject={text.trim()} />}
-				{stage === "model3d" && <Model3dFlow onClose={onClose} project={project} />}
+				{stage === "model3d" && <Model3dFlow initialText={text} onClose={onClose} project={project} />}
 				{stage === "shader" && <ShaderFlow answers={replies} onClose={onClose} project={project} subject={text.trim()} />}
 			</div>
 		</div>
@@ -883,7 +883,15 @@ function ShaderFlow({
  * chrome has no 3D thumbnail yet (BACKLOG) and a fake preview would be worse
  * than an honest absence.
  */
-function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(saved: string | null): void }) {
+function Model3dFlow({
+	initialText,
+	project,
+	onClose,
+}: {
+	initialText: string
+	project: ProjectState
+	onClose(saved: string | null): void
+}) {
 	const [assets, setAssets] = useState<AssetEntryWire[]>([])
 	const [source, setSource] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
@@ -893,7 +901,7 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 	const [error, setError] = useState<string | null>(null)
 	const [sourceOptions, setSourceOptions] = useState<GeneratedVariantWire[] | null>(null)
 	const [sourceBusy, setSourceBusy] = useState(false)
-	const [sourceText, setSourceText] = useState("")
+	const [sourceText, setSourceText] = useState(initialText)
 
 	const refreshAssets = useCallback(async () => {
 		const list = await invoke("assets:list", project.path)
