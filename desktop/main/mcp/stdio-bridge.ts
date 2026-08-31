@@ -43,7 +43,12 @@ export async function ensureMcpBridge(): Promise<{
 		command: [process.execPath, bridgePath],
 		environment: { ELECTRON_RUN_AS_NODE: "1" },
 		// Tool calls legitimately wait on the user (consent, picking a take) and
-		// on generation loops. The default 5s would kill every one of them.
-		timeout: 10 * 60 * 1000,
+		// on generation loops. The default 5s would kill every one of them —
+		// and 10 minutes killed real ones too (field-measured on test5: the
+		// mark loop's target image queues behind the paced raster lane, then up
+		// to six render-compare model rounds run; two attempts died at exactly
+		// 600s with nothing to show). The lanes carry their own tighter budgets
+		// that return best-so-far; this outer ceiling is only the backstop.
+		timeout: 30 * 60 * 1000,
 	}
 }

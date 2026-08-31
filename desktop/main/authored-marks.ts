@@ -46,6 +46,15 @@ import { canSeeImages } from "./vision-cache"
  */
 export const MAX_MARK_ROUNDS = 6
 
+/**
+ * Wall-clock budget for the whole authoring run, target included. Once spent,
+ * the best rendered round SHIPS instead of refining further — a decent mark
+ * in eight minutes beats a perfect one that a timeout deletes. Field-measured
+ * on test5: target generation queued behind the paced raster lane, six rounds
+ * followed, and the MCP ceiling killed two runs at exactly 600s with nothing.
+ */
+export const MARK_BUDGET_MS = 8 * 60_000
+
 /** Similar enough to stop: further rounds polish pixels nobody can see. */
 const SIMILARITY_DONE = 0.97
 
@@ -109,6 +118,9 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 
 	const palette = derivePalette(request.tokens)
 	const progress = request.onProgress ?? (() => {})
+	// The budget clock starts BEFORE the target: its queue wait behind the
+	// paced raster lane is part of what the outer MCP ceiling measures.
+	const startedAt = Date.now()
 
 	// The target comes first: it IS the mark, aesthetically. Everything after
 	// this is tracing.
@@ -178,6 +190,12 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 			if (score >= SIMILARITY_DONE) break
 			if (sinceImprovement >= 2) break
 			if (round === MAX_MARK_ROUNDS) break
+			// Budget spent with a usable mark in hand: ship it rather than let
+			// another round push the whole tool past the outer MCP ceiling.
+			if (Date.now() - startedAt > MARK_BUDGET_MS) {
+				progress({ stage: `Time budget spent — keeping the best so far (${percent(bestSimilarity)})` })
+				break
+			}
 
 			progress({ stage: `Showing the model the differences (best so far ${percent(bestSimilarity)})` })
 			const composite = await renderComposite(target.png, target.mime, png, palette.surface)
