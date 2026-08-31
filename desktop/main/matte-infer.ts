@@ -14,11 +14,17 @@
  * cutout forever ("exists" is not "works", fourth instance).
  */
 import * as fs from "fs/promises"
+import { createRequire } from "module"
 
 import type { KeyableImage, KeyOutResult } from "../../src/core/design"
 import { applyMatte, MATTE_MODEL, matteInputTensor, progressOf } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { ensureMatteModel, matteState, modelPath } from "./matte"
+
+// The main bundle is ESM ("type": "module"), where no `require` exists — a
+// bare one compiled fine and threw at runtime on the first real cutout.
+// createRequire is the ESM road to a native module.
+const requireNative = createRequire(import.meta.url)
 
 // Typed loosely on purpose: onnxruntime-node is a native module loaded at
 // first use, not import time — pulling its types in would also pull the
@@ -32,8 +38,7 @@ type OrtSession = {
 let session: Promise<OrtSession> | null = null
 
 async function openSession(): Promise<OrtSession> {
-	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	const ort = require("onnxruntime-node")
+	const ort = requireNative("onnxruntime-node")
 	const path = modelPath()
 	try {
 		// "basic", measured, not a default: this export carries external-tensor
@@ -107,8 +112,7 @@ export async function matteCutout(image: KeyableImage): Promise<KeyOutResult> {
 	const started = Date.now()
 	const side = MATTE_MODEL.input
 	const tensor = matteInputTensor(image, side)
-	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	const ort = require("onnxruntime-node")
+	const ort = requireNative("onnxruntime-node")
 	const feeds = { [net.inputNames[0]]: new ort.Tensor("float32", tensor, [1, 3, side, side]) }
 
 	let mask: Float32Array
