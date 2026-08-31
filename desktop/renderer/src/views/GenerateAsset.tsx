@@ -873,13 +873,15 @@ function ShaderFlow({
 }
 
 /**
- * The 3D lane's flow: point at an image, wait honestly, keep or don't.
+ * The 3D lane's flow: say what the object is, pick a take, wait honestly.
  *
- * The source picker lists image assets — uploaded or generated, both are
- * assets by now, so one grid covers both, and there is nothing to type at any
- * point. The result screen shows numbers rather than a rendered mesh, because
- * the chrome has no 3D thumbnail yet (BACKLOG) and a fake preview would be
- * worse than an honest absence.
+ * The prompt leads because that is the lane's shape — one description in,
+ * a model out, with the source image made on the way. The library grid is
+ * the alternative path for when the exact object already exists as an image
+ * (uploaded or generated, both are assets by now, so one grid covers both).
+ * The result screen shows numbers rather than a rendered mesh, because the
+ * chrome has no 3D thumbnail yet (BACKLOG) and a fake preview would be worse
+ * than an honest absence.
  */
 function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(saved: string | null): void }) {
 	const [assets, setAssets] = useState<AssetEntryWire[]>([])
@@ -891,6 +893,7 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 	const [error, setError] = useState<string | null>(null)
 	const [sourceOptions, setSourceOptions] = useState<GeneratedVariantWire[] | null>(null)
 	const [sourceBusy, setSourceBusy] = useState(false)
+	const [sourceText, setSourceText] = useState("")
 
 	const refreshAssets = useCallback(async () => {
 		const list = await invoke("assets:list", project.path)
@@ -937,18 +940,22 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 	}
 
 	/**
-	 * The purpose-made source: four single-object studies from the raster lane.
+	 * The purpose-made source, from the user's own words.
 	 *
 	 * Reconstruction wants the opposite of a hero shot — one object, centered,
-	 * fully in frame, even light — so rather than hoping the library has such an
-	 * image, the flow can generate one through the ordinary photograph pipeline
-	 * with the object-study recipe, and the pick lands as a normal asset first.
+	 * fully in frame, even light — and the cutout request lane already composes
+	 * exactly that around whatever subject is typed here. The subject is the
+	 * user's; the styling is Caret's. (The first version of this button ran the
+	 * object-study recipe with no input at all — the six-things trap: nothing
+	 * anywhere let the user say what the object *was*.)
 	 */
+	const sourceRequest = (): AssetRequestWire => ({ kind: "image", text: sourceText.trim(), transparent: true })
+
 	const generateSources = async () => {
 		setSourceBusy(true)
 		setSourceOptions(null)
 		try {
-			setSourceOptions((await invoke("generate:variants", project.path, "object-study", {}, "1:1", 4)) ?? [])
+			setSourceOptions((await invoke("generate:takes", project.path, sourceRequest(), "")) ?? [])
 		} finally {
 			setSourceBusy(false)
 		}
@@ -957,7 +964,7 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 	const pickSource = async (variant: number) => {
 		setSourceBusy(true)
 		try {
-			const result = await invoke("generate:accept", project.path, "object-study", {}, "1:1", variant, "")
+			const result = await invoke("generate:acceptTake", project.path, sourceRequest(), "", variant, "")
 			if (result?.ok && result.tag) {
 				await refreshAssets()
 				setSource(result.tag)
@@ -972,14 +979,59 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 
 	return (
 		<section className="mx-auto max-w-3xl" data-testid="generate-model3d">
-			{assets.length === 0 ? (
-				<p className="text-sm text-shell-muted">
-					No images in the library yet. Upload one, or generate one first — a 3D object is built <em>from</em> an image,
-					and both kinds work as the source.
-				</p>
-			) : (
+			<p className="mb-2 text-sm">What should the object be?</p>
+			<div className="flex gap-2">
+				<input
+					className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+					data-testid="model3d-source-text"
+					disabled={busy || sourceBusy}
+					onChange={(event) => setSourceText(event.target.value)}
+					placeholder='One object, in plain words: "a squat glass hot sauce bottle with a black cap"'
+					value={sourceText}
+				/>
+				<button
+					className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+					data-testid="model3d-generate-source"
+					disabled={busy || sourceBusy || sourceText.trim().length < 2}
+					onClick={generateSources}
+					type="button">
+					{sourceBusy ? "Generating…" : "Generate the source"}
+				</button>
+			</div>
+			<p className="mt-1.5 text-[11px] text-shell-muted">
+				Caret photographs it as a cutout — one object, even light, no background, what reconstruction wants — and the take
+				you pick becomes the model's source.
+			</p>
+
+			{sourceOptions && (
+				<div className="mt-3 grid grid-cols-4 gap-3" data-testid="model3d-source-options">
+					{sourceOptions.map((option) =>
+						option.error ? (
+							<p
+								className="rounded-lg border border-amber-500/40 p-2 text-[11px] text-shell-muted"
+								key={option.variant}>
+								{option.error}
+							</p>
+						) : (
+							<button
+								className="overflow-hidden rounded-lg border border-shell-border hover:border-caret-accent"
+								data-model3d-source-option={option.variant}
+								disabled={sourceBusy}
+								key={option.variant}
+								onClick={() => pickSource(option.variant)}
+								type="button">
+								<span className="block" style={{ backgroundColor: option.surface }}>
+									<img alt="" className="block w-full" src={option.preview} />
+								</span>
+							</button>
+						),
+					)}
+				</div>
+			)}
+
+			{assets.length > 0 && (
 				<>
-					<p className="mb-2 text-sm">Which image should it be built from?</p>
+					<p className="mt-5 mb-2 text-sm">…or build from an image already in the library:</p>
 					<div className="grid grid-cols-4 gap-3">
 						{assets.map((asset) => (
 							<button
@@ -1003,59 +1055,19 @@ function Model3dFlow({ project, onClose }: { project: ProjectState; onClose(save
 							</button>
 						))}
 					</div>
-
-					<div className="mt-4">
-						<button
-							className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
-							data-testid="model3d-generate-source"
-							disabled={busy || sourceBusy}
-							onClick={generateSources}
-							type="button">
-							{sourceBusy ? "Generating source options…" : "Generate a purpose-made source"}
-						</button>
-						<span className="ml-2 text-[11px] text-shell-muted">
-							One object, centered, plain background — what reconstruction wants.
-						</span>
-					</div>
-
-					{sourceOptions && (
-						<div className="mt-3 grid grid-cols-4 gap-3" data-testid="model3d-source-options">
-							{sourceOptions.map((option) =>
-								option.error ? (
-									<p
-										className="rounded-lg border border-amber-500/40 p-2 text-[11px] text-shell-muted"
-										key={option.variant}>
-										{option.error}
-									</p>
-								) : (
-									<button
-										className="overflow-hidden rounded-lg border border-shell-border hover:border-caret-accent"
-										data-model3d-source-option={option.variant}
-										disabled={sourceBusy}
-										key={option.variant}
-										onClick={() => pickSource(option.variant)}
-										type="button">
-										<span className="block" style={{ backgroundColor: option.surface }}>
-											<img alt="" className="block w-full" src={option.preview} />
-										</span>
-									</button>
-								),
-							)}
-						</div>
-					)}
-
-					<TaskModelPicker disabled={busy} recommendedNote task="model3d" />
-
-					<button
-						className="mt-4 rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
-						data-testid="model3d-generate"
-						disabled={busy || !source}
-						onClick={generate}
-						type="button">
-						Build the model
-					</button>
 				</>
 			)}
+
+			<TaskModelPicker disabled={busy} recommendedNote task="model3d" />
+
+			<button
+				className="mt-4 rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+				data-testid="model3d-generate"
+				disabled={busy || !source}
+				onClick={generate}
+				type="button">
+				Build the model
+			</button>
 
 			{busy && progress && (
 				<p className="mt-4 text-xs text-shell-muted" data-testid="model3d-progress">

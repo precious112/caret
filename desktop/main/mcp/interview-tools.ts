@@ -246,11 +246,17 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				kind: z
 					.enum(["image", "texture", "mark", "object3d", "shader"])
 					.describe(
-						"image: a photograph. texture: grain, a wash, a pattern — free and local. mark: a logo. object3d: a 3D model. shader: an animated background gradient, written as a live component with tunable colours.",
+						"image: a photograph. texture: grain, a wash, a pattern — free and local. mark: a logo. object3d: a 3D model — one call runs the whole chain: Caret generates the source image, the user picks a take, Tripo rebuilds it in 3D. shader: an animated background gradient, written as a live component with tunable colours.",
 					),
 				what: z.string().min(2).describe('What it is, in plain words: "a brushed steel paperclip"'),
 				why: z.string().describe("One line on what it is for, shown to the user when asking whether to make it"),
 				transparent: z.boolean().optional().describe("True when it must sit on any background with no box around it"),
+				source: z
+					.string()
+					.optional()
+					.describe(
+						"object3d only: the @tag of an image asset to rebuild in 3D — use it when the exact object already exists as an image, so the 3D version matches it. Omit to have Caret generate the source from `what`.",
+					),
 			},
 			async handler(
 				ctx: ToolContext,
@@ -259,12 +265,26 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					what: string
 					why: string
 					transparent?: boolean
+					source?: string
 				},
 			) {
 				const request = {
 					kind: args.kind,
 					text: args.what,
 					...(args.transparent ? { transparent: true } : {}),
+				}
+
+				// A missing Tripo key is known before anyone is asked anything —
+				// consenting to a generation that then reports "no key" would spend
+				// the user's attention on Caret's own configuration.
+				if (args.kind === "object3d") {
+					const { tripoAvailable } = await import("../generate-3d")
+					if (!tripoAvailable()) {
+						return ok({
+							generated: false,
+							note: "3D generation needs a Tripo API key, and none is configured — ask the user to add one in Settings. A transparent image cutout can stand in on the page meanwhile.",
+						})
+					}
 				}
 
 				// Proposed, never assumed. The image and 3D lanes spend the user's own
@@ -281,7 +301,12 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					kind: "question",
 					place: "chat",
 					question: `Generate ${args.what}?`,
-					hint: paid ? `${args.why} This one runs on your image key and costs you directly.` : args.why,
+					hint:
+						args.kind === "object3d"
+							? `${args.why} This runs on your image key and your Tripo credits, and takes a few minutes.`
+							: paid
+								? `${args.why} This one runs on your image key and costs you directly.`
+								: args.why,
 					choices: ["Generate it", "Not now"],
 				})
 				if (consent !== "Generate it") {
@@ -289,13 +314,80 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 				}
 
 				if (args.kind === "object3d") {
-					// The 3D lane starts from a SOURCE IMAGE in the asset library, and
-					// this tool has no way to name one yet. An honest road beats the
-					// dead-end this kind used to hit ("Generation did not produce
-					// anything") after the user had already consented.
+					// The whole chain in one call — the shape this lane was asked for:
+					// prompt → source image → Tripo → optimized .glb in the library.
+					// The agent names the subject once; everything between is Caret's.
+					const { acceptModel3d, generateModel3d } = await import("../generate-3d")
+
+					let sourceTag = args.source?.replace(/^@/, "").trim() ?? ""
+					if (!sourceTag) {
+						// A purpose-made source: the cutout lane's output — one object,
+						// even light, no background — is exactly what reconstruction
+						// wants, and the kept take is a normal asset in its own right.
+						const sourceRequest = { kind: "image" as const, text: args.what, transparent: true }
+						const takes = await requestTakes(ctx.projectPath, sourceRequest, "")
+						const usable = takes.filter((take) => !take.error)
+						if (usable.length === 0) {
+							if (takes.some((take) => take.retryable)) {
+								return ok({
+									generated: false,
+									note:
+										"The image service is out of quota right now, so the 3D source could not be made — Caret already retried with waits. " +
+										"Do NOT retry now and do not stall the page: keep building, and mention that the 3D object can be generated later.",
+								})
+							}
+							const why = takes[0]?.error ?? "nothing came back"
+							return ok({ generated: false, note: `The 3D source image could not be made: ${why}` })
+						}
+
+						const picked = await askUser(send, {
+							kind: "takes",
+							place: "chat",
+							title: `The source for the 3D ${args.what}`,
+							subtitle: `${args.why} Tripo rebuilds exactly what the picture shows — pick the take to build from. The 3D step takes a few minutes.`,
+							takes: takes.map((take) => ({ index: take.variant, preview: take.preview, error: take.error })),
+							surface: usable[0].surface,
+						})
+						if (picked === null) {
+							return ok({ generated: false, note: "The user did not pick a source take, so nothing was built." })
+						}
+						const savedSource = await acceptRequestTake(
+							ctx.projectPath,
+							sourceRequest,
+							"",
+							Number(picked),
+							slugTag(args.what),
+						)
+						if (!savedSource.ok || !savedSource.tag) {
+							return fail(savedSource.error ?? "The chosen source take could not be saved.")
+						}
+						sourceTag = savedSource.tag
+					}
+
+					const outcome = await generateModel3d(ctx.projectPath, sourceTag, (update) =>
+						Logger.info(`[3d] ${update.stage}${update.detail ? ` — ${update.detail}` : ""}`),
+					)
+					if (!outcome.ok) {
+						return ok({
+							generated: false,
+							note: outcome.badSource
+								? `${outcome.reason ?? "The source image did not look like a single object."} The source is @${sourceTag}; a different source image is the fix, not a retry of this one.`
+								: `3D generation did not produce anything: ${outcome.reason ?? "no reason was given"}`,
+						})
+					}
+
+					const saved3d = await acceptModel3d(ctx.projectPath, "")
+					if (!saved3d.ok || !saved3d.tag) return fail(saved3d.error ?? "The 3D model could not be saved.")
+					await regenerateRulesFiles(ctx.projectPath).catch(() => {})
 					return ok({
-						generated: false,
-						note: "3D objects are built from an image already in the asset library, which this tool cannot pick yet. Generate or ask for the source image first, then have the user run Assets → Generate → A 3D object from it.",
+						generated: true,
+						tag: saved3d.tag,
+						reference: `@${saved3d.tag}`,
+						sourceImage: `@${sourceTag}`,
+						...(outcome.reason ? { note2: outcome.reason } : {}),
+						note:
+							`A .glb model built from @${sourceTag} (that source image is in the library too). ` +
+							"Reference the model by its tag where the page should show it.",
 					})
 				}
 

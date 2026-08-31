@@ -194,11 +194,13 @@ const DEFAULT_STALL_MS = 4 * 60_000
  * provider's health — field-measured: asset generation now queues, spaces and
  * retries (quota), so one turn's generate calls legitimately run many minutes,
  * and the 4-minute watchdog killed healthy turns twice in a row ("the
- * provider went silent"). Bounded rather than exempt, above the MCP layer's
- * own 10-minute tool timeout: a stream that died mid-tool never delivers the
- * tool-end, and this ceiling is what still catches it.
+ * provider went silent"). Bounded rather than exempt, under the MCP layer's
+ * own 30-minute tool timeout: a stream that died mid-tool never delivers the
+ * tool-end, and this ceiling is what still catches it. 25 minutes because the
+ * unified 3D tool is now the longest legitimate call — a Tripo draft and its
+ * optimization convert are each allowed 10 minutes on their own.
  */
-const TOOL_STALL_MS = 12 * 60_000
+const TOOL_STALL_MS = 25 * 60_000
 
 /**
  * What the retry says. Generic across modes on purpose: a plan turn should
