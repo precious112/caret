@@ -25,7 +25,8 @@
  * A picker showing stock previews would be arguing against the library's only
  * real claim.
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { Loader2, Maximize2, X } from "lucide-react"
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import type {
 	AssetEntryWire,
@@ -42,6 +43,7 @@ import type {
 	TaskModelWire,
 } from "../../../shared/ipc"
 import { invoke, on } from "../ipc"
+import { ShaderPreview } from "../lib/ShaderPreview"
 import { cn } from "../lib/utils"
 
 type Stage = "ask" | "clarify" | "recipe" | "variant" | "name" | "mark" | "model3d" | "shader"
@@ -61,6 +63,54 @@ const KINDS: Array<{ id: GenerationKindWire; label: string; hint: string }> = [
 
 /** Ratios the image lane composes for. */
 const IMAGE_ASPECTS = ["3:2", "16:9", "1:1", "4:5", "21:9", "9:16"]
+
+/**
+ * A pulsing placeholder the shape of the thing being made. One per expected
+ * option, so a working screen looks like a grid filling in rather than a dead
+ * page — the field complaint that added these.
+ */
+function Shimmer({ aspect, className }: { aspect?: string; className?: string }) {
+	return (
+		<div
+			className={cn("animate-pulse rounded-lg border border-shell-border bg-shell-border/30", className)}
+			data-testid="generate-shimmer"
+			style={aspect ? { aspectRatio: aspect.replace(":", " / ") } : undefined}
+		/>
+	)
+}
+
+/** A button's working state: the spinner lives IN the button, not just a blur. */
+function ButtonSpinner() {
+	return <Loader2 className="inline-block animate-spin align-[-2px]" size={13} />
+}
+
+/**
+ * The fullscreen look at one candidate. The grid is for comparing; this is
+ * for scrutiny — the same two levels on every asset kind.
+ */
+function ExpandOverlay({ onClose, children }: { onClose(): void; children: ReactNode }) {
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose()
+		window.addEventListener("keydown", onKey)
+		return () => window.removeEventListener("keydown", onKey)
+	}, [onClose])
+	return (
+		<div
+			className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8"
+			data-testid="generate-expand"
+			onClick={onClose}>
+			<button
+				className="absolute top-4 right-4 rounded-md border border-white/20 p-2 text-white/80 hover:text-white"
+				onClick={onClose}
+				type="button">
+				<X size={16} />
+			</button>
+			<div className="max-h-full w-full max-w-6xl" onClick={(event) => event.stopPropagation()}>
+				{children}
+			</div>
+		</div>
+	)
+}
 
 export function GenerateAsset({ project, onClose }: { project: ProjectState; onClose(saved: string | null): void }) {
 	const [stage, setStage] = useState<Stage>("ask")
@@ -87,6 +137,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 	const [roundRequest, setRoundRequest] = useState<AssetRequestWire | null>(null)
 	const [refineNote, setRefineNote] = useState("")
 	const [refining, setRefining] = useState(false)
+	const [expandedTake, setExpandedTake] = useState<number | null>(null)
 	// Refined takes need variant numbers no fresh round will reuse.
 	const nextRefine = useRef(100)
 
@@ -357,7 +408,13 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							disabled={busy || !text.trim()}
 							onClick={begin}
 							type="button">
-							{busy ? "Thinking…" : "Continue"}
+							{busy ? (
+								<>
+									<ButtonSpinner /> Thinking…
+								</>
+							) : (
+								"Continue"
+							)}
 						</button>
 					</section>
 				)}
@@ -505,11 +562,20 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							<p className="mb-3 text-xs text-shell-muted" data-testid="generate-working">
 								{kind === "texture"
 									? "Composing…"
-									: "Generating three takes on your own key. About fifteen seconds each, running together."}
+									: "Generating takes on your own key. About fifteen seconds each, running together."}
 							</p>
 						)}
 
-						<div className={cn("grid gap-3", variants.length > 4 ? "grid-cols-4" : "grid-cols-2")}>
+						<div
+							className={cn(
+								"grid gap-3",
+								variants.length > 4 || (busy && kind === "texture") ? "grid-cols-4" : "grid-cols-2",
+							)}>
+							{busy &&
+								variants.length === 0 &&
+								Array.from({ length: kind === "texture" ? 8 : 4 }, (_, index) => (
+									<Shimmer aspect={aspect} key={`skeleton-${index}`} />
+								))}
 							{variants.map((variant) =>
 								variant.error ? (
 									// The lane's own words, per take. A content refusal on one
@@ -525,7 +591,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 								) : (
 									<button
 										className={cn(
-											"relative overflow-hidden rounded-lg border",
+											"group relative overflow-hidden rounded-lg border",
 											chosen === variant.variant ? "border-caret-accent" : "border-shell-border",
 										)}
 										data-generate-variant={variant.variant}
@@ -536,14 +602,40 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 											<img alt="" className="block w-full" src={variant.preview} />
 										</span>
 										{variant.variant >= 100 && (
-											<span className="absolute top-1.5 right-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+											<span className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
 												refined
 											</span>
 										)}
+										<span
+											className="absolute top-1.5 right-1.5 rounded-md bg-black/50 p-1.5 text-white/80 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
+											data-generate-expand={variant.variant}
+											onClick={(event) => {
+												event.stopPropagation()
+												setExpandedTake(variant.variant)
+											}}
+											title="View large">
+											<Maximize2 size={12} />
+										</span>
 									</button>
 								),
 							)}
+							{refining && <Shimmer aspect={aspect} />}
 						</div>
+						{expandedTake !== null &&
+							(() => {
+								const take = variants.find((candidate) => candidate.variant === expandedTake)
+								return take && !take.error ? (
+									<ExpandOverlay onClose={() => setExpandedTake(null)}>
+										<span className="block rounded-lg" style={{ backgroundColor: take.surface }}>
+											<img
+												alt=""
+												className="mx-auto block max-h-[85vh] w-auto max-w-full"
+												src={take.preview}
+											/>
+										</span>
+									</ExpandOverlay>
+								) : null
+							})()}
 
 						{chosen !== null && kind !== "texture" && (
 							<div className="mt-4 rounded-lg border border-shell-border p-3" data-testid="generate-refine">
@@ -563,7 +655,13 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 										disabled={busy || refining || !refineNote.trim()}
 										onClick={refine}
 										type="button">
-										{refining ? "Refining…" : "Refine it"}
+										{refining ? (
+											<>
+												<ButtonSpinner /> Refining…
+											</>
+										) : (
+											"Refine it"
+										)}
 									</button>
 									<button
 										className="rounded-md bg-caret-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
@@ -827,9 +925,13 @@ function MarkFlow({
  *
  * The subject and the clarify answers arrive from the ask road — asking again
  * would be asking twice. What accepting produces is TWO things and the copy
- * says so: a live component in the project, and a poster in the assets. The
- * preview strip is three stills at fixed timestamps; the motion itself is
- * judged where it will actually live, on the page.
+ * says so: a live component in the project, and a poster in the assets.
+ *
+ * The result RUNS — a live WebGL card with the real knobs as controls
+ * (tuning is free and the tuned values ship as the component's defaults),
+ * an expand button for fullscreen scrutiny, and a note box that re-enters
+ * the authoring loop as an EDIT of the current GLSL. Three static stills of
+ * a thing whose whole point is motion was the field complaint this replaced.
  */
 function ShaderFlow({
 	project,
@@ -848,6 +950,21 @@ function ShaderFlow({
 	const [outcome, setOutcome] = useState<ShaderOutcomeWire | null>(null)
 	const [tag, setTag] = useState("")
 	const [error, setError] = useState<string | null>(null)
+	// The live knobs: tuning is free (no model, no credits) and the values the
+	// user settles on ship as the component's defaults.
+	const [knobValues, setKnobValues] = useState<Record<string, number | string>>({})
+	const [note, setNote] = useState("")
+	const [refining, setRefining] = useState(false)
+	const [expanded, setExpanded] = useState(false)
+
+	const adoptOutcome = (result: ShaderOutcomeWire | null) => {
+		setOutcome(result ?? null)
+		if (result?.ok) {
+			const defaults: Record<string, number | string> = {}
+			for (const knob of result.knobs ?? []) defaults[knob.name] = knob.default
+			setKnobValues(defaults)
+		}
+	}
 
 	useEffect(
 		() =>
@@ -875,7 +992,7 @@ function ShaderFlow({
 				text: subject,
 				...(Object.keys(answers).length > 0 ? { answers } : {}),
 			})
-			setOutcome(result ?? null)
+			adoptOutcome(result)
 			if (result?.ok) setTag(suggestTag(subject))
 		} finally {
 			setBusy(false)
@@ -883,10 +1000,33 @@ function ShaderFlow({
 		}
 	}
 
+	/**
+	 * The note edits the CURRENT shader — a failure keeps it exactly as it
+	 * was, so a bad note costs only the attempt.
+	 */
+	const refine = async () => {
+		if (!note.trim()) return
+		setRefining(true)
+		setRounds([])
+		setError(null)
+		try {
+			const result = await invoke("generate:shaderRefine", project.path, note.trim())
+			if (result?.ok) {
+				adoptOutcome(result)
+				setNote("")
+			} else {
+				setError(result?.reason ?? "The refinement did not produce a working shader — the current one is unchanged.")
+			}
+		} finally {
+			setRefining(false)
+			setProgress("")
+		}
+	}
+
 	const accept = async () => {
 		setBusy(true)
 		try {
-			const result = await invoke("generate:shaderAccept", project.path, tag)
+			const result = await invoke("generate:shaderAccept", project.path, tag, knobValues)
 			if (result?.ok) onClose(result.tag ?? tag)
 			else setError(result?.error ?? "Could not save that.")
 		} finally {
@@ -904,19 +1044,30 @@ function ShaderFlow({
 				<button
 					className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
 					data-testid="shader-generate"
-					disabled={busy || !subject.trim()}
+					disabled={busy || refining || !subject.trim()}
 					onClick={generate}
 					type="button">
-					{outcome ? "Write another" : "Write it"}
+					{busy ? (
+						<>
+							<ButtonSpinner /> Writing…
+						</>
+					) : outcome ? (
+						"Write another"
+					) : (
+						"Write it"
+					)}
 				</button>
 			</div>
 
 			<TaskModelPicker disabled={busy} task="shader" />
 
 			{busy && (
-				<p className="mt-4 text-xs text-shell-muted" data-testid="shader-progress">
-					{progress || "Starting…"}
-				</p>
+				<>
+					<Shimmer aspect="16:10" className="mt-4" />
+					<p className="mt-2 text-xs text-shell-muted" data-testid="shader-progress">
+						{progress || "Starting…"}
+					</p>
+				</>
 			)}
 
 			{rounds.length > 0 && !outcome?.ok && (
@@ -937,26 +1088,107 @@ function ShaderFlow({
 				</div>
 			)}
 
-			{outcome?.ok && (
+			{outcome?.ok && outcome.fragment && (
 				<div className="mt-5" data-testid="shader-result">
 					<p className="mb-2 text-xs text-shell-muted">
-						Moments from the animation — {outcome.rounds} round(s) on {outcome.model}.
+						Running live — {outcome.rounds} round(s) on {outcome.model}. Drag the knobs; tuning is free.
 					</p>
-					<div className="grid grid-cols-3 gap-3" data-testid="shader-frames">
-						{(outcome.frames ?? []).map((frame, index) => (
-							<img
-								alt=""
-								className="w-full rounded-lg border border-shell-border"
-								key={frame.slice(-24)}
-								src={frame}
-							/>
-						))}
+					<div className="relative">
+						<ShaderPreview
+							className="block aspect-[16/10] w-full overflow-hidden rounded-lg border border-shell-border"
+							fragment={outcome.fragment}
+							uniforms={knobValues}
+						/>
+						<button
+							className="absolute top-2 right-2 rounded-md bg-black/50 p-2 text-white/80 hover:text-white"
+							data-testid="shader-expand"
+							onClick={() => setExpanded(true)}
+							title="View fullscreen"
+							type="button">
+							<Maximize2 size={14} />
+						</button>
 					</div>
-					{(outcome.knobs?.length ?? 0) > 0 && (
-						<p className="mt-3 text-xs text-shell-muted" data-testid="shader-knobs">
-							Tunable after: {outcome.knobs!.map((knob) => knob.label).join(" · ")}
-						</p>
+					{expanded && (
+						<ExpandOverlay onClose={() => setExpanded(false)}>
+							<ShaderPreview
+								className="block h-[85vh] w-full overflow-hidden rounded-lg"
+								fragment={outcome.fragment}
+								uniforms={knobValues}
+							/>
+						</ExpandOverlay>
 					)}
+
+					{(outcome.knobs?.length ?? 0) > 0 && (
+						<div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2" data-testid="shader-knobs">
+							{outcome.knobs!.map((knob) => (
+								<label className="flex items-center gap-2 text-xs text-shell-muted" key={knob.name}>
+									<span className="w-24 shrink-0 truncate">{knob.label}</span>
+									{knob.type === "color" ? (
+										<input
+											className="h-6 w-10 cursor-pointer rounded border border-shell-border bg-transparent"
+											onChange={(event) =>
+												setKnobValues((v) => ({ ...v, [knob.name]: event.target.value }))
+											}
+											type="color"
+											value={String(knobValues[knob.name] ?? knob.default)}
+										/>
+									) : (
+										<>
+											<input
+												className="flex-1 accent-caret-accent"
+												max={knob.max ?? 1}
+												min={knob.min ?? 0}
+												onChange={(event) =>
+													setKnobValues((v) => ({ ...v, [knob.name]: Number(event.target.value) }))
+												}
+												step={((knob.max ?? 1) - (knob.min ?? 0)) / 100 || 0.01}
+												type="range"
+												value={Number(knobValues[knob.name] ?? knob.default)}
+											/>
+											<span className="w-10 text-right tabular-nums">
+												{Number(knobValues[knob.name] ?? knob.default).toFixed(2)}
+											</span>
+										</>
+									)}
+								</label>
+							))}
+						</div>
+					)}
+
+					<div className="mt-4 rounded-lg border border-shell-border p-3" data-testid="shader-refine">
+						<div className="flex gap-2">
+							<input
+								className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+								data-testid="shader-refine-note"
+								disabled={busy || refining}
+								onChange={(event) => setNote(event.target.value)}
+								onKeyDown={(event) => event.key === "Enter" && refine()}
+								placeholder='What should change? — "slower", "more layered", "less green"'
+								value={note}
+							/>
+							<button
+								className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+								data-testid="shader-refine-run"
+								disabled={busy || refining || !note.trim()}
+								onClick={refine}
+								type="button">
+								{refining ? (
+									<>
+										<ButtonSpinner /> Improving…
+									</>
+								) : (
+									"Improve it"
+								)}
+							</button>
+						</div>
+						<p className="mt-1.5 text-[11px] text-shell-muted">
+							The note edits this exact shader — what it doesn't mention stays as it is. Knob tweaks above are
+							instant and free; notes cost a few model turns.
+						</p>
+						{refining && <Shimmer aspect="16:10" className="mt-3" />}
+						{refining && progress && <p className="mt-2 text-xs text-shell-muted">{progress}</p>}
+					</div>
+
 					<label className="mt-4 block text-sm" htmlFor="shader-tag">
 						What should it be called? <code className="text-xs text-shell-muted">@{tag || "name"}</code>
 					</label>
@@ -975,10 +1207,16 @@ function ShaderFlow({
 						<button
 							className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
 							data-testid="shader-save"
-							disabled={busy}
+							disabled={busy || refining}
 							onClick={accept}
 							type="button">
-							Add to project
+							{busy ? (
+								<>
+									<ButtonSpinner /> Adding…
+								</>
+							) : (
+								"Add to project"
+							)}
 						</button>
 					</div>
 					{error && <p className="mt-2 text-xs text-red-400">{error}</p>}
@@ -1119,7 +1357,13 @@ function Model3dFlow({
 					disabled={busy || sourceBusy || sourceText.trim().length < 2}
 					onClick={generateSources}
 					type="button">
-					{sourceBusy ? "Generating…" : "Generate the source"}
+					{sourceBusy ? (
+						<>
+							<ButtonSpinner /> Generating…
+						</>
+					) : (
+						"Generate the source"
+					)}
 				</button>
 			</div>
 			<p className="mt-1.5 text-[11px] text-shell-muted">
@@ -1127,6 +1371,13 @@ function Model3dFlow({
 				you pick becomes the model's source.
 			</p>
 
+			{sourceBusy && !sourceOptions && (
+				<div className="mt-3 grid grid-cols-4 gap-3">
+					{Array.from({ length: 4 }, (_, index) => (
+						<Shimmer aspect="1:1" key={`source-skeleton-${index}`} />
+					))}
+				</div>
+			)}
 			{sourceOptions && (
 				<div className="mt-3 grid grid-cols-4 gap-3" data-testid="model3d-source-options">
 					{sourceOptions.map((option) =>
@@ -1190,9 +1441,16 @@ function Model3dFlow({
 				disabled={busy || !source}
 				onClick={generate}
 				type="button">
-				Build the model
+				{busy ? (
+					<>
+						<ButtonSpinner /> Building…
+					</>
+				) : (
+					"Build the model"
+				)}
 			</button>
 
+			{busy && <Shimmer aspect="16:9" className="mt-4" />}
 			{busy && progress && (
 				<p className="mt-4 text-xs text-shell-muted" data-testid="model3d-progress">
 					{progress.stage}

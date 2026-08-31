@@ -44,7 +44,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import type { AssetRequestWire, ComposerImage } from "../shared/ipc"
 import { buildAgentClientConfigs } from "./agent-configs"
 import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
-import { acceptShader, authorShader, discardShader, holdShader } from "./authored-shaders"
+import { acceptShader, authorShader, discardShader, holdShader, refineHeldShader, type ShaderOutcome } from "./authored-shaders"
 import { resolveNotification } from "./electron-host"
 import { acceptModel3d, discardModel3d, generateModel3d } from "./generate-3d"
 import {
@@ -114,6 +114,26 @@ const probedModels = new Map<string, string | null>()
  */
 function catalogueBackend() {
 	return getBackend(getPrefs().backendId ?? "opencode")
+}
+
+/** ShaderOutcome → the wire, incl. the live fragment and the full knob manifest. */
+function shaderOutcomeWire(shader: ShaderOutcome) {
+	return {
+		ok: true,
+		frames: shader.framePngs.map((frame) => `data:image/png;base64,${frame.toString("base64")}`),
+		fragment: shader.fragment,
+		knobs: shader.uniforms.map((uniform) => ({
+			name: uniform.name,
+			label: uniform.label,
+			type: uniform.type,
+			default: uniform.default,
+			...(uniform.min !== undefined ? { min: uniform.min } : {}),
+			...(uniform.max !== undefined ? { max: uniform.max } : {}),
+		})),
+		range: shader.range,
+		rounds: shader.rounds,
+		model: shader.model,
+	}
 }
 
 export function registerIpcHandlers(windows: WindowManager): void {
@@ -497,21 +517,34 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		if (!result.ok) return { ok: false, reason: result.reason, needsAnotherModel: result.needsAnotherModel }
 
 		holdShader(projectPath, { outcome: result.shader, subject: request.text.trim(), answers: request.answers })
-		return {
-			ok: true,
-			frames: result.shader.framePngs.map((frame) => `data:image/png;base64,${frame.toString("base64")}`),
-			knobs: result.shader.uniforms.map((uniform) => ({ name: uniform.name, label: uniform.label })),
-			range: result.shader.range,
-			rounds: result.shader.rounds,
-			model: result.shader.model,
-		}
+		return shaderOutcomeWire(result.shader)
 	})
 
-	ipcMain.handle("generate:shaderAccept", async (_event, projectPath: string, tag: string) => {
-		const result = await acceptShader(projectPath, tag)
-		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
-		return result.ok ? { ok: true, tag: result.tag, componentPath: result.componentPath } : { ok: false, error: result.error }
+	ipcMain.handle("generate:shaderRefine", async (_event, projectPath: string, note: string) => {
+		const tokens = await readFoundationTokens(projectPath).catch(() => null)
+		const window = windows.get(projectPath)
+		const result = await refineHeldShader(projectPath, note, tokens, taskModel("shader") || undefined, (update) =>
+			window?.sendToChrome("generate:progress", projectPath, {
+				job: "shader",
+				stage: update.stage,
+				...(update.round !== undefined ? { round: update.round } : {}),
+				...(update.previewPng ? { preview: `data:image/png;base64,${update.previewPng.toString("base64")}` } : {}),
+			}),
+		)
+		if (!result.ok) return { ok: false, reason: result.reason, needsAnotherModel: result.needsAnotherModel }
+		return shaderOutcomeWire(result.shader)
 	})
+
+	ipcMain.handle(
+		"generate:shaderAccept",
+		async (_event, projectPath: string, tag: string, tuned?: Record<string, number | string>) => {
+			const result = await acceptShader(projectPath, tag, tuned)
+			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+			return result.ok
+				? { ok: true, tag: result.tag, componentPath: result.componentPath }
+				: { ok: false, error: result.error }
+		},
+	)
 
 	ipcMain.handle("generate:model3d", async (_event, projectPath: string, sourceTag: string) => {
 		const window = windows.get(projectPath)

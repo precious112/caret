@@ -57,6 +57,12 @@ export interface ShaderRequest {
 	tokens: FoundationTokens | null
 	/** Overrides the project's backend model for this lane only. */
 	modelOverride?: string
+	/**
+	 * Iteration: the current shader and what the user wants changed. The
+	 * opening prompt becomes an EDIT of this fragment rather than a fresh
+	 * attempt — everything the current version got right survives the note.
+	 */
+	seed?: { fragment: string; uniforms: ExtractedShader["uniforms"]; note: string }
 	/** Called as the loop moves; round updates carry the frame being judged. */
 	onProgress?(update: { stage: string; round?: number; previewPng?: Buffer }): void
 }
@@ -115,7 +121,7 @@ export async function authorShader(request: ShaderRequest): Promise<ShaderResult
 	let rounds = 0
 
 	try {
-		progress({ stage: "Asking the model for a first attempt" })
+		progress({ stage: request.seed ? "Asking the model to apply your note" : "Asking the model for a first attempt" })
 		session = await backend.startSession({
 			workingDirectory: request.projectPath,
 			// It writes GLSL into Caret's scaffold; it does not touch the repo.
@@ -125,9 +131,24 @@ export async function authorShader(request: ShaderRequest): Promise<ShaderResult
 			systemPrompt: SHADER_SYSTEM_PROMPT,
 		})
 
-		let reply = await turn(session, {
-			text: shaderOpeningPrompt(brief, foundationWords(palette), [palette.brand, palette.brandQuiet, palette.surface]),
-		})
+		const opening = request.seed
+			? [
+					`The shader below is the current version of "${brief}". The user has looked at it running and asks for one change:`,
+					"",
+					`USER'S NOTE: ${request.seed.note}`,
+					"",
+					"Edit the current shader to apply the note — keep everything the note does not mention exactly as it is, including the knob manifest unless the note demands a new knob. Reply in the same format as always: the manifest JSON and the ```glsl block.",
+					"",
+					"Current manifest:",
+					JSON.stringify({ uniforms: request.seed.uniforms }),
+					"",
+					"Current fragment:",
+					"```glsl",
+					request.seed.fragment,
+					"```",
+				].join("\n")
+			: shaderOpeningPrompt(brief, foundationWords(palette), [palette.brand, palette.brandQuiet, palette.surface])
+		let reply = await turn(session, { text: opening })
 
 		// The machine-checkable half: extraction, compile, and the timidity gate.
 		// Each failure goes back in the model's own terms; the budget is shared
@@ -312,6 +333,52 @@ export function discardShader(projectPath: string): void {
 }
 
 /**
+ * Re-enters the authoring loop on the held shader with the user's note.
+ *
+ * The iteration door the lane was missing: "slower, more layered, less
+ * green" edits the CURRENT fragment rather than rolling a new one, so
+ * everything the current version got right survives. A success replaces the
+ * held shader; a failure leaves it exactly as it was, so a bad note costs
+ * nothing but the attempt.
+ */
+export async function refineHeldShader(
+	projectPath: string,
+	note: string,
+	tokens: FoundationTokens | null,
+	modelOverride?: string,
+	onProgress?: ShaderRequest["onProgress"],
+): Promise<ShaderResult> {
+	const held = pendingShaders.get(projectPath)
+	if (!held) return { ok: false, reason: "No shader is waiting to refine. Generate one first." }
+
+	const result = await authorShader({
+		projectPath,
+		request: { kind: "shader", text: held.subject, answers: held.answers },
+		tokens,
+		modelOverride,
+		seed: { fragment: held.outcome.fragment, uniforms: held.outcome.uniforms, note },
+		onProgress,
+	})
+	if (result.ok) {
+		holdShader(projectPath, { outcome: result.shader, subject: held.subject, answers: held.answers })
+	}
+	return result
+}
+
+/** Knob defaults with the user's live-preview tuning applied. */
+function withTuned(
+	uniforms: ShaderOutcome["uniforms"],
+	tuned: Record<string, number | string> | undefined,
+): ShaderOutcome["uniforms"] {
+	if (!tuned) return uniforms
+	return uniforms.map((uniform) =>
+		tuned[uniform.name] !== undefined && typeof tuned[uniform.name] === typeof uniform.default
+			? { ...uniform, default: tuned[uniform.name] }
+			: uniform,
+	)
+}
+
+/**
  * Commits the held shader: the runner healed into `.caret/lib/`, the instance
  * component written into `.caret/components/shaders/`, and the poster indexed
  * as an ordinary asset whose description names its live twin.
@@ -319,9 +386,16 @@ export function discardShader(projectPath: string): void {
 export async function acceptShader(
 	projectPath: string,
 	tag: string,
+	tuned?: Record<string, number | string>,
 ): Promise<{ ok: boolean; tag?: string; componentPath?: string; error?: string }> {
-	const held = pendingShaders.get(projectPath)
-	if (!held) return { ok: false, error: "No shader is waiting. Generate one first." }
+	const rawHeld = pendingShaders.get(projectPath)
+	if (!rawHeld) return { ok: false, error: "No shader is waiting. Generate one first." }
+	// The user's live-preview tuning becomes the shipped defaults — the knobs
+	// they set while watching the animation are the taste decision.
+	const held: PendingShader = {
+		...rawHeld,
+		outcome: { ...rawHeld.outcome, uniforms: withTuned(rawHeld.outcome.uniforms, tuned) },
+	}
 
 	const cleanTag = (tag.trim() || "shader").replace(/[^a-z0-9-]/gi, "-").toLowerCase()
 

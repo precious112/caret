@@ -29,7 +29,9 @@
 	},
 	"include": [
 		"src/**/*",
-		"../shared/**/*"
+		"../shared/**/*",
+		"../../src/core/design/authoring/shader-runner.ts",
+		"../../src/core/design/asset-library/shader/preamble.ts"
 	],
 	"exclude": [
 		"node_modules"

@@ -615,8 +615,14 @@ export interface ShaderOutcomeWire {
 	ok: boolean
 	/** Frames at the critique timestamps, as data URLs — the picker's strip. */
 	frames?: string[]
-	/** The knobs the model declared, for the "what you can tune" line. */
-	knobs?: Array<{ name: string; label: string }>
+	/**
+	 * The fragment body, so the chrome can RUN the animation live — three
+	 * static stills of a thing whose whole point is motion was the field
+	 * complaint that added this.
+	 */
+	fragment?: string
+	/** The full knob manifest, so the chrome renders real controls, not a caption. */
+	knobs?: Array<{ name: string; label: string; type: "float" | "color"; default: number | string; min?: number; max?: number }>
 	/** Luminance spread of the final render — the anti-timidity number. */
 	range?: { min: number; max: number }
 	rounds?: number
@@ -789,7 +795,18 @@ export interface IpcRequests {
 	 * plus a poster asset.
 	 */
 	"generate:shader": (projectPath: string, request: AssetRequestWire) => ShaderOutcomeWire
-	"generate:shaderAccept": (projectPath: string, tag: string) => WriteResult & { tag?: string; componentPath?: string }
+	/**
+	 * Re-enters the authoring loop on the HELD shader with the user's note —
+	 * an edit of the current GLSL, not a rewrite from scratch. The result
+	 * replaces the held shader.
+	 */
+	"generate:shaderRefine": (projectPath: string, note: string) => ShaderOutcomeWire
+	/** `tuned` carries knob values the user set in the live preview; they become the component's defaults. */
+	"generate:shaderAccept": (
+		projectPath: string,
+		tag: string,
+		tuned?: Record<string, number | string>,
+	) => WriteResult & { tag?: string; componentPath?: string }
 
 	/**
 	 * Whether the request needs anything more before it is worth spending on.

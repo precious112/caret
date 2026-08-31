@@ -55,6 +55,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"generate:model3dAccept": true,
 	"generate:shader": true,
 	"generate:shaderAccept": true,
+	"generate:shaderRefine": true,
 	"generate:taskModels": true,
 	"generate:setTaskModel": true,
 	"generate:questions": true,
