@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
+import { SHADER_RUNNER_SOURCE } from "../authoring/shader-runner"
 import { dedent } from "./template-utils"
 
 export async function generateCanvasFiles(caretDir: string): Promise<void> {
@@ -29,6 +30,12 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(libDir, "layers-panel.ts"), generateLayersPanel()),
 		fs.writeFile(path.join(libDir, "asset-picker.ts"), generateAssetPicker()),
 		fs.writeFile(path.join(libDir, "caret-grab-plugin.ts"), generateCaretGrabPlugin()),
+		// The shader runner ships with the boot set, not only at shader accept:
+		// this whole directory is cleared at project open (removeStaleShell), and
+		// the first live shader accept proved what a write-once file here means —
+		// the runner vanished on the next launch and every shader component's
+		// import 500'd the shell.
+		fs.writeFile(path.join(libDir, "CaretShader.tsx"), SHADER_RUNNER_SOURCE),
 	])
 }
 

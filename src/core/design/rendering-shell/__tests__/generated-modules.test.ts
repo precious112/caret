@@ -32,6 +32,10 @@ describe("generated canvas modules parse", () => {
 
 			const files = await walk(dir)
 			files.length.should.be.greaterThan(5)
+			// The shader runner must be part of the boot set: .caret/lib is cleared
+			// at every project open, so anything written there only at accept time
+			// dies on the next launch — measured live, first shader accept ever.
+			files.some((file) => file.endsWith("CaretShader.tsx")).should.equal(true)
 			const failures: string[] = []
 			for (const file of files) {
 				try {
