@@ -266,7 +266,7 @@ async function generateRasterVariants(
 		let bytes = result.bytes
 		let mime = result.mime
 		if (request.transparent) {
-			const keyed = cutOutPhotograph(result.bytes)
+			const keyed = await cutOutPhotograph(result.bytes)
 			if (!keyed.ok) {
 				Logger.warn(`[generate] raster variant ${variant.variant} failed keying: ${keyed.reason}`)
 				return { variant: variant.variant, preview: "", width: 0, height: 0, surface, error: keyed.reason }

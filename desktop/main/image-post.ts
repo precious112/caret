@@ -32,6 +32,8 @@ import { BrowserWindow, nativeImage } from "electron"
 
 import { removeFlatBackground } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { matteCutout } from "./matte-infer"
+import { getPrefs } from "./prefs"
 
 export interface PostProcessed {
 	bytes: Buffer
@@ -44,21 +46,29 @@ export interface PostProcessed {
 }
 
 /**
- * Removes a chroma-key background from a generated photograph.
+ * Cuts the subject out of a generated photograph.
  *
- * The arithmetic lives in `src/core/design` where it is pure and unit-tested;
- * this wrapper is only the Electron dance: decode to a bitmap, key in place,
+ * The decision of what is subject belongs to the matte model (BiRefNet, see
+ * `matte-infer.ts`) — a threshold cannot make it: shadows the image model
+ * paints despite every instruction sit just under any white cutoff, and
+ * specular highlights sit above it, so the threshold era shipped shadow
+ * puddles and bit holes out of shiny objects. The white-flood keyer survives
+ * only behind the explicit "skip the cutout model" preference, where the
+ * 224MB download was declined and a rougher cut is the deal the user chose.
+ *
+ * This wrapper is only the Electron dance: decode to a bitmap, cut in place,
  * premultiply (what `createFromBitmap` expects), and hand back a PNG with real
- * alpha. A refusal is the keyer's own sentence — it names measured numbers, and
- * the caller shows it on the variant that earned it.
+ * alpha. A refusal is the cutter's own sentence — it names measured numbers,
+ * and the caller shows it on the variant that earned it.
  */
-export function cutOutPhotograph(input: Buffer): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
+export async function cutOutPhotograph(input: Buffer): Promise<{ ok: true; bytes: Buffer } | { ok: false; reason: string }> {
 	const image = nativeImage.createFromBuffer(input)
 	const { width, height } = image.getSize()
 	if (!width || !height) return { ok: false, reason: "The generated image could not be decoded for keying." }
 
 	const bitmap = image.toBitmap()
-	const keyed = removeFlatBackground({ data: bitmap, width, height, order: "bgra" })
+	const frame = { data: bitmap, width, height, order: "bgra" as const }
+	const keyed = getPrefs().skipCutoutModel ? removeFlatBackground(frame) : await matteCutout(frame)
 	if (!keyed.ok) return keyed
 
 	for (let i = 0; i < bitmap.length; i += 4) {
