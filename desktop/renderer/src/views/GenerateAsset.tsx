@@ -25,7 +25,7 @@
  * A picker showing stock previews would be arguing against the library's only
  * real claim.
  */
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
 	AssetEntryWire,
@@ -80,6 +80,16 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
+	// The request the CURRENT grid of takes was generated with. Accepting and
+	// refining must use this, never the live prompt text — editing the prompt
+	// only affects the NEXT round, otherwise a picked take's pending entry is
+	// looked up under a request that never produced it.
+	const [roundRequest, setRoundRequest] = useState<AssetRequestWire | null>(null)
+	const [refineNote, setRefineNote] = useState("")
+	const [refining, setRefining] = useState(false)
+	// Refined takes need variant numbers no fresh round will reuse.
+	const nextRefine = useRef(100)
+
 	const request = useCallback(
 		(answers?: Record<string, string>): AssetRequestWire => ({
 			kind,
@@ -102,16 +112,51 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			setAspect(ratio)
 			setChosen(null)
 			setVariants([])
+			setRefineNote("")
 			setBusy(true)
 			setStage("variant")
+			const round = request(answers)
+			setRoundRequest(round)
 			try {
-				setVariants((await invoke("generate:takes", project.path, { ...request(answers) }, ratio)) ?? [])
+				setVariants((await invoke("generate:takes", project.path, { ...round }, ratio)) ?? [])
 			} finally {
 				setBusy(false)
 			}
 		},
 		[project.path, request, kind],
 	)
+
+	/**
+	 * The picked take goes back as the reference with the note as the edit.
+	 * The result APPENDS to the grid — iteration keeps every round's takes in
+	 * reach, so refining past a good one never loses it.
+	 */
+	const refine = useCallback(async () => {
+		if (chosen === null || !roundRequest || !refineNote.trim()) return
+		const target = nextRefine.current++
+		setRefining(true)
+		setError(null)
+		try {
+			const refined = await invoke(
+				"generate:refineTake",
+				project.path,
+				roundRequest,
+				aspect,
+				chosen,
+				refineNote.trim(),
+				target,
+			)
+			if (refined) {
+				setVariants((current) => [...current, refined])
+				if (!refined.error) {
+					setChosen(refined.variant)
+					setRefineNote("")
+				}
+			}
+		} finally {
+			setRefining(false)
+		}
+	}, [chosen, roundRequest, refineNote, project.path, aspect])
 
 	/**
 	 * What happens when the user has said their piece.
@@ -183,13 +228,13 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			const result =
 				kind === "texture" && recipe
 					? await invoke("generate:accept", project.path, recipe.id, {}, aspect, chosen, tag)
-					: await invoke("generate:acceptTake", project.path, request(replies), aspect, chosen, tag)
+					: await invoke("generate:acceptTake", project.path, roundRequest ?? request(replies), aspect, chosen, tag)
 			if (result?.ok) onClose(result.tag ?? tag)
 			else setError(result?.error ?? "Could not save that.")
 		} finally {
 			setBusy(false)
 		}
-	}, [chosen, kind, recipe, project.path, aspect, tag, request, replies, onClose])
+	}, [chosen, kind, recipe, project.path, aspect, tag, request, replies, roundRequest, onClose])
 
 	const aspects = kind === "texture" && recipe ? recipe.aspects : IMAGE_ASPECTS
 	const regenerate = () => (kind === "texture" && recipe ? chooseRecipe(recipe, aspect) : runTakes(aspect, replies))
@@ -417,6 +462,25 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 
 				{stage === "variant" && (
 					<section className="mx-auto max-w-4xl" data-testid="generate-variants">
+						{kind !== "texture" && (
+							<div className="mb-3 flex gap-2">
+								<input
+									className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+									data-testid="generate-prompt-edit"
+									disabled={busy || refining}
+									onChange={(event) => setText(event.target.value)}
+									value={text}
+								/>
+								<button
+									className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+									data-testid="generate-prompt-rerun"
+									disabled={busy || refining || text.trim().length < 2}
+									onClick={() => runTakes(aspect, replies)}
+									type="button">
+									New takes with this prompt
+								</button>
+							</div>
+						)}
 						<div className="mb-4 flex items-center gap-2">
 							<span className="text-xs text-shell-muted">Proportions</span>
 							{aspects.map((option) => (
@@ -461,32 +525,84 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 								) : (
 									<button
 										className={cn(
-											"overflow-hidden rounded-lg border",
+											"relative overflow-hidden rounded-lg border",
 											chosen === variant.variant ? "border-caret-accent" : "border-shell-border",
 										)}
 										data-generate-variant={variant.variant}
 										key={variant.variant}
-										onClick={() => {
-											setChosen(variant.variant)
-											setTag(suggestTag(text))
-											setStage("name")
-										}}
+										onClick={() => setChosen(variant.variant)}
 										type="button">
 										<span className="block" style={{ backgroundColor: variant.surface }}>
 											<img alt="" className="block w-full" src={variant.preview} />
 										</span>
+										{variant.variant >= 100 && (
+											<span className="absolute top-1.5 right-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+												refined
+											</span>
+										)}
 									</button>
 								),
 							)}
 						</div>
 
+						{chosen !== null && kind !== "texture" && (
+							<div className="mt-4 rounded-lg border border-shell-border p-3" data-testid="generate-refine">
+								<div className="flex gap-2">
+									<input
+										className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+										data-testid="generate-refine-note"
+										disabled={busy || refining}
+										onChange={(event) => setRefineNote(event.target.value)}
+										onKeyDown={(event) => event.key === "Enter" && refine()}
+										placeholder='What should change on this take? — "harder shadow", "label bigger", "less clutter"'
+										value={refineNote}
+									/>
+									<button
+										className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+										data-testid="generate-refine-run"
+										disabled={busy || refining || !refineNote.trim()}
+										onClick={refine}
+										type="button">
+										{refining ? "Refining…" : "Refine it"}
+									</button>
+									<button
+										className="rounded-md bg-caret-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
+										data-testid="generate-use-take"
+										disabled={busy || refining}
+										onClick={() => {
+											setTag(suggestTag(text))
+											setStage("name")
+										}}
+										type="button">
+										Use this take
+									</button>
+								</div>
+								<p className="mt-1.5 text-[11px] text-shell-muted">
+									Refining sends this exact take back as the reference with your note — it converges, where new
+									takes start over. Every earlier take stays in the grid.
+								</p>
+							</div>
+						)}
+						{chosen !== null && kind === "texture" && (
+							<button
+								className="mt-4 rounded-md bg-caret-accent px-3 py-1.5 text-xs text-white"
+								data-testid="generate-use-take"
+								onClick={() => {
+									setTag(suggestTag(text))
+									setStage("name")
+								}}
+								type="button">
+								Use this one
+							</button>
+						)}
+
 						<button
-							className="mt-4 text-xs text-shell-muted hover:text-shell-fg"
+							className="mt-4 block text-xs text-shell-muted hover:text-shell-fg"
 							data-testid="generate-more"
-							disabled={busy}
+							disabled={busy || refining}
 							onClick={regenerate}
 							type="button">
-							None of these — try again
+							None of these — a fresh round
 						</button>
 					</section>
 				)}

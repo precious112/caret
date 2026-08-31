@@ -812,6 +812,20 @@ export interface IpcRequests {
 		variant: number,
 		tag: string,
 	) => WriteResult & { tag?: string }
+	/**
+	 * One refined take: the picked take goes back as the REFERENCE image with
+	 * the note as the edit instruction — iteration, not another roll of the
+	 * dice. `newVariant` is renderer-chosen and unique across rounds so the
+	 * refined result coexists with every earlier take in the pending store.
+	 */
+	"generate:refineTake": (
+		projectPath: string,
+		request: AssetRequestWire,
+		aspect: string,
+		sourceVariant: number,
+		note: string,
+		newVariant: number,
+	) => GeneratedVariantWire
 
 	/** Commits the chosen variant as an ordinary asset, with its provenance. */
 	"generate:accept": (

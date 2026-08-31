@@ -14,6 +14,7 @@
  * §4.6 asset pipeline so a generated asset is an asset like any other.
  */
 import {
+	ASPECTS,
 	type AssetRecipe,
 	type AssetRequest,
 	addGeneratedAsset,
@@ -553,6 +554,100 @@ export async function acceptRequestTake(
 	// user replied, and `asked` carries their opening words even when nothing was
 	// clarified — that sentence is the one thing only they could have supplied.
 	return acceptRasterVariant(projectPath, recipe, askedAnswers(request), chosen, variant, tag, tokens)
+}
+
+/**
+ * One refined take: the picked take goes back to the model AS THE REFERENCE,
+ * with the user's note as the edit instruction.
+ *
+ * Iteration, not another roll of the dice. Re-rolling from scratch throws
+ * away everything a nearly-right take got right; the image model is an
+ * editing model, and "harder shadow, label bigger" against the picked take
+ * converges where fresh takes wander. The result lands in the pending store
+ * under a variant number the renderer chose — unique across rounds — so
+ * `acceptRequestTake` works on it unchanged, and provenance carries the
+ * refinement chain.
+ */
+export async function refineRequestTake(
+	projectPath: string,
+	request: AssetRequest,
+	aspect: string,
+	sourceVariant: number,
+	note: string,
+	newVariant: number,
+): Promise<GeneratedVariantWire> {
+	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+	const surface = derivePalette(tokens).surface
+	const miss = (error: string, retryable?: boolean): GeneratedVariantWire => ({
+		variant: newVariant,
+		preview: "",
+		width: 0,
+		height: 0,
+		surface,
+		error,
+		...(retryable ? { retryable } : {}),
+	})
+
+	if (request.kind === "texture") {
+		return miss("Textures are free and instant — regenerate with different parameters instead of refining.")
+	}
+	const config = rasterConfig()
+	if (!config) return miss(NO_RASTER_REASON)
+
+	const recipe = recipeForRequest(request)
+	if (recipe.lane !== "raster") return miss("Only photographs can be refined here.")
+	const chosen = aspect || recipe.aspects[0]
+
+	const source = pendingRaster.get(pendingKey(projectPath, recipe.id, chosen, sourceVariant))
+	if (!source) return miss("That take is no longer held — generate a fresh round first.")
+
+	const transparent = request.kind === "image" && request.transparent === true
+	const prompt = [
+		`Edit the reference image: ${note.trim().replace(/\.$/, "")}.`,
+		"Change only what the instruction names — keep the same subject, style, light and framing as the reference everywhere else.",
+		...(transparent ? ["The background stays pure flat white (#ffffff) filling every edge of the frame."] : []),
+	].join(" ")
+
+	const client = new GeminiImages(config)
+	const result = await client.generate({
+		prompt,
+		avoid: [],
+		aspect: chosen,
+		references: [{ mime: source.mime, base64: source.bytes.toString("base64") }],
+	})
+	if (!result.ok) {
+		Logger.warn(`[generate] refine of variant ${sourceVariant} failed: ${result.reason}`)
+		return miss(result.reason, result.retryable)
+	}
+
+	let bytes = result.bytes
+	let mime = result.mime
+	if (transparent) {
+		const keyed = await cutOutPhotograph(result.bytes)
+		if (!keyed.ok) return miss(keyed.reason)
+		bytes = keyed.bytes
+		mime = "image/png"
+	}
+
+	pendingRaster.set(pendingKey(projectPath, recipe.id, chosen, newVariant), {
+		bytes,
+		mime,
+		// The chain, not just the last step: months later, "how was this made"
+		// includes what it was refined FROM and what was asked of it.
+		resolved: `${source.resolved}\n\n[refined from take ${sourceVariant}] ${prompt}`,
+		model: result.model,
+		...(result.usage ? { usage: result.usage } : {}),
+		at: Date.now(),
+	})
+
+	const size = ASPECTS[chosen]
+	return {
+		variant: newVariant,
+		preview: `data:${mime};base64,${bytes.toString("base64")}`,
+		width: size?.width ?? 0,
+		height: size?.height ?? 0,
+		surface,
+	}
 }
 
 /**

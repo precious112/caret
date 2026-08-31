@@ -55,6 +55,7 @@ import {
 	generationQuestions,
 	recipeCards,
 	recipeVariants,
+	refineRequestTake,
 	requestTakes,
 } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
@@ -425,6 +426,19 @@ export function registerIpcHandlers(windows: WindowManager): void {
 			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
 			return result
 		},
+	)
+
+	ipcMain.handle(
+		"generate:refineTake",
+		(
+			_event,
+			projectPath: string,
+			request: AssetRequest,
+			aspect: string,
+			sourceVariant: number,
+			note: string,
+			newVariant: number,
+		) => refineRequestTake(projectPath, request, aspect, sourceVariant, note, newVariant),
 	)
 
 	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string) => {

@@ -61,6 +61,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"generate:clarify": true,
 	"generate:takes": true,
 	"generate:acceptTake": true,
+	"generate:refineTake": true,
 	"generate:recipes": true,
 	"generate:variants": true,
 	"generate:accept": true,
