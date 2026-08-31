@@ -30,7 +30,7 @@ import {
 } from "../../../src/core/design"
 import { recordEdit } from "../../../src/core/design/provenance"
 import { Logger } from "../../../src/shared/services/Logger"
-import { acceptRequestTake, requestTakes } from "../generate-assets"
+import { acceptRequestTake, rasterConfig, requestTakes } from "../generate-assets"
 import { askUser, type InterviewPrompt, type PresentedCandidate } from "../interview"
 import { regenerateRulesFiles } from "../rules/generate"
 import type { ToolContext, ToolDefinition, ToolResult } from "./tools"
@@ -274,9 +274,23 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					...(args.transparent ? { transparent: true } : {}),
 				}
 
-				// A missing Tripo key is known before anyone is asked anything —
-				// consenting to a generation that then reports "no key" would spend
-				// the user's attention on Caret's own configuration.
+				// A missing key is known before anyone is asked anything — consenting
+				// to a generation that can only end in an authorization error spends
+				// the user's attention on Caret's own configuration. Photographs and
+				// the mark's render-compare target both ride the image key; a 3D
+				// build needs it too unless it starts from an existing asset.
+				// Textures and shaders are free and local, so they pass untouched.
+				const needsImageKey =
+					args.kind === "image" || args.kind === "mark" || (args.kind === "object3d" && !args.source?.trim())
+				if (needsImageKey && !rasterConfig()) {
+					return ok({
+						generated: false,
+						note:
+							"Image generation needs a Google Gemini API key and none is configured — this lane cannot run at all right now, so do not retry it this conversation. " +
+							"Ask the user to add a key in Settings, and keep building meanwhile: textures and animated shaders are free and local, or the page can hold a place for the image.",
+					})
+				}
+
 				if (args.kind === "object3d") {
 					const { tripoAvailable } = await import("../generate-3d")
 					if (!tripoAvailable()) {
