@@ -28,7 +28,17 @@ export function keyWords(palette: GeneratorPalette): string {
 		: "High-key: bright, open, softly lit, most of the frame light. Nothing pure white."
 }
 
-/** The colour family, named by the brand hue and the neutral tint. */
+/**
+ * The colour family, named by the brand hue and the neutral tint.
+ *
+ * Scoped to the SETTING, never the subject — the lesson of a real failure:
+ * the old wording ("at most one small accent of green… Muted, desaturated
+ * overall") was sent for a photograph of a green plant, instructing the model
+ * to suppress the subject's own colour and drain the frame. It assumed every
+ * subject is palette-neutral, which is only true of abstract imagery. The
+ * palette's honest jurisdiction is the environment and the grade; the subject
+ * keeps the colours it actually has.
+ */
 export function paletteWords(palette: GeneratorPalette): string {
 	const brand = hexToHsl(palette.brand)
 	const neutral = hexToHsl(palette.raised)
@@ -43,12 +53,13 @@ export function paletteWords(palette: GeneratorPalette): string {
 	// The brand is named as an *accent that may appear*, never as the subject.
 	// Asking a model for "a blue photograph" produces a blue filter over
 	// everything, which is the most obvious tell there is.
-	const accent =
-		brand.s < 0.12
-			? "no single accent colour"
-			: `at most one small accent of ${hueName(brand.h)}, occupying a few percent of the frame if it appears at all`
+	const accent = brand.s < 0.12 ? "" : ` A small touch of ${hueName(brand.h)} is welcome where it occurs naturally.`
 
-	return `${temperature}; ${accent}. Muted, desaturated overall.`
+	return (
+		`The setting and surfaces around the subject lean ${temperature}.${accent} ` +
+		"The subject itself keeps its own true colours at natural saturation. " +
+		"The overall grade is calm and unforced — nothing neon, nothing over-processed."
+	)
 }
 
 /** Both sentences, in the order a prompt wants them. */

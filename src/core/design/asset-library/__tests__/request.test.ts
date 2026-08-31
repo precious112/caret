@@ -74,6 +74,46 @@ describe("composeAssetRequest", () => {
 		for (const rule of SHARED_AVOID) assert.ok(composed.avoid.includes(rule), `missing: ${rule}`)
 	})
 
+	describe("precedence — the direction outranks the styling", () => {
+		it("leads with the user's words and ranks every default beneath them", () => {
+			const composed = raster(composeAssetRequest({ kind: "image", text: "a paperclip" }, INPUT))
+			assert.ok(composed.prompt.startsWith("a paperclip."), "the direction does not lead the prompt")
+			assert.ok(
+				composed.prompt.includes("Where the description above does not already decide it, default to:"),
+				"defaults are not explicitly subordinated to the direction",
+			)
+		})
+
+		it("style bans yield to the direction instead of contradicting it", () => {
+			// The genre-blacklist failure: a plant app asking for watering imagery
+			// was sent an unconditional "Do not include: hands holding or touching
+			// the subject" as the prompt's last word. The ban survives only as a
+			// default that the direction explicitly outranks.
+			const composed = raster(
+				composeAssetRequest({ kind: "image", text: "hands repotting a small calathea into a terracotta pot" }, INPUT),
+			)
+			assert.ok(
+				composed.prompt.includes("Unless the description above asks for them, avoid:"),
+				"style defaults are not marked as yielding",
+			)
+			assert.ok(
+				!composed.avoid.some((rule) => /hands|person|shadow|flat-lay|bokeh/i.test(rule)),
+				"a style preference still rides the unconditional list",
+			)
+		})
+
+		it("no longer both demands and forbids a centred composition in one prompt", () => {
+			// Shipped verbatim to test4: "Shot straight on, the subject centred and
+			// filling most of the frame" alongside "no centred symmetrical
+			// composition unless asked for" — both appended by Caret.
+			const composed = raster(composeAssetRequest({ kind: "image", text: "a paperclip" }, INPUT))
+			const demandsCentred = /centred and filling/.test(composed.prompt)
+			const forbidsCentred =
+				/centred symmetrical/.test(composed.prompt) || composed.avoid.some((rule) => /centred/.test(rule))
+			assert.ok(!(demandsCentred && forbidsCentred), "the prompt argues with itself about centring")
+		})
+	})
+
 	it("varies treatment across variants and never the subject", () => {
 		const takes = [0, 1, 2].map((variant) =>
 			raster(composeAssetRequest({ kind: "image", text: "a paperclip" }, { ...INPUT, variant })),
@@ -84,15 +124,16 @@ describe("composeAssetRequest", () => {
 
 	describe("hard requirements", () => {
 		it("a cut-out object is composed onto a flat key colour that code can remove", () => {
-			// Not a style choice: chroma-key removes this colour by arithmetic
-			// afterwards, so a prompt that omits it produces a cutout with no alpha.
+			// Not a style choice: the matte separates the subject from this
+			// background, so a prompt that omits it produces a cutout with no alpha.
 			const composed = raster(composeAssetRequest({ kind: "image", text: "a paperclip", transparent: true }, INPUT))
 			assert.ok(composed.transparent)
 			assert.ok(/flat|uniform/i.test(composed.prompt), "the background is not required to be flat")
-			assert.ok(
-				composed.avoid.some((a) => /shadow/i.test(a)),
-				"a cast shadow survives the key as a smear",
-			)
+			// A cast shadow used to be an unconditional ban for the threshold
+			// keyer's sake; the matte cuts shadows out as background, so sterile
+			// lighting is now only the default the direction can override.
+			assert.ok(/no cast shadow/i.test(composed.prompt), "the no-shadow default disappeared entirely")
+			assert.ok(!composed.avoid.some((a) => /shadow/i.test(a)), "a shadow ban still rides the unconditional list")
 		})
 
 		it("never sends a cutout an instruction that contradicts its own background", () => {

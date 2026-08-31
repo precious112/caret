@@ -52,6 +52,7 @@ export {
 	type GenerationKind,
 	recipeForRequest,
 	SHARED_AVOID,
+	STYLE_DEFAULT_AVOID,
 } from "./request"
 export {
 	ASPECTS,

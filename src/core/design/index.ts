@@ -105,6 +105,7 @@ export {
 	type GenerationKind,
 	recipeForRequest,
 	SHARED_AVOID,
+	STYLE_DEFAULT_AVOID,
 } from "./asset-library/request"
 export { type BudgetedConversion, convertWithinBudget } from "./asset-library/tripo/budget"
 export {

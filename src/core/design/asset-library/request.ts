@@ -86,36 +86,36 @@ export interface ClarifyResult {
  * them.
  */
 export const SHARED_AVOID: string[] = [
-	...SLOP_TELLS,
-	"a person looking at the camera",
-	"hands holding or touching the subject",
-	"visible screens, or an invented user interface on a device",
-	"hard shadows or dramatic theatrical lighting",
-	"props arranged for the camera — the tidy flat-lay look",
+	// Deal-breakers regardless of any direction: broken pictures, not style.
 	"duplicated objects, extra limbs, or geometry that does not resolve",
+	"visible screens, or an invented user interface on a device",
 ]
 
 /**
- * Shared rules a keyed cutout must NOT be sent.
- *
- * The cutout asks for exactly two things these forbid: a subject dead centre,
- * and a background colour deliberately nowhere near the project's palette. Sent
- * together, the request contradicts itself — and a model resolving that
- * contradiction may drop the very background the keyer measures against, which
- * shows up as "0% of the border is near #00b140" and every take refused.
+ * Style defaults, banned only where the user's direction does not ask for
+ * them. These used to ride the hard "Do not include" list, and that list was
+ * a genre blacklist: "hands touching the subject" forbade a plant app's
+ * watering imagery, "a person looking at the camera" forbade portraits, "hard
+ * shadows or dramatic theatrical lighting" forbade golden hour — for every
+ * user, on every request, last word in the prompt. They exist to protect a
+ * one-line prompt from slop defaults, so they now yield explicitly to
+ * whatever the direction above them actually says.
  */
-const CONTRADICTS_A_CUTOUT = [
-	"no centred symmetrical composition unless asked for",
-	"no gradient meshes in colours outside the palette",
+export const STYLE_DEFAULT_AVOID: string[] = [
+	"lens flare, bokeh sparkles, or light leaks",
+	"glowing edges or neon rim lighting",
+	"gradient meshes in colours outside the palette",
+	"stock-photo business metaphors — handshakes, ladders, lightbulbs, jigsaw pieces",
+	"invented logos or illegible text",
+	"a person looking at the camera",
+	"hands holding or touching the subject",
+	"hard shadows or dramatic theatrical lighting",
+	"props arranged for the camera — the tidy flat-lay look",
+	"the over-processed look sold as cinematic, hyperdetailed or 8k",
 ]
 
-/** Extra constraints that survive the key, on top of `SHARED_AVOID`. */
-const CUTOUT_AVOID = [
-	"any cast shadow or reflection under or behind the object",
-	"any second object, prop or hand",
-	"the object cropped by the frame edge",
-	"any background other than the plain white it is asked for",
-]
+/** Constraints the matte and 3D reconstruction genuinely require. */
+const CUTOUT_AVOID = ["any background other than the plain white it is asked for", "the object cropped by the frame edge"]
 
 const SINGLE_OBJECT_AVOID = [
 	"a second object anywhere in the frame",
@@ -191,46 +191,68 @@ export function composeAssetRequest(
 
 	// Everything else composes a photograph. A 3D object starts as one too: Tripo
 	// builds from a source image, so the difference is what the image must hold.
+	//
+	// The prompt is built as PRECEDENCE, not concatenation. The old shape put
+	// the user's words, Caret's camera sentence, the palette clamp and a hard
+	// ban list side by side as equals — so a user who asked for exactly a hard
+	// shadow was followed by "Do not include: hard shadows", and whichever the
+	// model obeyed was a coin flip. Three tiers now, each explicitly ranked:
+	// the direction (theirs, authoritative), the technical requirements the
+	// pipeline itself needs, and defaults that apply only where the direction
+	// is silent. A one-line prompt specifies nothing, so every default applies
+	// and the slop floor holds; a directed prompt outranks the styling by its
+	// own specificity, with no mode and no toggle.
 	const singleObject = request.kind === "object3d"
 	const cutout = request.kind === "image" && request.transparent === true
 
-	const sentences: string[] = [`${said}.`]
-	if (answers) sentences.push(answers)
+	const direction = [`${said}.`, answers].filter(Boolean).join(" ")
 
+	const technical: string[] = []
 	if (cutout) {
 		// Pure white rather than a key colour. Asked for a specific hex the model
 		// returns a flat background of its own choosing — measured at 0% agreement
 		// with the colour requested and 100% with itself — and the cutout is then
 		// refused for a picture that was perfect. White is not a colour it has to
 		// match, so there is nothing to get wrong.
-		sentences.push(
-			"The whole subject is visible in frame, alone and centered.",
-			"The background is pure flat white (#ffffff) filling every edge of the frame, and nothing else is in the picture.",
-			"Soft even studio light from all sides. No shadow, no reflection, no vignette.",
+		technical.push(
+			"The whole subject is visible in frame.",
+			"The background is pure flat white (#ffffff) filling every edge of the frame.",
 		)
 	} else if (singleObject) {
-		sentences.push(
-			"A single object alone in the frame, centered, the whole object visible, nothing else in the picture.",
-			"Soft even light from all sides against a plain uncluttered background.",
-		)
-	} else {
-		sentences.push(TREATMENTS[input.variant % TREATMENTS.length])
+		technical.push("A single object alone in the frame, the whole object visible, nothing else in the picture.")
 	}
 
-	// The foundation always speaks last, so a request that says nothing about
-	// colour still lands on the project's own palette rather than a default one.
-	// A cutout is the exception: its background is about to be removed, and
-	// palette words there would tint the very white the remover looks for.
-	if (!cutout) sentences.push(foundationWords(input.palette))
+	const defaults: string[] = []
+	if (cutout) {
+		// The old hard mandate ("No shadow, no reflection, no vignette") predates
+		// the matte model, which cuts a shadow out as background anyway — so
+		// sterile lighting is now only the default, not the law.
+		defaults.push("The subject alone and centered. Soft even studio light, no cast shadow, no reflection.")
+	} else if (singleObject) {
+		defaults.push("Centered, with soft even light from all sides against a plain uncluttered background.")
+	} else {
+		defaults.push(TREATMENTS[input.variant % TREATMENTS.length])
+	}
+	// The foundation speaks for anything the direction leaves open, so a
+	// request that says nothing about colour still lands on the project's own
+	// palette. A cutout is the exception: its background is about to be
+	// removed, and palette words there would tint the very white the matte
+	// measures against.
+	if (!cutout) defaults.push(foundationWords(input.palette))
+
+	const prompt = [
+		direction,
+		technical.join(" "),
+		`Where the description above does not already decide it, default to: ${defaults.join(" ")}`,
+		`Unless the description above asks for them, avoid: ${STYLE_DEFAULT_AVOID.join("; ")}.`,
+	]
+		.filter(Boolean)
+		.join("\n\n")
 
 	return {
 		lane: "raster",
-		prompt: sentences.filter(Boolean).join(" "),
-		avoid: [
-			...(cutout ? SHARED_AVOID.filter((rule) => !CONTRADICTS_A_CUTOUT.includes(rule)) : SHARED_AVOID),
-			...(cutout ? CUTOUT_AVOID : []),
-			...(singleObject ? SINGLE_OBJECT_AVOID : []),
-		],
+		prompt,
+		avoid: [...SHARED_AVOID, ...(cutout ? CUTOUT_AVOID : []), ...(singleObject ? SINGLE_OBJECT_AVOID : [])],
 		aspect: input.aspect,
 		transparent: cutout,
 	}
