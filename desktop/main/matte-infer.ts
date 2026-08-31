@@ -3,14 +3,15 @@
  *
  * The download half lives in `matte.ts`; this is the inference half. It was
  * first written in-process and crashed the whole app on the first real
- * cutout: ORT's arena growth (BFCArena::Extend) allocates through Electron's
- * PartitionAlloc shim, which SIGTRAPs (crash report 2026-08-31, one dead app
- * per keyed variant). The same binary in plain node mode runs the same
- * inference clean, so the network runs in a resident ELECTRON_RUN_AS_NODE
- * child — the MCP bridge's own pattern — and everything deterministic
- * (tensor prep, mask application, unmixing, honesty gates) stays in this
- * bundle where its unit tests live. Pixels cross as temp files, replies as
- * one JSON line per job.
+ * cutout, then rewritten on ELECTRON_RUN_AS_NODE and crashed on the second:
+ * ORT's aligned allocations trip Electron's PartitionAlloc shim (SIGTRAP),
+ * and the shim is compiled into the binary — no mode escapes it (three crash
+ * reports, arena on and off; see matte-worker-source.ts). So the network
+ * runs under SYSTEM NODE, which the app already requires — the design shell
+ * spawns `npm install` and the vite binary for every project. Everything
+ * deterministic (tensor prep, mask application, unmixing, honesty gates)
+ * stays in this bundle where its unit tests live. Pixels cross as temp
+ * files, replies as one JSON line per job.
  *
  * The worker is spawned lazily and kept: the session inside it opens once
  * (~3s) and every later cutout pays only the inference. A worker that dies
@@ -54,9 +55,26 @@ async function startWorker(): Promise<ChildProcess> {
 	const workerPath = path.join(app.getPath("userData"), "matte-worker.cjs")
 	await fs.writeFile(workerPath, MATTE_WORKER_SOURCE, "utf-8")
 
-	const child = spawn(process.execPath, [workerPath], {
-		env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+	// System node from PATH, the same resolution `npm install` already relies
+	// on. Never process.execPath: that is the Electron binary, whose allocator
+	// shim SIGTRAPs on ORT's aligned allocations in every mode.
+	const child = spawn("node", [workerPath], {
 		stdio: ["pipe", "pipe", "pipe"],
+	})
+	child.on("error", (error) => {
+		// Node missing from PATH — the design shell could not have booted
+		// either, but this failure must still name itself rather than hang.
+		Logger.warn(`[matte] could not spawn system node: ${error.message}`)
+		if (worker === child) worker = null
+		for (const resolve of pending.values()) {
+			resolve({
+				id: "",
+				ok: false,
+				stage: "run",
+				reason: `system Node could not be started (${error.message}) — the cutout model needs the same Node.js the design preview uses`,
+			})
+		}
+		pending.clear()
 	})
 	child.stderr?.on("data", (chunk: Buffer) => {
 		const text = chunk.toString().trim()

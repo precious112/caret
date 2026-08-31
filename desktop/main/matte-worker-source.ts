@@ -1,13 +1,17 @@
 /**
- * The cutout model's worker: plain CJS, run by Caret's own binary with
- * ELECTRON_RUN_AS_NODE, written to userData at boot like the MCP bridge.
+ * The cutout model's worker: plain CJS, run by SYSTEM NODE, written to
+ * userData at boot like the MCP bridge.
  *
- * It exists because inference CANNOT run in the Electron main process:
- * ORT's arena growth (BFCArena::Extend) allocates through Electron's
- * PartitionAlloc shim, which SIGTRAPs on it and takes the whole app down —
- * field crash 2026-08-31, one crash per keyed variant. The same binary in
- * plain node mode uses the system allocator and runs the same inference
- * clean (measured: open 3.3s, run 16.9s).
+ * It exists because inference CANNOT run in any Electron process: ORT's
+ * aligned allocations go through Electron's PartitionAlloc shim, which
+ * SIGTRAPs and kills the process — first the whole app (one crash per keyed
+ * variant, 2026-08-31 05:06), then the ELECTRON_RUN_AS_NODE worker, whose
+ * first inference survives and whose second dies the same death (05:15,
+ * 05:17 — with the arena on AND off, so it is the shim, not the arena). The
+ * shim is compiled into the binary; no mode escapes it. System node runs
+ * three consecutive inferences clean (measured: 21s, 14s, 13s), and system
+ * node is not a new dependency — the design shell already spawns `npm
+ * install` and the vite binary for every project.
  *
  * The division of labour keeps this file dependency-free except the ORT
  * runtime itself, which arrives as an absolute path in the job (resolved by
@@ -55,8 +59,13 @@ async function handle(line) {
 		reply.stage = "open"
 		if (!session || sessionModel !== job.modelPath) {
 			// "basic" is load-bearing: this export's broken external-tensor
-			// metadata fails shape inference under "all" AND "disabled".
-			session = await ort.InferenceSession.create(job.modelPath, { graphOptimizationLevel: "basic" })
+			// metadata fails shape inference under "all" AND "disabled". The
+			// arena stays off — the measured configuration, and a few hundred
+			// MB lower resident footprint for a worker that lingers.
+			session = await ort.InferenceSession.create(job.modelPath, {
+				graphOptimizationLevel: "basic",
+				enableCpuMemArena: false,
+			})
 			sessionModel = job.modelPath
 		}
 		reply.stage = "run"
