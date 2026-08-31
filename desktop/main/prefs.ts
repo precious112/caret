@@ -86,6 +86,17 @@ export interface Prefs {
 	 * the same one — mesh optimization has a recommended set of its own.
 	 */
 	laneModels: { mark?: string; model3d?: string; shader?: string }
+	/**
+	 * Whether the chat agent may generate assets itself.
+	 *
+	 * Off by default, deliberately: the agent's one-line briefs produced
+	 * technically-correct, bland assets (the whole test5 dogfood), while the
+	 * Assets tab's describe→clarify→iterate loop is where quality actually
+	 * happens. Off, the tool tells the agent to propose WHAT to create and
+	 * lets the user make it well. A switch rather than surgery — the whole
+	 * chain stays built and certified behind it.
+	 */
+	chatAssetGeneration: boolean
 }
 
 const DEFAULTS: Prefs = {
@@ -106,6 +117,7 @@ const DEFAULTS: Prefs = {
 	secrets: {},
 	visionChecks: {},
 	laneModels: {},
+	chatAssetGeneration: false,
 }
 
 const MAX_RECENTS = 12

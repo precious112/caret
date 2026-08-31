@@ -899,7 +899,10 @@ async function main(): Promise<void> {
 		// its save (`surface` was silently dropped for months), the committed
 		// marker must ride through, and the derivation pass must have filled
 		// what the draft leaves empty.
-		assert(tokens.color.surface === "light" || tokens.color.surface === "dark", "color.surface was dropped by the editor's save")
+		assert(
+			tokens.color.surface === "light" || tokens.color.surface === "dark",
+			"color.surface was dropped by the editor's save",
+		)
 		assert(tokens.meta?.committed === true, "meta.committed did not survive the editor's save")
 		assert(Object.keys(tokens.color.neutral?.scale ?? {}).length > 0, "the neutral scale was not derived on save")
 		assert(tokens.color.on?.brand, "on-colours were not derived on save")
@@ -1657,6 +1660,26 @@ async function main(): Promise<void> {
 		assert(discovery, "no discovery record")
 		await openMcpSession(discovery.url, discovery.token)
 
+		// Chat generation ships OFF: the shipped default must answer instantly
+		// with the Assets-tab redirect — no consent card, nothing spent.
+		const declined = await callMcp(discovery.url, discovery.token, {
+			jsonrpc: "2.0",
+			id: 96,
+			method: "tools/call",
+			params: {
+				name: "generate_asset",
+				arguments: { kind: "texture", what: "a fine grain overlay", why: "Checking the shipped default." },
+			},
+		}).then((response) => response.text())
+		assert(
+			declined.includes("Assets tab"),
+			`the shipped default did not redirect to the Assets tab: ${declined.slice(0, 300)}`,
+		)
+
+		// The rest of the scenario certifies the capability BEHIND the switch,
+		// so it turns the switch on for its own run and back off at the end.
+		await chrome.evaluate(() => (window as any).caret.invoke("prefs:set", { chatAssetGeneration: true }))
+
 		// The chat path: the agent needs something the project does not have and
 		// makes it with a tool, without navigating to any surface. It proposes
 		// first — the image and 3D lanes spend the user's own credits, and an agent
@@ -1753,6 +1776,10 @@ async function main(): Promise<void> {
 		)
 		assert(entry?.origin?.type === "generated", "the asset was not recorded as generated")
 		assert(String(entry?.origin?.answers?.asked ?? "").includes("grain"), "what the agent asked for was not recorded")
+
+		// Back to the shipped default: later scenarios must run against the app
+		// as users get it, where chat generation redirects to the Assets tab.
+		await chrome.evaluate(() => (window as any).caret.invoke("prefs:set", { chatAssetGeneration: false }))
 
 		return `agent proposed "a fine grain overlay", user consented, ${offered} takes offered, picked one, landed as @${parsed.tag}`
 	})
@@ -3976,7 +4003,10 @@ export default function CatalogDemo() {
 		const textarea = chrome.locator("textarea").first()
 		await textarea.waitFor({ timeout: 20_000 })
 		const prefilled = await textarea.inputValue()
-		assert(prefilled.includes("triage tickets"), `the description did not prefill the manual editor: "${prefilled.slice(0, 60)}"`)
+		assert(
+			prefilled.includes("triage tickets"),
+			`the description did not prefill the manual editor: "${prefilled.slice(0, 60)}"`,
+		)
 		await shot(chrome, "13-entry-manual-prefilled")
 
 		// Leave the surface where the suite expects it.
@@ -4033,7 +4063,10 @@ export default function CatalogDemo() {
 		)
 		// The consequences moved with the choice: seed at 500, meta preserved,
 		// on-colours recomputed against the new brand.
-		assert(tokens.color.brand.scale?.["500"] === "#7c3aed", `brand-500 did not follow the new seed: ${tokens.color.brand.scale?.["500"]}`)
+		assert(
+			tokens.color.brand.scale?.["500"] === "#7c3aed",
+			`brand-500 did not follow the new seed: ${tokens.color.brand.scale?.["500"]}`,
+		)
 		assert(tokens.meta?.committed === true, "meta was lost by an inline edit")
 		assert(tokens.color.on?.brand, "on-brand was not recomputed")
 		assert(tokens.border?.focusRing?.color === "#7c3aed", "the focus ring did not follow the brand")

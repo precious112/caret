@@ -32,6 +32,7 @@ import { recordEdit } from "../../../src/core/design/provenance"
 import { Logger } from "../../../src/shared/services/Logger"
 import { acceptRequestTake, rasterConfig, requestTakes } from "../generate-assets"
 import { askUser, type InterviewPrompt, type PresentedCandidate } from "../interview"
+import { getPrefs } from "../prefs"
 import { regenerateRulesFiles } from "../rules/generate"
 import type { ToolContext, ToolDefinition, ToolResult } from "./tools"
 
@@ -268,6 +269,22 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 					source?: string
 				},
 			) {
+				// Generation moved to the Assets tab, deliberately: the agent's
+				// one-line briefs made technically-correct, bland assets, while the
+				// tab's describe→clarify→iterate loop is where quality happens. The
+				// agent's judgment about WHAT the design needs stays valuable — it
+				// goes to the user as a suggestion instead of to the generator as a
+				// brief. The whole chain below stays built behind the pref.
+				if (!getPrefs().chatAssetGeneration) {
+					return ok({
+						generated: false,
+						note:
+							"Assets are created by the user in the Assets tab, not from chat. Tell the user, in one short line, exactly what to create there — the subject in plain words " +
+							`(for this one: "${args.what}") — and whether it should be transparent. Keep building meanwhile with an existing @tag or a clearly-marked placeholder, ` +
+							"and reference the new asset by its @tag once they have made it. Do not retry this tool in this conversation.",
+					})
+				}
+
 				const request = {
 					kind: args.kind,
 					text: args.what,
