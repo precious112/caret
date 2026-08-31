@@ -1,58 +1,164 @@
 /**
- * Running the cutout model on a bitmap.
+ * Running the cutout model on a bitmap — in a worker, never in this process.
  *
- * The download half lives in `matte.ts`; this is the inference half — the part
- * that was missing while every "cutout" went through a white threshold instead
- * (the shadow-puddle era: nano banana paints a soft shadow no prompt talks it
- * out of, the shadow sits just under any white cutoff, and a dark page wears
- * the result as a dirty smear under every object).
+ * The download half lives in `matte.ts`; this is the inference half. It was
+ * first written in-process and crashed the whole app on the first real
+ * cutout: ORT's arena growth (BFCArena::Extend) allocates through Electron's
+ * PartitionAlloc shim, which SIGTRAPs (crash report 2026-08-31, one dead app
+ * per keyed variant). The same binary in plain node mode runs the same
+ * inference clean, so the network runs in a resident ELECTRON_RUN_AS_NODE
+ * child — the MCP bridge's own pattern — and everything deterministic
+ * (tensor prep, mask application, unmixing, honesty gates) stays in this
+ * bundle where its unit tests live. Pixels cross as temp files, replies as
+ * one JSON line per job.
  *
- * One session per process, created lazily: opening a 224MB network costs real
- * seconds and the session is immutable afterwards. Creation is also the one
- * true test of the file — `looksComplete` only proves the size — so a file the
- * runtime cannot open is deleted and re-fetched rather than tripping every
- * cutout forever ("exists" is not "works", fourth instance).
+ * The worker is spawned lazily and kept: the session inside it opens once
+ * (~3s) and every later cutout pays only the inference. A worker that dies
+ * fails its in-flight jobs honestly and is respawned by the next call.
  */
+import { type ChildProcess, spawn } from "child_process"
+import { randomUUID } from "crypto"
+import { app } from "electron"
 import * as fs from "fs/promises"
 import { createRequire } from "module"
+import * as os from "os"
+import * as path from "path"
 
 import type { KeyableImage, KeyOutResult } from "../../src/core/design"
 import { applyMatte, MATTE_MODEL, matteInputTensor, progressOf } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { ensureMatteModel, matteState, modelPath } from "./matte"
+import { MATTE_WORKER_SOURCE } from "./matte-worker-source"
 
-// The main bundle is ESM ("type": "module"), where no `require` exists — a
-// bare one compiled fine and threw at runtime on the first real cutout.
-// createRequire is the ESM road to a native module.
+// The main bundle is ESM ("type": "module"), where no `require` exists — this
+// is how the ORT package's entry file is resolved to the absolute path the
+// worker loads it by, so the worker's own cwd never matters.
 const requireNative = createRequire(import.meta.url)
 
-// Typed loosely on purpose: onnxruntime-node is a native module loaded at
-// first use, not import time — pulling its types in would also pull the
-// binding into every bundle that imports this file.
-type OrtSession = {
-	inputNames: string[]
-	outputNames: string[]
-	run(feeds: Record<string, unknown>): Promise<Record<string, { data: Float32Array }>>
+/** A network run should never take this long; past it the worker is presumed hung. */
+const JOB_TIMEOUT_MS = 3 * 60_000
+
+interface WorkerReply {
+	id: string
+	ok: boolean
+	stage: "require" | "open" | "run"
+	reason: string
+	length?: number
 }
 
-let session: Promise<OrtSession> | null = null
+let worker: ChildProcess | null = null
+let workerStarting: Promise<ChildProcess> | null = null
+const pending = new Map<string, (reply: WorkerReply) => void>()
 
-async function openSession(): Promise<OrtSession> {
-	const ort = requireNative("onnxruntime-node")
-	const path = modelPath()
+async function startWorker(): Promise<ChildProcess> {
+	const workerPath = path.join(app.getPath("userData"), "matte-worker.cjs")
+	await fs.writeFile(workerPath, MATTE_WORKER_SOURCE, "utf-8")
+
+	const child = spawn(process.execPath, [workerPath], {
+		env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+		stdio: ["pipe", "pipe", "pipe"],
+	})
+	child.stderr?.on("data", (chunk: Buffer) => {
+		const text = chunk.toString().trim()
+		if (text) Logger.warn(`[matte-worker] ${text}`)
+	})
+
+	let buffered = ""
+	child.stdout?.on("data", (chunk: Buffer) => {
+		buffered += chunk.toString()
+		let cut = buffered.indexOf("\n")
+		while (cut >= 0) {
+			const line = buffered.slice(0, cut)
+			buffered = buffered.slice(cut + 1)
+			cut = buffered.indexOf("\n")
+			try {
+				const reply = JSON.parse(line) as WorkerReply
+				pending.get(reply.id)?.(reply)
+			} catch {
+				// Not a reply line; the worker has nothing else to say on stdout.
+			}
+		}
+	})
+
+	child.on("exit", (code, signal) => {
+		// SIGKILL on our own stdin-close shutdown is the worker's normal end;
+		// anything else mid-life is a real death and every waiter hears it.
+		if (worker === child) worker = null
+		for (const resolve of pending.values()) {
+			resolve({ id: "", ok: false, stage: "run", reason: `the cutout worker died (${signal ?? code})` })
+		}
+		pending.clear()
+	})
+
+	return child
+}
+
+async function workerProcess(): Promise<ChildProcess> {
+	if (worker && worker.exitCode === null && !worker.killed) return worker
+	if (!workerStarting) {
+		workerStarting = startWorker()
+			.then((child) => {
+				worker = child
+				return child
+			})
+			.finally(() => {
+				workerStarting = null
+			})
+	}
+	return workerStarting
+}
+
+/** Runs the network in the worker: tensor in, mask out, files in between. */
+async function runNetwork(
+	tensor: Float32Array,
+	side: number,
+): Promise<{ ok: true; mask: Float32Array } | { ok: false; stage: string; reason: string }> {
+	const child = await workerProcess()
+	const id = randomUUID()
+	const scratch = os.tmpdir()
+	const tensorFile = path.join(scratch, `caret-matte-${id}.in`)
+	const maskFile = path.join(scratch, `caret-matte-${id}.out`)
+
 	try {
-		// "basic", measured, not a default: this export carries external-tensor
-		// metadata that "all" and "disabled" both trip over during shape
-		// inference ("Cannot parse data from external tensors") while "basic"
-		// opens it in ~3s. The same bytes run fine in Python ORT — the md5
-		// matches rembg's known-good copy — so it is the optimizer path, not
-		// the file.
-		return await ort.InferenceSession.create(path, { graphOptimizationLevel: "basic" })
-	} catch (error) {
-		// The size matched and the runtime still refused it: the bytes are wrong,
-		// not incomplete. Delete so the next boot's ensureMatteModel re-fetches.
-		await fs.rm(path, { force: true }).catch(() => {})
-		throw error
+		await fs.writeFile(tensorFile, Buffer.from(tensor.buffer, tensor.byteOffset, tensor.byteLength))
+
+		const reply = await new Promise<WorkerReply>((resolve) => {
+			const timer = setTimeout(() => {
+				pending.delete(id)
+				// A hung worker blocks every later job behind it; kill it so the
+				// next call starts fresh. The exit handler clears other waiters.
+				child.kill("SIGKILL")
+				resolve({
+					id,
+					ok: false,
+					stage: "run",
+					reason: `no reply after ${JOB_TIMEOUT_MS / 60_000} minutes — the worker was restarted`,
+				})
+			}, JOB_TIMEOUT_MS)
+			pending.set(id, (value) => {
+				clearTimeout(timer)
+				pending.delete(id)
+				resolve(value)
+			})
+			const job = {
+				id,
+				ortPath: requireNative.resolve("onnxruntime-node"),
+				modelPath: modelPath(),
+				tensorFile,
+				maskFile,
+				side,
+			}
+			child.stdin?.write(`${JSON.stringify(job)}\n`)
+		})
+
+		if (!reply.ok) return { ok: false, stage: reply.stage, reason: reply.reason }
+
+		const raw = await fs.readFile(maskFile)
+		const aligned = raw.byteOffset % 4 === 0 ? raw : Buffer.from(raw)
+		return { ok: true, mask: new Float32Array(aligned.buffer, aligned.byteOffset, aligned.length / 4) }
+	} finally {
+		await fs.rm(tensorFile, { force: true }).catch(() => {})
+		await fs.rm(maskFile, { force: true }).catch(() => {})
 	}
 }
 
@@ -90,46 +196,30 @@ export async function matteCutout(image: KeyableImage): Promise<KeyOutResult> {
 		}
 	}
 
-	if (!session) {
-		session = openSession().catch((error) => {
-			session = null
-			throw error
-		})
-	}
-
-	let net: OrtSession
-	try {
-		net = await session
-	} catch (error) {
-		const why = error instanceof Error ? error.message : String(error)
-		Logger.warn(`[matte] the runtime could not open the cutout model: ${why}`)
-		return {
-			ok: false,
-			reason: `The cutout model on disk could not be opened (${why}) — it re-downloads on the next launch.`,
-		}
-	}
-
 	const started = Date.now()
 	const side = MATTE_MODEL.input
-	const tensor = matteInputTensor(image, side)
-	const ort = requireNative("onnxruntime-node")
-	const feeds = { [net.inputNames[0]]: new ort.Tensor("float32", tensor, [1, 3, side, side]) }
-
-	let mask: Float32Array
-	try {
-		const results = await net.run(feeds)
-		mask = results[net.outputNames[0]].data
-	} catch (error) {
-		const why = error instanceof Error ? error.message : String(error)
-		Logger.warn(`[matte] inference failed: ${why}`)
-		return { ok: false, reason: `The cutout model failed on this image: ${why}` }
+	const result = await runNetwork(matteInputTensor(image, side), side)
+	if (!result.ok) {
+		Logger.warn(`[matte] ${result.stage} failed: ${result.reason}`)
+		if (result.stage === "open") {
+			// The size matched and the runtime still refused it: the bytes are
+			// wrong, not incomplete. Delete so the next boot re-fetches. A
+			// "require" failure is the runtime missing, not the model broken —
+			// deleting for that would re-download 224MB for nothing.
+			await fs.rm(modelPath(), { force: true }).catch(() => {})
+			return {
+				ok: false,
+				reason: `The cutout model on disk could not be opened (${result.reason}) — it re-downloads on the next launch.`,
+			}
+		}
+		return { ok: false, reason: `The cutout model failed on this image: ${result.reason}` }
 	}
 
-	const result = applyMatte(image, mask, side)
+	const applied = applyMatte(image, result.mask, side)
 	Logger.info(
 		`[matte] ${image.width}×${image.height} in ${((Date.now() - started) / 1000).toFixed(1)}s — ${
-			result.ok ? `cut ${(result.cut * 100).toFixed(1)}%` : `refused: ${result.reason}`
+			applied.ok ? `cut ${(applied.cut * 100).toFixed(1)}%` : `refused: ${applied.reason}`
 		}`,
 	)
-	return result
+	return applied
 }
