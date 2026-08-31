@@ -784,6 +784,19 @@ function MarkFlow({
 	subject?: string
 }) {
 	const [subject, setSubject] = useState(initialSubject)
+	// The target stage: the mark's taste decision is what the target image
+	// looks like, so iteration lives HERE — takes, then refine-by-note. The
+	// trace loop afterwards is mechanical reproduction of the approved pick,
+	// and gets no note box: a disliked trace of a liked target is fixed by
+	// tracing again; a disliked target by coming back up here.
+	const [targets, setTargets] = useState<GeneratedVariantWire[]>([])
+	const [targetsBusy, setTargetsBusy] = useState(false)
+	const [chosenTarget, setChosenTarget] = useState<number | null>(null)
+	const [targetNote, setTargetNote] = useState("")
+	const [targetRefining, setTargetRefining] = useState(false)
+	const [expandedTarget, setExpandedTarget] = useState<number | null>(null)
+	const nextTargetVariant = useRef(100)
+
 	const [busy, setBusy] = useState(false)
 	const [progress, setProgress] = useState("")
 	const [rounds, setRounds] = useState<Array<{ round: number; preview: string }>>([])
@@ -806,13 +819,46 @@ function MarkFlow({
 		[project.path],
 	)
 
-	const generate = async () => {
+	const generateTargets = async () => {
+		setTargetsBusy(true)
+		setTargets([])
+		setChosenTarget(null)
+		setOutcome(null)
+		setRounds([])
+		setError(null)
+		try {
+			setTargets((await invoke("generate:markTargets", project.path, subject.trim())) ?? [])
+		} finally {
+			setTargetsBusy(false)
+		}
+	}
+
+	const refineTarget = async () => {
+		if (chosenTarget === null || !targetNote.trim()) return
+		const variant = nextTargetVariant.current++
+		setTargetRefining(true)
+		try {
+			const refined = await invoke("generate:markTargetRefine", project.path, chosenTarget, targetNote.trim(), variant)
+			if (refined) {
+				setTargets((current) => [...current, refined])
+				if (!refined.error) {
+					setChosenTarget(refined.variant)
+					setTargetNote("")
+				}
+			}
+		} finally {
+			setTargetRefining(false)
+		}
+	}
+
+	const trace = async () => {
+		if (chosenTarget === null) return
 		setBusy(true)
 		setOutcome(null)
 		setRounds([])
 		setError(null)
 		try {
-			const result = await invoke("generate:mark", project.path, subject.trim())
+			const result = await invoke("generate:mark", project.path, subject.trim(), chosenTarget)
 			setOutcome(result ?? null)
 			if (result?.ok) setTag(suggestMarkTag(subject))
 		} finally {
@@ -844,31 +890,157 @@ function MarkFlow({
 				<input
 					className="min-w-0 flex-1 rounded-md border border-shell-border bg-transparent px-3 py-2 text-sm outline-none"
 					data-testid="mark-subject"
-					disabled={busy}
+					disabled={targetsBusy || busy}
 					id="mark-subject"
 					onChange={(event) => setSubject(event.target.value)}
-					onKeyDown={(event) => event.key === "Enter" && subject.trim() && generate()}
+					onKeyDown={(event) => event.key === "Enter" && subject.trim() && generateTargets()}
 					value={subject}
 				/>
 				<button
 					className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
 					data-testid="mark-generate"
-					disabled={busy || !subject.trim()}
-					onClick={generate}
+					disabled={targetsBusy || busy || !subject.trim()}
+					onClick={generateTargets}
 					type="button">
-					Draw it
+					{targetsBusy ? (
+						<>
+							<ButtonSpinner /> Generating…
+						</>
+					) : targets.length > 0 ? (
+						"Fresh options"
+					) : (
+						"Generate options"
+					)}
 				</button>
 			</div>
 
-			<TaskModelPicker disabled={busy} task="mark" />
+			<TaskModelPicker disabled={busy || targetsBusy} task="mark" />
 
-			{busy && (
-				<p className="mt-4 text-xs text-shell-muted" data-testid="mark-progress">
-					{progress || "Starting…"}
-				</p>
+			{targetsBusy && targets.length === 0 && (
+				<div className="mt-4 grid grid-cols-3 gap-3">
+					{Array.from({ length: 3 }, (_, index) => (
+						<Shimmer aspect="1:1" key={`target-skeleton-${index}`} />
+					))}
+				</div>
 			)}
 
-			{rounds.length > 0 && (
+			{targets.length > 0 && (
+				<>
+					<p className="mt-4 text-xs text-shell-muted">
+						Pick the design you want — the vector is traced from exactly what you approve here.
+					</p>
+					<div className="mt-2 grid grid-cols-3 gap-3" data-testid="mark-targets">
+						{targets.map((target) =>
+							target.error ? (
+								<p
+									className="rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
+									data-mark-target-error={target.variant}
+									key={target.variant}>
+									{target.error}
+								</p>
+							) : (
+								<button
+									className={cn(
+										"group relative overflow-hidden rounded-lg border",
+										chosenTarget === target.variant ? "border-caret-accent" : "border-shell-border",
+									)}
+									data-mark-target={target.variant}
+									key={target.variant}
+									onClick={() => setChosenTarget(target.variant)}
+									type="button">
+									<img alt="" className="block w-full" src={target.preview} />
+									{target.variant >= 100 && (
+										<span className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+											refined
+										</span>
+									)}
+									<span
+										className="absolute top-1.5 right-1.5 rounded-md bg-black/50 p-1.5 text-white/80 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
+										onClick={(event) => {
+											event.stopPropagation()
+											setExpandedTarget(target.variant)
+										}}
+										title="View large">
+										<Maximize2 size={12} />
+									</span>
+								</button>
+							),
+						)}
+						{targetRefining && <Shimmer aspect="1:1" />}
+					</div>
+					{expandedTarget !== null &&
+						(() => {
+							const target = targets.find((candidate) => candidate.variant === expandedTarget)
+							return target && !target.error ? (
+								<ExpandOverlay onClose={() => setExpandedTarget(null)}>
+									<img
+										alt=""
+										className="mx-auto block max-h-[85vh] w-auto max-w-full rounded-lg"
+										src={target.preview}
+									/>
+								</ExpandOverlay>
+							) : null
+						})()}
+
+					{chosenTarget !== null && (
+						<div className="mt-3 rounded-lg border border-shell-border p-3" data-testid="mark-target-refine">
+							<div className="flex gap-2">
+								<input
+									className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+									data-testid="mark-target-note"
+									disabled={busy || targetRefining}
+									onChange={(event) => setTargetNote(event.target.value)}
+									onKeyDown={(event) => event.key === "Enter" && refineTarget()}
+									placeholder={'What should change? — "thicker stroke", "flame taller", "simpler"'}
+									value={targetNote}
+								/>
+								<button
+									className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+									data-testid="mark-target-refine-run"
+									disabled={busy || targetRefining || !targetNote.trim()}
+									onClick={refineTarget}
+									type="button">
+									{targetRefining ? (
+										<>
+											<ButtonSpinner /> Refining…
+										</>
+									) : (
+										"Refine it"
+									)}
+								</button>
+								<button
+									className="rounded-md bg-caret-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
+									data-testid="mark-trace"
+									disabled={busy || targetRefining}
+									onClick={trace}
+									type="button">
+									{busy ? (
+										<>
+											<ButtonSpinner /> Tracing…
+										</>
+									) : (
+										"Trace this as SVG"
+									)}
+								</button>
+							</div>
+							<p className="mt-1.5 text-[11px] text-shell-muted">
+								Iterate here until the design is right — the tracing step reproduces your pick and takes no notes.
+							</p>
+						</div>
+					)}
+				</>
+			)}
+
+			{busy && (
+				<>
+					{rounds.length === 0 && <Shimmer aspect="1:1" className="mx-auto mt-4 max-w-56" />}
+					<p className="mt-3 animate-pulse text-xs text-shell-muted" data-testid="mark-progress">
+						{progress || "Starting…"}
+					</p>
+				</>
+			)}
+
+			{rounds.length > 0 && !outcome?.ok && (
 				<div className="mt-4 grid grid-cols-3 gap-3" data-testid="mark-rounds">
 					{rounds.map((entry) => (
 						<figure className="m-0" key={entry.round}>
@@ -889,9 +1061,23 @@ function MarkFlow({
 			{outcome?.ok && (
 				<div className="mt-5" data-testid="mark-result">
 					<p className="mb-2 text-xs text-shell-muted">
-						Final — {outcome.rounds} round(s) on {outcome.model}. You watched it get here.
+						Traced in {outcome.rounds} round(s) on {outcome.model}. At size, and at 20px — a mark must survive both:
 					</p>
-					<label className="mt-3 block text-sm" htmlFor="mark-tag">
+					<div className="flex items-end gap-4">
+						<img alt="" className="w-40 rounded-lg border border-shell-border" src={outcome.preview} />
+						<div className="rounded-lg border border-shell-border p-3">
+							<img alt="" className="block h-5 w-5" src={outcome.preview} />
+						</div>
+						<button
+							className="ml-auto rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+							data-testid="mark-trace-again"
+							disabled={busy}
+							onClick={trace}
+							type="button">
+							Trace again
+						</button>
+					</div>
+					<label className="mt-4 block text-sm" htmlFor="mark-tag">
 						What should it be called? <code className="text-xs text-shell-muted">@{tag || "name"}</code>
 					</label>
 					<div className="mt-2 flex gap-2">
@@ -909,7 +1095,13 @@ function MarkFlow({
 							disabled={busy}
 							onClick={accept}
 							type="button">
-							Add to assets
+							{busy ? (
+								<>
+									<ButtonSpinner /> Adding…
+								</>
+							) : (
+								"Add to assets"
+							)}
 						</button>
 					</div>
 					{error && <p className="mt-2 text-xs text-red-400">{error}</p>}
@@ -1256,6 +1448,38 @@ function Model3dFlow({
 	const [sourceOptions, setSourceOptions] = useState<GeneratedVariantWire[] | null>(null)
 	const [sourceBusy, setSourceBusy] = useState(false)
 	const [sourceText, setSourceText] = useState(initialText)
+	const [chosenSourceOption, setChosenSourceOption] = useState<number | null>(null)
+	const [sourceNote, setSourceNote] = useState("")
+	const [sourceRefining, setSourceRefining] = useState(false)
+	const [expandedSource, setExpandedSource] = useState<number | null>(null)
+	const nextSourceVariant = useRef(100)
+
+	/** The picked take back as the reference, the note as the edit — same loop as the image lane. */
+	const refineSource = async () => {
+		if (chosenSourceOption === null || !sourceNote.trim()) return
+		const variant = nextSourceVariant.current++
+		setSourceRefining(true)
+		try {
+			const refined = await invoke(
+				"generate:refineTake",
+				project.path,
+				sourceRequest(),
+				"",
+				chosenSourceOption,
+				sourceNote.trim(),
+				variant,
+			)
+			if (refined) {
+				setSourceOptions((current) => [...(current ?? []), refined])
+				if (!refined.error) {
+					setChosenSourceOption(refined.variant)
+					setSourceNote("")
+				}
+			}
+		} finally {
+			setSourceRefining(false)
+		}
+	}
 
 	const refreshAssets = useCallback(async () => {
 		const list = await invoke("assets:list", project.path)
@@ -1316,6 +1540,8 @@ function Model3dFlow({
 	const generateSources = async () => {
 		setSourceBusy(true)
 		setSourceOptions(null)
+		setChosenSourceOption(null)
+		setSourceNote("")
 		try {
 			setSourceOptions((await invoke("generate:takes", project.path, sourceRequest(), "")) ?? [])
 		} finally {
@@ -1389,18 +1615,94 @@ function Model3dFlow({
 							</p>
 						) : (
 							<button
-								className="overflow-hidden rounded-lg border border-shell-border hover:border-caret-accent"
+								className={cn(
+									"group relative overflow-hidden rounded-lg border",
+									chosenSourceOption === option.variant ? "border-caret-accent" : "border-shell-border",
+								)}
 								data-model3d-source-option={option.variant}
 								disabled={sourceBusy}
 								key={option.variant}
-								onClick={() => pickSource(option.variant)}
+								onClick={() => setChosenSourceOption(option.variant)}
 								type="button">
 								<span className="block" style={{ backgroundColor: option.surface }}>
 									<img alt="" className="block w-full" src={option.preview} />
 								</span>
+								{option.variant >= 100 && (
+									<span className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+										refined
+									</span>
+								)}
+								<span
+									className="absolute top-1.5 right-1.5 rounded-md bg-black/50 p-1.5 text-white/80 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
+									onClick={(event) => {
+										event.stopPropagation()
+										setExpandedSource(option.variant)
+									}}
+									title="View large">
+									<Maximize2 size={12} />
+								</span>
 							</button>
 						),
 					)}
+					{sourceRefining && <Shimmer aspect="1:1" />}
+				</div>
+			)}
+			{expandedSource !== null &&
+				(() => {
+					const option = sourceOptions?.find((candidate) => candidate.variant === expandedSource)
+					return option && !option.error ? (
+						<ExpandOverlay onClose={() => setExpandedSource(null)}>
+							<span className="block rounded-lg" style={{ backgroundColor: option.surface }}>
+								<img alt="" className="mx-auto block max-h-[85vh] w-auto max-w-full" src={option.preview} />
+							</span>
+						</ExpandOverlay>
+					) : null
+				})()}
+
+			{sourceOptions && chosenSourceOption !== null && (
+				<div className="mt-3 rounded-lg border border-shell-border p-3" data-testid="model3d-source-refine">
+					<div className="flex gap-2">
+						<input
+							className="flex-1 rounded-md border border-shell-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-caret-accent"
+							data-testid="model3d-source-note"
+							disabled={busy || sourceBusy || sourceRefining}
+							onChange={(event) => setSourceNote(event.target.value)}
+							onKeyDown={(event) => event.key === "Enter" && refineSource()}
+							placeholder={'What should change? — "thicker profile", "heavier base", "cleaner silhouette"'}
+							value={sourceNote}
+						/>
+						<button
+							className="rounded-md border border-shell-border px-3 py-1.5 text-xs disabled:opacity-50"
+							data-testid="model3d-source-refine-run"
+							disabled={busy || sourceBusy || sourceRefining || !sourceNote.trim()}
+							onClick={refineSource}
+							type="button">
+							{sourceRefining ? (
+								<>
+									<ButtonSpinner /> Refining…
+								</>
+							) : (
+								"Refine it"
+							)}
+						</button>
+						<button
+							className="rounded-md bg-caret-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
+							data-testid="model3d-source-use"
+							disabled={busy || sourceBusy || sourceRefining}
+							onClick={() => pickSource(chosenSourceOption)}
+							type="button">
+							{sourceBusy ? (
+								<>
+									<ButtonSpinner /> Saving…
+								</>
+							) : (
+								"Use this image"
+							)}
+						</button>
+					</div>
+					<p className="mt-1.5 text-[11px] text-shell-muted">
+						Iterate here until the object is right — the model is reconstructed from exactly what you approve.
+					</p>
 				</div>
 			)}
 

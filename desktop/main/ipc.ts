@@ -461,14 +461,40 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		) => refineRequestTake(projectPath, request, aspect, sourceVariant, note, newVariant),
 	)
 
-	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string) => {
+	ipcMain.handle("generate:markTargets", async (_event, projectPath: string, subject: string) => {
+		const { markTargetTakes } = await import("./authored-marks")
+		const tokens = await readFoundationTokens(projectPath).catch(() => null)
+		return markTargetTakes(projectPath, subject, tokens)
+	})
+
+	ipcMain.handle(
+		"generate:markTargetRefine",
+		async (_event, projectPath: string, sourceVariant: number, note: string, newVariant: number) => {
+			const { refineMarkTarget } = await import("./authored-marks")
+			const tokens = await readFoundationTokens(projectPath).catch(() => null)
+			return refineMarkTarget(projectPath, sourceVariant, note, newVariant, tokens)
+		},
+	)
+
+	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string, targetVariant?: number) => {
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		const window = windows.get(projectPath)
+
+		// The user's picked target is the spec the loop reproduces; a missing
+		// hold is a real error, not a silent fall-back to a target they never saw.
+		let target: { png: Buffer; mime: string } | undefined
+		if (targetVariant !== undefined) {
+			const { heldMarkTarget } = await import("./authored-marks")
+			const held = heldMarkTarget(projectPath, targetVariant)
+			if (!held) return { ok: false, reason: "That target is no longer held — generate target options again." }
+			target = held
+		}
 
 		const result = await authorMark({
 			projectPath,
 			brief: subject,
 			tokens,
+			...(target ? { target } : {}),
 			modelOverride: taskModel("mark") || undefined,
 			onProgress: (update) =>
 				window?.sendToChrome("generate:progress", projectPath, {

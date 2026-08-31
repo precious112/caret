@@ -50,6 +50,8 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 
 	"generate:discard": true,
 	"generate:mark": true,
+	"generate:markTargets": true,
+	"generate:markTargetRefine": true,
 	"generate:markAccept": true,
 	"generate:model3d": true,
 	"generate:model3dAccept": true,

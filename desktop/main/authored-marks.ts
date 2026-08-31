@@ -76,6 +76,13 @@ export interface MarkRequest {
 	/** What the mark is for, in the user's own words from the interview. */
 	brief: string
 	tokens: FoundationTokens | null
+	/**
+	 * The user-picked target image. The mark's taste decision lives entirely
+	 * in what the target LOOKS like, so the user iterates on target candidates
+	 * first and the trace loop reproduces the one they chose. When absent the
+	 * loop generates its own single target (the chat lane's shape).
+	 */
+	target?: { png: Buffer; mime: string }
 	/** Overrides the project's backend model for this lane only. */
 	modelOverride?: string
 	/**
@@ -125,10 +132,16 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
 
 	// The target comes first: it IS the mark, aesthetically. Everything after
 	// this is tracing.
-	progress({ stage: "Generating the target image" })
-	const target = await generateTarget(request.brief, palette)
-	if (!target.ok) return { ok: false, reason: target.reason }
-	progress({ stage: "Target ready — asking the model to reproduce it as vector", previewPng: target.png })
+	let target: { png: Buffer; mime: string }
+	if (request.target) {
+		target = request.target
+	} else {
+		progress({ stage: "Generating the target image" })
+		const generated = await generateTarget(request.brief, palette)
+		if (!generated.ok) return { ok: false, reason: generated.reason }
+		target = generated
+	}
+	progress({ stage: "Tracing your target as vector — round 1", previewPng: target.png })
 
 	const transcript: string[] = []
 	let session: BackendSession | null = null
@@ -235,6 +248,86 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
  * exactly two colours, flat shapes, no text — so the tracer is never asked to
  * reproduce something the vector rules forbid.
  */
+/**
+ * The target stage: candidates the user iterates on BEFORE any tracing.
+ *
+ * The agreed division: the mark's taste decision is what the target image
+ * looks like, so the improvement lane lives here — takes, then refine-by-note
+ * against the picked take — and the trace loop afterwards is mechanical
+ * reproduction of an approved spec. No notes after tracing; a disliked trace
+ * of a liked target is fixed by tracing again, a disliked target by coming
+ * back here.
+ */
+interface HeldMarkTargets {
+	brief: string
+	candidates: Map<number, { png: Buffer; mime: string }>
+	at: number
+}
+
+const pendingTargets = new Map<string, HeldMarkTargets>()
+
+export async function markTargetTakes(
+	projectPath: string,
+	brief: string,
+	tokens: FoundationTokens | null,
+	count = 3,
+): Promise<Array<{ variant: number; preview: string; error?: string; retryable?: boolean }>> {
+	const palette = derivePalette(tokens)
+	const config = rasterConfig()
+	if (!config) return [{ variant: 0, preview: "", error: NO_RASTER_REASON }]
+
+	const client = new GeminiImages(config)
+	const held: HeldMarkTargets = { brief, candidates: new Map(), at: Date.now() }
+	pendingTargets.set(projectPath, held)
+
+	const takes = await Promise.all(
+		Array.from({ length: count }, async (_, variant) => {
+			const result = await client.generate({ prompt: targetPrompt(brief, palette), avoid: TARGET_AVOID, aspect: "1:1" })
+			if (!result.ok) return { variant, preview: "", error: result.reason, retryable: result.retryable }
+			held.candidates.set(variant, { png: result.bytes, mime: result.mime })
+			return { variant, preview: `data:${result.mime};base64,${result.bytes.toString("base64")}` }
+		}),
+	)
+	return takes
+}
+
+/** The picked candidate back as the reference, the note as the edit. */
+export async function refineMarkTarget(
+	projectPath: string,
+	sourceVariant: number,
+	note: string,
+	newVariant: number,
+	tokens: FoundationTokens | null,
+): Promise<{ variant: number; preview: string; error?: string; retryable?: boolean }> {
+	const held = pendingTargets.get(projectPath)
+	const source = held?.candidates.get(sourceVariant)
+	if (!held || !source)
+		return { variant: newVariant, preview: "", error: "That target is no longer held — generate fresh options." }
+
+	const palette = derivePalette(tokens)
+	const config = rasterConfig()
+	if (!config) return { variant: newVariant, preview: "", error: NO_RASTER_REASON }
+
+	const client = new GeminiImages(config)
+	const result = await client.generate({
+		prompt:
+			`Edit the reference logo image: ${note.trim().replace(/\.$/, "")}. ` +
+			`Change only what the instruction names — keep the same flat vector style, the same two colours (${palette.brand} and ${palette.ink}), ` +
+			`the same plain ${palette.surface} background, and everything else exactly as the reference has it.`,
+		avoid: TARGET_AVOID,
+		aspect: "1:1",
+		references: [{ mime: source.mime, base64: source.png.toString("base64") }],
+	})
+	if (!result.ok) return { variant: newVariant, preview: "", error: result.reason, retryable: result.retryable }
+	held.candidates.set(newVariant, { png: result.bytes, mime: result.mime })
+	return { variant: newVariant, preview: `data:${result.mime};base64,${result.bytes.toString("base64")}` }
+}
+
+/** The candidate the trace loop should reproduce. */
+export function heldMarkTarget(projectPath: string, variant: number): { png: Buffer; mime: string } | null {
+	return pendingTargets.get(projectPath)?.candidates.get(variant) ?? null
+}
+
 async function generateTarget(
 	brief: string,
 	palette: ReturnType<typeof derivePalette>,

@@ -760,7 +760,19 @@ export interface IpcRequests {
 	 * subject is a fact ("a compass rose"), not a style prompt; everything about
 	 * how it should look is composed by Caret from the foundation.
 	 */
-	"generate:mark": (projectPath: string, subject: string) => MarkOutcomeWire
+	/**
+	 * Target candidates for a mark — the taste stage. The user iterates here
+	 * (takes + refine-by-note); the trace loop then reproduces the pick.
+	 */
+	"generate:markTargets": (projectPath: string, subject: string) => GeneratedVariantWire[]
+	"generate:markTargetRefine": (
+		projectPath: string,
+		sourceVariant: number,
+		note: string,
+		newVariant: number,
+	) => GeneratedVariantWire
+	/** Runs the trace loop against the held target `targetVariant` picked above. */
+	"generate:mark": (projectPath: string, subject: string, targetVariant?: number) => MarkOutcomeWire
 	/** Commits the held mark. Main holds the SVG; the renderer never carries it. */
 	"generate:markAccept": (projectPath: string, tag: string) => WriteResult & { tag?: string }
 
