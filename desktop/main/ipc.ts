@@ -862,7 +862,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	// The AI-run token wizard — the Foundation surface's default door.
 	ipcMain.handle("wizard:resume", (_event, projectPath: string) => resumeWizard(projectPath))
 	ipcMain.handle("wizard:start", (_event, projectPath: string, description: string, mode?: "ai-led" | "collaborative") =>
-		startWizard(projectPath, description, mode ?? "ai-led"),
+		startWizard(projectPath, description, mode ?? "collaborative"),
 	)
 	ipcMain.handle("wizard:answer", (_event, projectPath: string, answer: WizardAnswer) => answerWizard(projectPath, answer))
 	ipcMain.handle("wizard:finishNow", (_event, projectPath: string) => finishWizard(projectPath))

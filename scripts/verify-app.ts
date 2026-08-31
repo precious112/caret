@@ -3981,9 +3981,10 @@ export default function CatalogDemo() {
 		await chrome.click('[data-testid="foundation-describe-continue"]')
 		await shot(chrome, "12-entry-chooser")
 
-		// All three doors are on screen; the collaborative one needs a backend and
-		// must say so rather than pretend.
-		for (const door of ["foundation-mode-ai", "foundation-mode-collaborative", "foundation-mode-manual"]) {
+		// Both doors are on screen (the AI-led third door was removed 2026-08-31 —
+		// silent decisions shipped a serif body and a null base size); the
+		// interview needs a backend and must say so rather than pretend.
+		for (const door of ["foundation-mode-collaborative", "foundation-mode-manual"]) {
 			assert((await chrome.getByTestId(door).count()) === 1, `the chooser is missing ${door}`)
 		}
 		await chrome.click('[data-testid="foundation-mode-collaborative"]')
@@ -4011,10 +4012,10 @@ export default function CatalogDemo() {
 
 		// Leave the surface where the suite expects it.
 		await chrome.getByTestId("top-bar").getByRole("button", { name: "Foundation" }).click()
-		return "describe → chooser showed all three doors; collaborative refused honestly; manual opened prefilled"
+		return "describe → chooser showed both doors; the interview refused honestly; manual opened prefilled"
 	})
 
-	await scenario("jj. with no backend, the AI-led interview refuses honestly and its escape works", async () => {
+	await scenario("jj. with no backend, the interview refuses honestly and its escape works", async () => {
 		// The wizard is genuinely AI-run, so without a model it must not pretend —
 		// it says what it needs and hands the user the token editor, rather than
 		// dead-ending or faking an interview.
@@ -4023,7 +4024,7 @@ export default function CatalogDemo() {
 		await chrome.waitForSelector('[data-testid="foundation-describe"]', { timeout: 20_000 })
 		await chrome.fill('[data-testid="foundation-describe"]', "A quiet reading app for long-form essays")
 		await chrome.click('[data-testid="foundation-describe-continue"]')
-		await chrome.click('[data-testid="foundation-mode-ai"]')
+		await chrome.click('[data-testid="foundation-mode-collaborative"]')
 
 		await chrome.waitForSelector('[data-testid="wizard-needs-backend"]', { timeout: 30_000 })
 		await shot(chrome, "13-wizard-needs-backend")
@@ -4890,7 +4891,7 @@ export default function CatalogDemo() {
 			"A quiet reading app for long-form essays. People sit with it for an hour at a time. Calm, bookish, light background.",
 		)
 		await chrome.click('[data-testid="foundation-describe-continue"]')
-		await chrome.click('[data-testid="foundation-mode-ai"]')
+		await chrome.click('[data-testid="foundation-mode-collaborative"]')
 
 		// The first question is a whole model turn composing UI; give it the same
 		// patience as any inference scenario — and a model that cannot produce one

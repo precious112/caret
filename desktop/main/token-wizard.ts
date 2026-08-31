@@ -179,7 +179,7 @@ export async function resumeWizard(projectPath: string): Promise<WizardStateWire
 export async function startWizard(
 	projectPath: string,
 	description: string,
-	mode: WizardMode = "ai-led",
+	mode: WizardMode = "collaborative",
 ): Promise<WizardStateWire> {
 	const session: WizardSession = { description: description.trim(), mode, history: [] }
 	await persist(projectPath, session)

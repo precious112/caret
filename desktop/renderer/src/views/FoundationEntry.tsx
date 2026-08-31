@@ -2,14 +2,21 @@
  * The one flow into a design system: describe, then choose how much control.
  *
  * The describe screen used to live inside the wizard; it moved here so the
- * choice of route comes AFTER Caret knows what is being built — all three
- * routes want the description (the interviews ground their questions in it,
- * the manual editor prefills the vibe step).
+ * choice of route comes AFTER Caret knows what is being built — both routes
+ * want the description (the interview grounds its questions in it, the
+ * manual editor prefills the vibe step).
  *
- * The three cards are user modes, not feature tiers. None is a lesser door:
- * all three end in the same `foundation.json`.
+ * TWO doors, not three. The AI-led mode was removed 2026-08-31 after a
+ * dogfood run showed what silent decisions ship: a serif committed as body
+ * text nobody was asked about, a null base size the collaborative path's
+ * validation would have caught, and a design that read as boilerplate. The
+ * lesson was not "users must grind" — it was that decisions made invisibly
+ * are where cheap calls hide. The interview keeps the AI's judgment as
+ * recommendations a person looks at; the effort is N small confirmations,
+ * and the silence is gone. So the question is simply: explore it with the
+ * AI, or handle everything yourself.
  */
-import { Loader2, PenTool, Sparkles, Users } from "lucide-react"
+import { Loader2, PenTool, Users } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import type { WizardModeWire, WizardStateWire } from "../../../shared/ipc"
@@ -27,32 +34,24 @@ interface Props {
 const CHOICES: Array<{
 	mode: WizardModeWire | "manual"
 	testid: string
-	icon: typeof Sparkles
+	icon: typeof Users
 	title: string
 	who: string
 	what: string
 }> = [
 	{
-		mode: "ai-led",
-		testid: "foundation-mode-ai",
-		icon: Sparkles,
-		title: "AI does the heavy lifting",
-		who: "You'd rather build than pick colours.",
-		what: "A few plain-language questions, then a complete design system you can always adjust later.",
-	},
-	{
 		mode: "collaborative",
 		testid: "foundation-mode-collaborative",
 		icon: Users,
-		title: "Decide it together",
-		who: "You have design opinions and want them heard.",
-		what: "A longer interview that walks every decision — the full palette, type, spacing, depth — proposing, never assuming.",
+		title: "Explore it with the AI",
+		who: "It proposes, you decide — every decision, none made behind your back.",
+		what: "An interview that walks the whole system — palette, type, spacing, depth — with a recommendation on every screen. Take its suggestion or type your own; a quick pass through is a couple of minutes.",
 	},
 	{
 		mode: "manual",
 		testid: "foundation-mode-manual",
 		icon: PenTool,
-		title: "Set every token yourself",
+		title: "Handle everything yourself",
 		who: "You know exactly what you want.",
 		what: "The token editor, no AI anywhere: colours, type, spacing, corners and depth, by hand.",
 	},
@@ -122,9 +121,9 @@ export function FoundationEntry({ projectPath, onStarted, onManual, __previewDes
 							type="button">
 							← "{description.trim().length > 60 ? `${description.trim().slice(0, 60)}…` : description.trim()}"
 						</button>
-						<h1 className="mt-3 text-2xl font-medium">How much of the design do you want to own?</h1>
+						<h1 className="mt-3 text-2xl font-medium">How do you want to build the design system?</h1>
 						<p className="mt-2 max-w-xl leading-relaxed text-shell-muted">
-							All three end in the same design system, and you can always edit it afterwards.
+							Both end in the same design system, and you can always edit it afterwards.
 						</p>
 
 						<div className="mt-6 grid gap-4">
