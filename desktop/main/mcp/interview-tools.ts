@@ -384,10 +384,15 @@ export function buildInterviewTools(transport: InterviewTransport): ToolDefiniti
 						tag: saved3d.tag,
 						reference: `@${saved3d.tag}`,
 						sourceImage: `@${sourceTag}`,
+						modelUrl: `/caret-assets/${saved3d.tag}.glb`,
 						...(outcome.reason ? { note2: outcome.reason } : {}),
 						note:
-							`A .glb model built from @${sourceTag} (that source image is in the library too). ` +
-							"Reference the model by its tag where the page should show it.",
+							`A .glb model built from @${sourceTag} (that source image is in the library too, as a normal image). ` +
+							"A .glb is NOT an image — an <img> tag cannot show it. To put it on a page, render it with a 3D viewer " +
+							"you add to the page workspace yourself: install a viewer library into .caret/ (for example " +
+							'`npm install @google/model-viewer` there, then `import "@google/model-viewer"` once and use ' +
+							`<model-viewer src="/caret-assets/${saved3d.tag}.glb" auto-rotate camera-controls> sized like an image), ` +
+							"or three.js if the scene needs more. The user approves the install like any other command.",
 					})
 				}
 
