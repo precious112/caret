@@ -38,6 +38,7 @@ import { Logger } from "../../src/shared/services/Logger"
 import { rasterConfig } from "./generate-assets"
 import { bitmapSimilarity } from "./pixel-similarity"
 import { getPrefs } from "./prefs"
+import { stripBackgroundRect } from "./svg-mark"
 import { canSeeImages } from "./vision-cache"
 
 /**
@@ -286,6 +287,7 @@ const SYSTEM_PROMPT = `You are reproducing a picture of a logo mark as SVG, insi
 Rules that are not negotiable:
 - Every working reply ENDS with the complete <svg> element. Nothing after the closing tag.
 - A square viewBox, no wider than 512.
+- TRANSPARENT background — never a rect or path filling the canvas behind the mark. The mark floats on whatever surface the page provides; a baked-in background ships as a coloured box on every other surface.
 - Paths and basic shapes only. No <image>, no <foreignObject>, no external references, no scripts.
 - No text elements. A font you name will not be present when this renders, and the mark would silently become the fallback face.
 - Two colours at most, both from the palette you are given.
@@ -352,7 +354,7 @@ export function extractSvg(reply: string): string | null {
 	// execution from inside an asset committed to the user's repository.
 	if (/<\s*(script|foreignObject|image|iframe|use\b[^>]*href\s*=\s*["']https?:)/i.test(svg)) return null
 	if (/\son\w+\s*=/i.test(svg)) return null
-	return svg
+	return stripBackgroundRect(svg)
 }
 
 /**
