@@ -629,11 +629,10 @@ export interface ShaderOutcomeWire {
 /** What the 3D pipeline came back with. The glb stays in main until accepted. */
 export interface Model3dOutcomeWire {
 	ok: boolean
-	/** Bytes before and after the optimization pass. */
+	/** Bytes before and after the shrink pass. */
 	draftBytes?: number
 	optimizedBytes?: number
-	/** What the model decided and why, verbatim from its structured answer. */
-	optimization?: { faceLimit: number; textureSize: number; reason: string }
+	/** How the final bytes were produced, in plain words (compression, or convert + compression). */
 	model?: string
 	reason?: string
 	needsAnotherModel?: boolean

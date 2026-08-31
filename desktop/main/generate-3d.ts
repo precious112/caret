@@ -19,18 +19,19 @@ import * as path from "path"
 import {
 	addGeneratedAsset,
 	assetsDirectory,
-	convertWithinBudget,
-	decideOptimization,
 	findAsset,
+	GeminiImages,
 	getBackend,
 	NO_TRIPO_REASON,
-	type OptimizationDecision,
 	readAssetIndex,
 	resolveTripoConfig,
 	TripoClient,
 	WEIGHT_BAND,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { rasterConfig } from "./generate-assets"
+import { compressGlb } from "./glb-compress"
+import { cutOutPhotograph } from "./image-post"
 import { getPrefs } from "./prefs"
 import { getSecret } from "./secrets"
 import { canSeeImages } from "./vision-cache"
@@ -44,7 +45,6 @@ export interface Model3dOutcome {
 	ok: boolean
 	draftBytes?: number
 	optimizedBytes?: number
-	optimization?: OptimizationDecision
 	model?: string
 	reason?: string
 	needsAnotherModel?: boolean
@@ -56,13 +56,62 @@ interface PendingModel {
 	bytes: Buffer
 	sourceTag: string
 	draftBytes: number
-	optimization: OptimizationDecision | null
-	optimizerModel: string
+	/** How the final bytes were produced from the draft, in plain words. */
+	method: string
+	/** How many views Tripo was given — 4 is the fidelity path, 1 the fallback. */
+	views: number
 	taskIds: { draft: string; converted?: string }
-	correction?: string
 	/** Credits the run cost, measured as the wallet delta. Absent when unknown. */
 	credits?: number
 	at: number
+}
+
+/**
+ * The turnaround prompts: the same object rotated, on the same white, so the
+ * reconstruction never has to invent a side. Proven verbatim (as bottle-
+ * specific variants) in the 2026-08-31 experiment.
+ */
+const VIEW_PROMPTS: Record<"left" | "back" | "right", string> = {
+	left: "rotated 90 degrees to its LEFT side view",
+	back: "rotated 180 degrees to its BACK view",
+	right: "rotated 90 degrees to its RIGHT side view",
+}
+
+function viewPrompt(side: "left" | "back" | "right"): string {
+	return (
+		"This is the same exact object as the reference photo: identical shape, materials, colours, markings, printing and lighting. " +
+		`Show the object ${VIEW_PROMPTS[side]}. Any label, pattern or texture continues naturally around the object. ` +
+		"Identical scale and framing to the reference, camera at the same height, pure flat white background filling every edge of the frame, " +
+		"no shadow, no reflection, nothing else in the picture."
+	)
+}
+
+/**
+ * The three missing views of the turnaround, generated from the source and
+ * matted. Not having an image key is a road, not a wall: the caller falls
+ * back to the single view and says so.
+ */
+async function turnaroundViews(
+	front: Buffer,
+	mime: string,
+	onProgress: (update: Model3dProgress) => void,
+): Promise<{ ok: true; views: Buffer[] } | { ok: false; reason: string }> {
+	const config = rasterConfig()
+	if (!config) return { ok: false, reason: "no image key is configured, so the turnaround views cannot be generated" }
+
+	const client = new GeminiImages(config)
+	const reference = { mime, base64: front.toString("base64") }
+	const views: Buffer[] = []
+	for (const side of ["left", "back", "right"] as const) {
+		onProgress({ stage: `Composing the ${side} view` })
+		const result = await client.generate({ prompt: viewPrompt(side), avoid: [], aspect: "1:1", references: [reference] })
+		if (!result.ok) return { ok: false, reason: `the ${side} view failed: ${result.reason}` }
+		// A view the matte refuses still works for reconstruction with its white
+		// background attached — keep it rather than failing the whole turnaround.
+		const keyed = await cutOutPhotograph(result.bytes)
+		views.push(keyed.ok ? keyed.bytes : result.bytes)
+	}
+	return { ok: true, views }
 }
 
 /** One held result per project — the flow is one object at a time by design. */
@@ -126,73 +175,78 @@ export async function generateModel3d(
 	const balanceBefore = await client.getBalance()
 	if (!balanceBefore.ok) Logger.warn(`[3d] could not read the Tripo balance before the run: ${balanceBefore.reason}`)
 
-	onProgress({ stage: "Uploading the source image to Tripo" })
-	const uploaded = await client.uploadImage(bytes, source.mime)
-	if (!uploaded.ok) return { ok: false, reason: uploaded.reason }
+	// The turnaround. Reconstruction hallucinates every side it never saw —
+	// the field failure was a bottle whose back rendered as a blank band — so
+	// three more views are composed from the source and all four go to Tripo.
+	const turnaround = await turnaroundViews(bytes, source.mime, onProgress)
+	if (!turnaround.ok) {
+		onProgress({ stage: "Building from the single view", detail: turnaround.reason })
+	}
 
-	onProgress({ stage: "Tripo is building the model", detail: "This is the slow step — a few minutes." })
-	const draft = await client.imageToModel(uploaded.value, source.mime, (update) =>
-		onProgress({ stage: update.stage, detail: update.percent !== undefined ? `${update.percent}%` : undefined }),
-	)
+	const progressTap = (update: { stage: string; percent?: number }) =>
+		onProgress({ stage: update.stage, detail: update.percent !== undefined ? `${update.percent}%` : undefined })
+
+	let draft: Awaited<ReturnType<typeof client.imageToModel>>
+	if (turnaround.ok) {
+		onProgress({ stage: "Uploading the four views to Tripo" })
+		const tokens: string[] = []
+		for (const [index, view] of [bytes, ...turnaround.views].entries()) {
+			const uploaded = await client.uploadImage(view, index === 0 ? source.mime : "image/png")
+			if (!uploaded.ok) return { ok: false, reason: uploaded.reason }
+			tokens.push(uploaded.value)
+		}
+		onProgress({ stage: "Tripo is building the model from four views", detail: "This is the slow step — a few minutes." })
+		draft = await client.multiviewToModel(tokens as [string, string, string, string], progressTap)
+	} else {
+		onProgress({ stage: "Uploading the source image to Tripo" })
+		const uploaded = await client.uploadImage(bytes, source.mime)
+		if (!uploaded.ok) return { ok: false, reason: uploaded.reason }
+		onProgress({ stage: "Tripo is building the model", detail: "This is the slow step — a few minutes." })
+		draft = await client.imageToModel(uploaded.value, source.mime, progressTap)
+	}
 	if (!draft.ok) return { ok: false, reason: draft.reason }
 
 	const draftBytes = draft.value.bytes.length
-	Logger.info(`[3d] draft for @${sourceTag}: ${Math.round(draftBytes / 1024)}KB`)
+	Logger.info(`[3d] draft for @${sourceTag}: ${Math.round(draftBytes / 1024)}KB (${turnaround.ok ? 4 : 1} views)`)
 
-	// The optimization pass. Every failure from here keeps the draft.
-	const prefs = getPrefs()
-	const optimizerModel = prefs.laneModels.model3d?.trim() || prefs.backendModel || ""
-	let decision: OptimizationDecision | null = null
-	let correctionNote = ""
-	let converted: { bytes: Buffer; taskId: string } | null = null
+	// Optimization is COMPRESSION first — Draco geometry + WebP textures encode
+	// the same detail smaller (measured: 57MB → 4.6MB, visually identical),
+	// where Tripo's convert destroys detail to fit (the melted-label look).
+	// The destructive convert survives only as the escalation for a draft that
+	// is still over the weight band after real compression, and its output is
+	// compressed too. Every failure from here keeps the best bytes so far —
+	// the draft is paid for and is never thrown away.
+	onProgress({ stage: "Compressing the model", detail: "Draco geometry + WebP textures — nothing destroyed" })
+	let final = draft.value.bytes
+	let method = "the draft as Tripo produced it"
+	let convertedTaskId: string | undefined
 	let skipNote = ""
 
-	if (!prefs.backendId) {
-		skipNote = "No coding backend is configured, so the model was kept as Tripo produced it."
-	} else {
-		const backend = await getBackend(prefs.backendId)
-		if (!backend) {
-			skipNote = `The "${prefs.backendId}" backend is unavailable, so the model was kept as Tripo produced it.`
-		} else {
-			try {
-				onProgress({ stage: "Asking the model how far to optimize", detail: optimizerModel || "session model" })
-				decision = await decideOptimization({
-					backend,
-					workingDirectory: projectPath,
-					model: optimizerModel,
-					draftBytes,
-					intendedUse: "a decorative 3D object embedded in a product web page",
-					sourceDescription: source.description || undefined,
-				})
-
-				onProgress({
-					stage: "Tripo is applying the optimization",
-					detail: `${decision.faceLimit.toLocaleString()} faces, ${decision.textureSize}px textures`,
-				})
-				// Held to the 3–5MB band: a result below it gets one corrective pass
-				// with textures escalated first, because under-the-band is where the
-				// dirty-texture, melted-label damage was observed.
-				const result = await convertWithinBudget(client, draft.value.taskId, decision, (update) =>
-					onProgress({ stage: update.stage, detail: update.percent !== undefined ? `${update.percent}%` : undefined }),
-				)
-				if (result.ok) {
-					converted = result.value
-					decision = result.value.applied
-					if (result.value.corrected) correctionNote = result.value.corrected
-				} else {
-					skipNote = `The optimization pass failed (${result.reason}), so the draft was kept.`
-				}
-			} catch (err) {
-				skipNote = `The optimizer could not decide (${err instanceof Error ? err.message : String(err)}), so the draft was kept.`
-			}
-		}
+	const compressed = await compressGlb(draft.value.bytes)
+	if (compressed.ok && compressed.bytes.length < final.length) {
+		final = compressed.bytes
+		method = "Draco + WebP compression of the full-quality draft"
+	} else if (!compressed.ok) {
+		skipNote = `Compression failed (${compressed.reason}), so the draft was kept.`
 	}
 
-	// A "converted" model that grew is an optimization that did not optimize.
-	// Keep whichever is smaller and say so.
-	const chosen = converted && converted.bytes.length < draftBytes ? converted : null
-	if (converted && !chosen) {
-		skipNote = `The optimized version came back larger (${Math.round(converted.bytes.length / 1024)}KB), so the draft was kept.`
+	if (final.length > WEIGHT_BAND.maxBytes) {
+		onProgress({
+			stage: "Still over the weight band — converting",
+			detail: `${Math.round(final.length / 1_000_000)}MB → 100k faces, 2048px textures, then compressed again`,
+		})
+		const converted = await client.convertModel(draft.value.taskId, { faceLimit: 100_000, textureSize: 2048 }, progressTap)
+		if (converted.ok) {
+			const recompressed = await compressGlb(converted.value.bytes)
+			const candidate = recompressed.ok ? recompressed.bytes : converted.value.bytes
+			if (candidate.length < final.length) {
+				final = candidate
+				method = "convert to 100k faces / 2048px textures, then Draco + WebP compression"
+				convertedTaskId = converted.value.taskId
+			}
+		} else {
+			skipNote = `The escalation convert failed (${converted.reason}); kept ${method}.`
+		}
 	}
 
 	// After the last paid call. Both reads succeeding and the wallet having
@@ -207,13 +261,12 @@ export async function generateModel3d(
 	}
 
 	pending.set(projectPath, {
-		bytes: chosen?.bytes ?? draft.value.bytes,
+		bytes: final,
 		sourceTag,
 		draftBytes,
-		optimization: chosen ? decision : null,
-		optimizerModel: optimizerModel || "(session model)",
-		taskIds: { draft: draft.value.taskId, ...(chosen ? { converted: chosen.taskId } : {}) },
-		...(correctionNote ? { correction: correctionNote } : {}),
+		method,
+		views: turnaround.ok ? 4 : 1,
+		taskIds: { draft: draft.value.taskId, ...(convertedTaskId ? { converted: convertedTaskId } : {}) },
 		...(credits !== undefined ? { credits } : {}),
 		at: Date.now(),
 	})
@@ -222,9 +275,8 @@ export async function generateModel3d(
 	return {
 		ok: true,
 		draftBytes,
-		optimizedBytes: (chosen?.bytes ?? draft.value.bytes).length,
-		optimization: chosen ? (decision ?? undefined) : undefined,
-		model: optimizerModel || "(session model)",
+		optimizedBytes: final.length,
+		model: method,
 		...(skipNote ? { reason: skipNote } : {}),
 	}
 }
@@ -234,9 +286,7 @@ export async function acceptModel3d(projectPath: string, tag: string): Promise<{
 	const held = pending.get(projectPath)
 	if (!held) return { ok: false, error: "No generated model is waiting. Generate one first." }
 
-	const description = held.optimization
-		? `3D model generated from @${held.sourceTag}, optimized to ${held.optimization.faceLimit.toLocaleString()} faces / ${held.optimization.textureSize}px textures. ${held.optimization.reason}`
-		: `3D model generated from @${held.sourceTag}, unoptimized.`
+	const description = `3D model built from @${held.sourceTag} (${held.views === 4 ? "four-view turnaround" : "single view"}), shrunk by ${held.method}.`
 
 	const result = await addGeneratedAsset({
 		projectPath,
@@ -263,10 +313,9 @@ export async function acceptModel3d(projectPath: string, tag: string): Promise<{
 				taskIds: held.taskIds,
 				draftBytes: held.draftBytes,
 				finalBytes: held.bytes.length,
-				optimization: held.optimization,
-				optimizerModel: held.optimizerModel,
+				views: held.views,
+				method: held.method,
 				weightBand: { minBytes: WEIGHT_BAND.minBytes, maxBytes: WEIGHT_BAND.maxBytes },
-				...(held.correction ? { correction: held.correction } : {}),
 			}),
 		},
 	})

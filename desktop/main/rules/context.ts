@@ -291,7 +291,17 @@ When the user writes \`@tag\`, they mean one of these.${
 					: ""
 			} Respect the intrinsic size: an asset
 placed into a box much larger than itself will look soft, and one whose aspect ratio is far from
-its box will lose most of the picture to cropping. Say so rather than doing it.`
+its box will lose most of the picture to cropping. Say so rather than doing it.${
+				context.assets.some((line) => line.includes("(model"))
+					? `
+
+A \`model\` asset is a 3D \`.glb\` — it is NOT an image and an \`<img>\` tag cannot show it. To put
+it on a page: install a viewer into the page workspace (\`npm install @google/model-viewer\` in
+\`.caret/\`, import it once), then \`<model-viewer src="/caret-assets/<file>" camera-controls
+auto-rotate>\` sized like an image. Start the camera on the object's front (\`camera-orbit\`), and
+prefer a gentle sway over a full spin — reconstruction seams live on the diagonal angles.`
+					: ""
+			}`
 }
 
 ## The component catalog

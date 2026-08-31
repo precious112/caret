@@ -1214,14 +1214,9 @@ function Model3dFlow({
 						{Math.round((outcome.draftBytes ?? 0) / 1024).toLocaleString()}KB draft →{" "}
 						<strong>{Math.round((outcome.optimizedBytes ?? 0) / 1024).toLocaleString()}KB</strong>
 					</p>
-					{outcome.optimization ? (
-						<p className="mt-1 text-xs text-shell-muted">
-							{outcome.optimization.faceLimit.toLocaleString()} faces, {outcome.optimization.textureSize}px textures
-							— {outcome.optimization.reason}
-						</p>
-					) : (
-						<p className="mt-1 text-xs text-shell-muted">{outcome.reason ?? "Kept as Tripo produced it."}</p>
-					)}
+					<p className="mt-1 text-xs text-shell-muted">
+						{outcome.model ?? outcome.reason ?? "Kept as Tripo produced it."}
+					</p>
 					<p className="mt-2 text-[11px] text-shell-muted">
 						No preview yet — the library shows 3D as a badge until the chrome grows a renderer.
 					</p>

@@ -23,6 +23,9 @@ const BASE = "https://api.tripo3d.ai/v2/openapi"
 /** How long each task type is allowed to take before Caret gives up on it. */
 const TASK_TIMEOUT_MS: Record<string, number> = {
 	image_to_model: 10 * 60 * 1000,
+	// Measured at ~3 minutes in the bottle experiment; the ceiling leaves room
+	// for detailed-quality queues without letting a dead task hold the lane.
+	multiview_to_model: 15 * 60 * 1000,
 	convert_model: 6 * 60 * 1000,
 }
 
@@ -92,7 +95,21 @@ export class TripoClient {
 	 * included, and sending the honest value is what the live API rejects with
 	 * "one or more of your parameter is invalid". Learned from a real 400: the
 	 * first source this ran against was a WebP this codebase itself produced.
+	 *
+	 * The quality options are measured, not aspirational (bottle experiment,
+	 * 2026-08-31): the old v2.5 single-view default washed a product label to a
+	 * blank band; v3.1 with detailed texture+geometry and original_image
+	 * alignment held the wordmark legibly. ~30 extra credits per model, and
+	 * quality is the requirement — there is no cheap tier.
 	 */
+	private static readonly MODEL_VERSION = "v3.1-20260211"
+	private static readonly QUALITY = {
+		texture_quality: "detailed",
+		geometry_quality: "detailed",
+		texture_alignment: "original_image",
+		pbr: true,
+	} as const
+
 	async imageToModel(
 		fileToken: string,
 		_mime: string,
@@ -105,8 +122,9 @@ export class TripoClient {
 				type: "image_to_model",
 				// Pinned like the SDK pins it, so a server-side default change never
 				// silently alters what credits buy.
-				model_version: "v2.5-20250123",
+				model_version: TripoClient.MODEL_VERSION,
 				file: { type: "jpg", file_token: fileToken },
+				...TripoClient.QUALITY,
 			}),
 		})
 		if (!created.ok) return created
@@ -115,6 +133,35 @@ export class TripoClient {
 		if (!taskId) return { ok: false, reason: `No task id in ${JSON.stringify(created.value)}`, retryable: false }
 
 		return this.awaitModel(taskId, "image_to_model", onProgress)
+	}
+
+	/**
+	 * Four views → draft model. The fidelity path.
+	 *
+	 * Reconstruction hallucinates every side it never saw — the field failure
+	 * was a bottle whose back rendered as a blank band. Four views in Tripo's
+	 * required order [front, left, back, right] pin the whole turnaround.
+	 */
+	async multiviewToModel(
+		fileTokens: [string, string, string, string],
+		onProgress: (update: TripoProgress) => void,
+	): Promise<TripoResult<TripoModelOutput>> {
+		const created = await this.call("/task", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				type: "multiview_to_model",
+				model_version: TripoClient.MODEL_VERSION,
+				files: fileTokens.map((token) => ({ type: "png", file_token: token })),
+				...TripoClient.QUALITY,
+			}),
+		})
+		if (!created.ok) return created
+
+		const taskId = (created.value as { task_id?: string }).task_id
+		if (!taskId) return { ok: false, reason: `No task id in ${JSON.stringify(created.value)}`, retryable: false }
+
+		return this.awaitModel(taskId, "multiview_to_model", onProgress)
 	}
 
 	/**
