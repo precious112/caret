@@ -33,9 +33,10 @@
 import { BrowserWindow, nativeImage } from "electron"
 
 import type { BackendSession, FoundationTokens } from "../../src/core/design"
-import { derivePalette, foundationWords, GeminiImages, getBackend, NO_RASTER_REASON } from "../../src/core/design"
+import { derivePalette, GeminiImages, getBackend, NO_RASTER_REASON } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { rasterConfig } from "./generate-assets"
+import { MARK_DIRECTIONS, type MarkDirection, nextDirections, TARGET_AVOID, targetPrompt } from "./mark-prompt"
 import { bitmapSimilarity } from "./pixel-similarity"
 import { getPrefs } from "./prefs"
 import { stripBackgroundRect } from "./svg-mark"
@@ -260,7 +261,7 @@ export async function authorMark(request: MarkRequest): Promise<MarkResult> {
  */
 interface HeldMarkTargets {
 	brief: string
-	candidates: Map<number, { png: Buffer; mime: string }>
+	candidates: Map<number, { png: Buffer; mime: string; direction: MarkDirection }>
 	at: number
 }
 
@@ -271,7 +272,7 @@ export async function markTargetTakes(
 	brief: string,
 	tokens: FoundationTokens | null,
 	count = 3,
-): Promise<Array<{ variant: number; preview: string; error?: string; retryable?: boolean }>> {
+): Promise<Array<{ variant: number; preview: string; direction?: string; error?: string; retryable?: boolean }>> {
 	const palette = derivePalette(tokens)
 	const config = rasterConfig()
 	if (!config) return [{ variant: 0, preview: "", error: NO_RASTER_REASON }]
@@ -279,13 +280,23 @@ export async function markTargetTakes(
 	const client = new GeminiImages(config)
 	const held: HeldMarkTargets = { brief, candidates: new Map(), at: Date.now() }
 	pendingTargets.set(projectPath, held)
+	const directions = nextDirections(projectPath, count)
 
 	const takes = await Promise.all(
-		Array.from({ length: count }, async (_, variant) => {
-			const result = await client.generate({ prompt: targetPrompt(brief, palette), avoid: TARGET_AVOID, aspect: "1:1" })
-			if (!result.ok) return { variant, preview: "", error: result.reason, retryable: result.retryable }
-			held.candidates.set(variant, { png: result.bytes, mime: result.mime })
-			return { variant, preview: `data:${result.mime};base64,${result.bytes.toString("base64")}` }
+		directions.map(async (direction, variant) => {
+			const result = await client.generate({
+				prompt: targetPrompt(brief, palette, direction),
+				avoid: TARGET_AVOID,
+				aspect: "1:1",
+			})
+			if (!result.ok)
+				return { variant, preview: "", direction: direction.label, error: result.reason, retryable: result.retryable }
+			held.candidates.set(variant, { png: result.bytes, mime: result.mime, direction })
+			return {
+				variant,
+				preview: `data:${result.mime};base64,${result.bytes.toString("base64")}`,
+				direction: direction.label,
+			}
 		}),
 	)
 	return takes
@@ -298,7 +309,7 @@ export async function refineMarkTarget(
 	note: string,
 	newVariant: number,
 	tokens: FoundationTokens | null,
-): Promise<{ variant: number; preview: string; error?: string; retryable?: boolean }> {
+): Promise<{ variant: number; preview: string; direction?: string; error?: string; retryable?: boolean }> {
 	const held = pendingTargets.get(projectPath)
 	const source = held?.candidates.get(sourceVariant)
 	if (!held || !source)
@@ -319,8 +330,14 @@ export async function refineMarkTarget(
 		references: [{ mime: source.mime, base64: source.png.toString("base64") }],
 	})
 	if (!result.ok) return { variant: newVariant, preview: "", error: result.reason, retryable: result.retryable }
-	held.candidates.set(newVariant, { png: result.bytes, mime: result.mime })
-	return { variant: newVariant, preview: `data:${result.mime};base64,${result.bytes.toString("base64")}` }
+	// The refinement inherits its source's direction: a note edits a design,
+	// it does not change which approach the design is.
+	held.candidates.set(newVariant, { png: result.bytes, mime: result.mime, direction: source.direction })
+	return {
+		variant: newVariant,
+		preview: `data:${result.mime};base64,${result.bytes.toString("base64")}`,
+		direction: source.direction.label,
+	}
 }
 
 /** The candidate the trace loop should reproduce. */
@@ -336,9 +353,12 @@ async function generateTarget(
 	if (!config) return { ok: false, reason: NO_RASTER_REASON }
 
 	const client = new GeminiImages(config)
+	// The single-target path (no user picking) takes the first direction: bold
+	// geometric construction is the approach that most reliably survives small
+	// sizes, which is the one property a mark nobody reviewed must have.
 	const ask = () =>
 		client.generate({
-			prompt: targetPrompt(brief, palette),
+			prompt: targetPrompt(brief, palette, MARK_DIRECTIONS[0]),
 			avoid: TARGET_AVOID,
 			aspect: "1:1",
 		})
@@ -351,29 +371,6 @@ async function generateTarget(
 	if (!result.ok) return { ok: false, reason: `The target image could not be generated: ${result.reason}` }
 	return { ok: true, png: result.bytes, mime: result.mime }
 }
-
-function targetPrompt(brief: string, palette: ReturnType<typeof derivePalette>): string {
-	return [
-		`A flat vector-style logo mark: ${brief.trim()}.`,
-		`Exactly two solid colours — ${palette.brand} and ${palette.ink} — on a plain ${palette.surface} background.`,
-		"Flat solid shapes with clean, confident edges: the look of a finished SVG, not a photograph or a render.",
-		"Centred in a square frame, the mark filling about two thirds of it, with generous even margins.",
-		"Simple enough to stay legible at 24 pixels: no detail thinner than a bold stroke.",
-		foundationWords(palette),
-	].join(" ")
-}
-
-/**
- * The mark-specific negative constraints. SLOP_TELLS is for photographs; a
- * logo target has its own failure modes, and they are these.
- */
-const TARGET_AVOID = [
-	"no gradients, no shadows, no highlights, no bevels, no texture or grain",
-	"no 3D rendering, no photorealism, no paper or business-card mockup",
-	"no letters, no words, no typography of any kind",
-	"no more than two colours besides the background",
-	"no thin hairlines or fussy detail that would vanish at small sizes",
-]
 
 const SYSTEM_PROMPT = `You are reproducing a picture of a logo mark as SVG, inside a design tool. Your one goal is that your SVG, rendered, is IDENTICAL to the target picture — same shapes, same proportions, same positions, same colours. You are tracing, not designing: where your render and the target disagree, the target is right.
 

@@ -62,6 +62,8 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"generate:setTaskModel": true,
 	"generate:questions": true,
 	"generate:clarify": true,
+	"generate:refineBrief": true,
+	"generate:styleAnchor": true,
 	"generate:takes": true,
 	"generate:acceptTake": true,
 	"generate:refineTake": true,

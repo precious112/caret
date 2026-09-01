@@ -1857,14 +1857,25 @@ async function main(): Promise<void> {
 			await ask.getByTestId("generate-begin").click()
 
 			// Clarification is optional and skippable, and skipping must reach the
-			// takes rather than stranding the user on a screen of questions.
+			// takes rather than stranding the user on a screen of questions. The
+			// clarify screen can arrive LATE (it is a model turn), and skipping
+			// now runs the rebuild (another model turn) before the takes stage —
+			// so this polls for either, skips at most once, and waits wide.
 			const clarify = panel.getByTestId("generate-clarify")
-			if (await clarify.isVisible().catch(() => false)) {
-				await clarify.getByTestId("generate-clarify-skip").click()
-			}
-
 			const variants = panel.getByTestId("generate-variants")
-			await variants.waitFor({ timeout: 20_000 })
+			let skipped = false
+			await waitFor(
+				"the takes grid (past any clarify questions)",
+				async () => {
+					if (!skipped && (await clarify.isVisible().catch(() => false))) {
+						skipped = true
+						await clarify.getByTestId("generate-clarify-skip").click()
+						return null
+					}
+					return (await variants.isVisible().catch(() => false)) ? true : null
+				},
+				240_000,
+			)
 			// The wait is the feature here: paid calls at ~15s apiece, run together
 			// rather than in sequence.
 			await variants.locator("[data-generate-variant] img").first().waitFor({ timeout: 180_000 })
@@ -2006,13 +2017,22 @@ async function main(): Promise<void> {
 			await ask.getByTestId("generate-transparent").check()
 			await ask.getByTestId("generate-begin").click()
 
+			// Same late-clarify + rebuild road as the image scenario above.
 			const clarify = panel.getByTestId("generate-clarify")
-			if (await clarify.isVisible().catch(() => false)) {
-				await clarify.getByTestId("generate-clarify-skip").click()
-			}
-
 			const variants = panel.getByTestId("generate-variants")
-			await variants.waitFor({ timeout: 20_000 })
+			let skipped = false
+			await waitFor(
+				"the cutout takes grid (past any clarify questions)",
+				async () => {
+					if (!skipped && (await clarify.isVisible().catch(() => false))) {
+						skipped = true
+						await clarify.getByTestId("generate-clarify-skip").click()
+						return null
+					}
+					return (await variants.isVisible().catch(() => false)) ? true : null
+				},
+				240_000,
+			)
 			await variants.locator("[data-generate-variant] img").first().waitFor({ timeout: 240_000 })
 
 			// The cut happened *before* the pick: what is on screen is the finished
@@ -5559,13 +5579,34 @@ export default function CatalogDemo() {
 			await ask.getByTestId("generate-request").fill("a compass rose")
 			await ask.getByTestId("generate-begin").click()
 
+			// Marks ride the clarify → rebuild road now. Skipping the questions
+			// still runs the rebuild (a model turn), so the wait covers both the
+			// question screen appearing and the flow arriving directly.
 			const flow = panel.getByTestId("generate-mark")
-			await flow.waitFor({ timeout: 15_000 })
-			// Carried through rather than asked again: the user already said it.
-			assert(
-				(await flow.getByTestId("mark-subject").inputValue()) === "a compass rose",
-				"the mark lane asked for the subject a second time",
+			const clarify = panel.getByTestId("generate-clarify")
+			const arrived = await waitFor("the mark flow or its clarify questions", async () =>
+				(await flow.isVisible().catch(() => false))
+					? "flow"
+					: (await clarify.isVisible().catch(() => false))
+						? "clarify"
+						: null,
 			)
+			if (arrived === "clarify") {
+				await clarify.getByTestId("generate-clarify-skip").click()
+				await flow.waitFor({ timeout: 180_000 })
+				// The rebuild rewrote the subject into a brief — in front of the
+				// user, into the editable field. Empty would mean it was lost.
+				assert(
+					((await flow.getByTestId("mark-subject").inputValue()) ?? "").trim().length > 0,
+					"the subject was lost on the way into the mark flow",
+				)
+			} else {
+				// No questions asked: carried through rather than asked again.
+				assert(
+					(await flow.getByTestId("mark-subject").inputValue()) === "a compass rose",
+					"the mark lane asked for the subject a second time",
+				)
+			}
 			await flow.getByTestId("mark-generate").click()
 
 			// The vision probe, a target image, and up to six rounds of a real
@@ -5639,8 +5680,20 @@ export default function CatalogDemo() {
 			await ask.getByTestId("generate-request").fill("a ceramic mug with a simple silhouette")
 			await ask.getByTestId("generate-begin").click()
 
+			// Same clarify → rebuild road as the mark scenario above.
 			const flow = panel.getByTestId("generate-model3d")
-			await flow.waitFor({ timeout: 15_000 })
+			const clarify3d = panel.getByTestId("generate-clarify")
+			const arrived3d = await waitFor("the 3D flow or its clarify questions", async () =>
+				(await flow.isVisible().catch(() => false))
+					? "flow"
+					: (await clarify3d.isVisible().catch(() => false))
+						? "clarify"
+						: null,
+			)
+			if (arrived3d === "clarify") {
+				await clarify3d.getByTestId("generate-clarify-skip").click()
+				await flow.waitFor({ timeout: 180_000 })
+			}
 
 			// The verification layer, certified on its reject path first: the
 			// workbench photograph is several tools on a surface, and building a 3D

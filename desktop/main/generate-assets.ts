@@ -35,8 +35,10 @@ import {
 	NO_RASTER_REASON,
 	narrowForAnswers,
 	proposeTag,
+	type RefinedBrief,
 	readFoundationTokens,
 	recipeForRequest,
+	refineBrief,
 	resolveRasterConfig,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
@@ -219,6 +221,7 @@ async function generateRasterVariants(
 	aspect: string,
 	tokens: Awaited<ReturnType<typeof readFoundationTokens>>,
 	surface: string,
+	anchor?: { bytes: Buffer; mime: string },
 ): Promise<GeneratedVariantWire[]> {
 	const config = rasterConfig()
 	const recipeId = recipe.id
@@ -245,7 +248,15 @@ async function generateRasterVariants(
 		// process-wide queue every caller shares. A failure surfacing here means
 		// the whole retry budget is spent; `retryable` distinguishes "exhausted
 		// right now, worth re-running later" from a refusal that never will be.
-		const result = await client.generate({ prompt: request.prompt, avoid: request.avoid, aspect: request.aspect })
+		const result = await client.generate({
+			prompt: anchor
+				? "Match the lighting, colour grade and mood of the reference image exactly — it is an earlier photograph " +
+					`from the same campaign, and this one must look shot in the same session.\n\n${request.prompt}`
+				: request.prompt,
+			avoid: request.avoid,
+			aspect: request.aspect,
+			...(anchor ? { references: [{ mime: anchor.mime, base64: anchor.bytes.toString("base64") }] } : {}),
+		})
 
 		if (!result.ok) {
 			Logger.warn(`[generate] raster variant ${variant.variant} failed: ${result.reason}`)
@@ -458,8 +469,27 @@ async function acceptRasterVariant(
 		},
 	})
 
-	if (result.ok) discardPending(projectPath)
+	if (result.ok) {
+		// A saved photograph becomes the project's style anchor: the reference
+		// the NEXT photo can be lit and graded against, so a set of images reads
+		// as one campaign instead of three stock photos. Cutouts are excluded —
+		// their background is gone, so there is no grade to match. In memory
+		// only, same lifetime story as the pending store: an anchor is a
+		// convenience for this sitting, not a record.
+		if (!keyed) {
+			styleAnchors.set(projectPath, { bytes: held.bytes, mime: held.mime, tag: result.entry.tag, at: Date.now() })
+		}
+		discardPending(projectPath)
+	}
 	return result.ok ? { ok: true, tag: result.entry.tag } : { ok: false, error: result.reason }
+}
+
+const styleAnchors = new Map<string, { bytes: Buffer; mime: string; tag: string; at: number }>()
+
+/** The saved photo new takes can match, if this sitting has one. */
+export function styleAnchorFor(projectPath: string): { tag: string } | null {
+	const anchor = styleAnchors.get(projectPath)
+	return anchor ? { tag: anchor.tag } : null
 }
 
 /** The proposed name for a pick, so the field opens with something usable. */
@@ -489,7 +519,11 @@ function dataUrl(svg: string): string {
  * pick so the picture is the finished cutout, the pending store, the round
  * cost. What changed is only where the subject comes from.
  */
-export async function requestTakes(projectPath: string, request: AssetRequest, aspect: string): Promise<GeneratedVariantWire[]> {
+export async function requestTakes(
+	projectPath: string,
+	request: AssetRequest & { styleAnchor?: boolean },
+	aspect: string,
+): Promise<GeneratedVariantWire[]> {
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
 	const palette = derivePalette(tokens)
 
@@ -511,7 +545,16 @@ export async function requestTakes(projectPath: string, request: AssetRequest, a
 		// and its own progress. Nothing to compose into takes here.
 		return []
 	}
-	return generateRasterVariants(projectPath, recipe, askedAnswers(request), chosen, tokens, palette.surface)
+
+	// The anchor rides only when the user asked for it: an explicit checkbox in
+	// the renderer, shown only when a saved photo exists to match. Reference-
+	// image anchoring holds a set's light and grade together far better than
+	// repeated prose does.
+	const anchor =
+		request.styleAnchor && request.kind === "image" && !request.transparent
+			? (styleAnchors.get(projectPath) ?? undefined)
+			: undefined
+	return generateRasterVariants(projectPath, recipe, askedAnswers(request), chosen, tokens, palette.surface, anchor)
 }
 
 /**
@@ -672,6 +715,31 @@ export async function clarifyAssetRequest(projectPath: string, request: AssetReq
 
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
 	return clarifyRequest({
+		backend,
+		workingDirectory: projectPath,
+		request,
+		tokens,
+		model: prefs.backendModel || undefined,
+	})
+}
+
+/**
+ * The rebuild stage: the request plus the clarify answers become a polished
+ * brief, written per-kind by the model. Null on any failure — the caller
+ * generates with the raw text, same honesty rule as the clarifier.
+ */
+export async function refineAssetBrief(projectPath: string, request: AssetRequest): Promise<RefinedBrief | null> {
+	const prefs = getPrefs()
+	if (!prefs.backendId) return null
+	let backend
+	try {
+		backend = getBackend(prefs.backendId)
+	} catch {
+		return null
+	}
+
+	const tokens = await readFoundationTokens(projectPath).catch(() => null)
+	return refineBrief({
 		backend,
 		workingDirectory: projectPath,
 		request,

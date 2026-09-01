@@ -43,6 +43,7 @@ export { DEFAULT_PALETTE, derivePalette, hexToHsl, hslToHex, normalizeHex } from
 export { foundationWords, keyWords, paletteWords } from "./raster/palette-words"
 export { RASTER_RECIPES } from "./raster/recipes"
 export { ALL_RECIPES, ASSET_RECIPES, runnableRecipes, SLOP_TELLS } from "./recipes"
+export { type RefinedBrief, refineBrief } from "./refine-brief"
 export {
 	type AssetRequest,
 	type ClarifyQuestion,

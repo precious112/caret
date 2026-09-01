@@ -55,8 +55,10 @@ import {
 	generationQuestions,
 	recipeCards,
 	recipeVariants,
+	refineAssetBrief,
 	refineRequestTake,
 	requestTakes,
+	styleAnchorFor,
 } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { refreshMenu } from "./menu"
@@ -434,6 +436,14 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("generate:clarify", (_event, projectPath: string, request: AssetRequest) =>
 		clarifyAssetRequest(projectPath, request),
 	)
+
+	// The rebuild stage sits between clarify and takes: the answers become a
+	// polished per-kind brief the user reads and edits before spending anything.
+	ipcMain.handle("generate:refineBrief", (_event, projectPath: string, request: AssetRequest) =>
+		refineAssetBrief(projectPath, request),
+	)
+
+	ipcMain.handle("generate:styleAnchor", (_event, projectPath: string) => styleAnchorFor(projectPath))
 
 	ipcMain.handle("generate:takes", (_event, projectPath: string, request: AssetRequest, aspect: string) =>
 		requestTakes(projectPath, request, aspect),

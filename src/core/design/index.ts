@@ -96,6 +96,7 @@ export {
 } from "./asset-library/raster/gemini"
 export { applyMatte, matteInputTensor } from "./asset-library/raster/matte-math"
 export { looksComplete, MATTE_MODEL, MATTE_MODEL_MB, type ModelState, progressOf } from "./asset-library/raster/matte-model"
+export { type RefinedBrief, refineBrief } from "./asset-library/refine-brief"
 export {
 	type AssetRequest,
 	type ClarifyQuestion,

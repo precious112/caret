@@ -512,10 +512,16 @@ export type GenerationKindWire = "image" | "texture" | "mark" | "object3d" | "sh
 /** What the user asked for, on its way to main. */
 export interface AssetRequestWire {
 	kind: GenerationKindWire
-	/** Their own words. Never rewritten on the way through. */
+	/**
+	 * The brief the takes are generated from. Opens as the user's own words;
+	 * after the rebuild stage it is the polished brief they saw, and possibly
+	 * edited, in the prompt box — never something rewritten out of their sight.
+	 */
 	text: string
 	transparent?: boolean
 	answers?: Record<string, string>
+	/** Light and grade the takes against the last saved photo (user-ticked). */
+	styleAnchor?: boolean
 }
 
 /** One question Caret decided it needed to ask about this particular request. */
@@ -665,6 +671,12 @@ export interface GeneratedVariantWire {
 	height: number
 	/** As on `RecipeCardWire`, and for the same reason. */
 	surface: string
+	/**
+	 * The design approach this option explores, when the lane varies it (mark
+	 * targets do). Shown on the card: three named design decisions beat three
+	 * anonymous pictures.
+	 */
+	direction?: string
 	/** Set when this variant could not be produced. The lane's own words. */
 	error?: string
 	/**
@@ -830,6 +842,15 @@ export interface IpcRequests {
 	 * improves a request, it is not permission to make one.
 	 */
 	"generate:clarify": (projectPath: string, request: AssetRequestWire) => ClarifyResultWire
+	/**
+	 * The rebuild stage: request + clarify answers → the brief a professional
+	 * would have written, per-kind. Lands in the editable prompt box so the
+	 * user reads, edits and owns it before anything generates. Null means
+	 * "skip the step and use the words as typed" — never a blocked user.
+	 */
+	"generate:refineBrief": (projectPath: string, request: AssetRequestWire) => { prompt: string } | null
+	/** The saved photo new takes can be lit and graded against, if one exists. */
+	"generate:styleAnchor": (projectPath: string) => { tag: string } | null
 	/** Three takes of the thing the user asked for. Same subject, different treatment. */
 	"generate:takes": (projectPath: string, request: AssetRequestWire, aspect: string) => GeneratedVariantWire[]
 	/** Commits the take the user pointed at, with their own words kept in provenance. */

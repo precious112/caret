@@ -141,18 +141,32 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 	// Refined takes need variant numbers no fresh round will reuse.
 	const nextRefine = useRef(100)
 
+	// The style anchor: the photo saved earlier this sitting that new takes can
+	// be lit and graded against, so a set reads as one campaign. Fetched once —
+	// the surface remounts on every open.
+	const [anchorTag, setAnchorTag] = useState<string | null>(null)
+	const [useAnchor, setUseAnchor] = useState(false)
+	useEffect(() => {
+		invoke("generate:styleAnchor", project.path).then((anchor) => setAnchorTag(anchor?.tag ?? null))
+	}, [project.path])
+
+	// True while the rebuild stage is writing the brief, so the clarify buttons
+	// can say what the wait is instead of dimming silently.
+	const [briefing, setBriefing] = useState(false)
+
 	const request = useCallback(
-		(answers?: Record<string, string>): AssetRequestWire => ({
+		(answers?: Record<string, string>, textOverride?: string): AssetRequestWire => ({
 			kind,
-			text: text.trim(),
+			text: (textOverride ?? text).trim(),
 			...(kind === "image" && transparent ? { transparent: true } : {}),
+			...(kind === "image" && !transparent && useAnchor && anchorTag ? { styleAnchor: true } : {}),
 			...(answers && Object.keys(answers).length > 0 ? { answers } : {}),
 		}),
-		[kind, text, transparent],
+		[kind, text, transparent, useAnchor, anchorTag],
 	)
 
 	const runTakes = useCallback(
-		async (ratio: string, answers: Record<string, string>) => {
+		async (ratio: string, answers: Record<string, string>, textOverride?: string) => {
 			// The shader lane rides the same ask → clarify road, then runs its own
 			// loop: one authored result to watch, not three takes to pick from.
 			if (kind === "shader") {
@@ -166,7 +180,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			setRefineNote("")
 			setBusy(true)
 			setStage("variant")
-			const round = request(answers)
+			const round = request(answers, textOverride)
 			setRoundRequest(round)
 			try {
 				setVariants((await invoke("generate:takes", project.path, { ...round }, ratio)) ?? [])
@@ -210,19 +224,72 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 	}, [chosen, roundRequest, refineNote, project.path, aspect])
 
 	/**
-	 * What happens when the user has said their piece.
+	 * Where each kind goes once its words are settled.
 	 *
 	 * Marks and 3D objects run their own lanes — one result, minutes of waiting,
-	 * their own progress to watch — so they branch here rather than pretending to
-	 * be a three-take pick. Textures have no subject to name, so they keep the
+	 * their own progress to watch — so they mount their own flows, which read
+	 * the (possibly rebuilt) text at render time.
+	 */
+	const route = useCallback(
+		async (answers: Record<string, string>, textOverride?: string) => {
+			if (kind === "mark") return setStage("mark")
+			if (kind === "object3d") return setStage("model3d")
+			await runTakes(aspect, answers, textOverride)
+		},
+		[kind, aspect, runTakes],
+	)
+
+	/**
+	 * The rebuild stage: the request plus the clarify answers become the brief a
+	 * professional would have written, per kind — then it lands in the SAME
+	 * prompt box the user already owns, visible and editable. Nothing is
+	 * rewritten out of their sight; it is rewritten in front of them.
+	 *
+	 * On success the answers are considered spent — they are baked into the
+	 * brief, and carrying them separately would say everything twice. On any
+	 * failure the raw words plus the raw answers generate as before: the
+	 * rebuild improves a request, it is never permission to make one.
+	 */
+	const rebuildAndRoute = useCallback(
+		async (answers: Record<string, string>) => {
+			setBusy(true)
+			setBriefing(true)
+			let rebuilt: string | undefined
+			try {
+				const refined = await invoke("generate:refineBrief", project.path, request(answers))
+				if (refined?.prompt?.trim()) {
+					rebuilt = refined.prompt.trim()
+					setText(rebuilt)
+				}
+			} catch {
+				// The step only exists to improve things; failing it costs nothing.
+			} finally {
+				setBriefing(false)
+				setBusy(false)
+			}
+			if (rebuilt) {
+				setReplies({})
+				await route({}, rebuilt)
+			} else {
+				setReplies(answers)
+				await route(answers)
+			}
+		},
+		[project.path, request, route],
+	)
+
+	/**
+	 * What happens when the user has said their piece.
+	 *
+	 * Every paid kind rides the same road now: clarify, then — if there was
+	 * anything to clarify — the rebuild. A request the clarifier calls
+	 * sufficient is already a professional brief, and it generates as written:
+	 * a pro's words stand. Textures have no subject to name, so they keep the
 	 * recipe cards, where sliders beat a sentence.
 	 */
 	const begin = useCallback(async () => {
 		if (!text.trim()) return
 		setError(null)
-
-		if (kind === "mark") return setStage("mark")
-		if (kind === "object3d") return setStage("model3d")
 
 		if (kind === "texture") {
 			setBusy(true)
@@ -249,8 +316,8 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			// A clarifier that cannot answer must not stop someone generating.
 		}
 		setBusy(false)
-		await runTakes(aspect, {})
-	}, [kind, text, project.path, request, runTakes, aspect])
+		await route({})
+	}, [kind, text, project.path, request, route])
 
 	const chooseRecipe = useCallback(
 		async (card: RecipeCardWire, withAspect?: string) => {
@@ -402,6 +469,23 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							</label>
 						)}
 
+						{kind === "image" && !transparent && anchorTag && (
+							<label className="mt-2 flex items-center gap-2 text-sm">
+								<input
+									checked={useAnchor}
+									data-testid="generate-style-anchor"
+									onChange={(event) => setUseAnchor(event.target.checked)}
+									type="checkbox"
+								/>
+								<span>
+									Match the look of <code className="text-xs">{anchorTag}</code>
+									<span className="ml-2 text-xs text-shell-muted">
+										Same light, same grade — so the photos read as one set.
+									</span>
+								</span>
+							</label>
+						)}
+
 						<button
 							className="mt-6 rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
 							data-testid="generate-begin"
@@ -461,20 +545,32 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 								className="rounded-md bg-caret-accent px-4 py-2 text-sm text-white disabled:opacity-50"
 								data-testid="generate-clarify-done"
 								disabled={busy}
-								onClick={() => runTakes(aspect, replies)}
+								onClick={() => rebuildAndRoute(replies)}
 								type="button">
-								Generate
+								{briefing ? (
+									<>
+										<ButtonSpinner /> Writing the brief…
+									</>
+								) : (
+									"Generate"
+								)}
 							</button>
-							{/* Answering is optional. Nothing here is a gate. */}
+							{/* Answering is optional. Nothing here is a gate — and the
+							    rebuild still runs, because skipping the questions is not
+							    the same as wanting a raw prompt. */}
 							<button
 								className="text-xs text-shell-muted hover:text-shell-fg"
 								data-testid="generate-clarify-skip"
 								disabled={busy}
-								onClick={() => runTakes(aspect, {})}
+								onClick={() => rebuildAndRoute({})}
 								type="button">
 								Skip — just make it
 							</button>
 						</div>
+						<p className="mt-3 max-w-md text-[11px] text-shell-muted">
+							Your answers are rewritten into a professional brief — you'll see it in the prompt box and can edit
+							every word before anything is made.
+						</p>
 					</section>
 				)}
 
@@ -949,6 +1045,13 @@ function MarkFlow({
 									onClick={() => setChosenTarget(target.variant)}
 									type="button">
 									<img alt="" className="block w-full" src={target.preview} />
+									{/* The approach this card explores. Three named design
+									    decisions, not three anonymous pictures. */}
+									{target.direction && (
+										<span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white/90">
+											{target.direction}
+										</span>
+									)}
 									{target.variant >= 100 && (
 										<span className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
 											refined
