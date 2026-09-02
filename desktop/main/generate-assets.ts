@@ -13,11 +13,15 @@
  * renderer as inline data URLs; only `accept` writes, and it writes through the
  * §4.6 asset pipeline so a generated asset is an asset like any other.
  */
+import * as fs from "fs/promises"
+import * as path from "path"
+
 import {
 	ASPECTS,
 	type AssetRecipe,
 	type AssetRequest,
 	addGeneratedAsset,
+	assetsDirectory,
 	type ClarifyResult,
 	clarifyRequest,
 	composeVariants,
@@ -25,6 +29,7 @@ import {
 	derivePalette,
 	describeVariant,
 	FREE_LANES,
+	findAsset,
 	findAssetRecipe,
 	findGenerator,
 	GENERATION_QUESTIONS,
@@ -36,6 +41,7 @@ import {
 	narrowForAnswers,
 	proposeTag,
 	type RefinedBrief,
+	readAssetIndex,
 	readFoundationTokens,
 	recipeForRequest,
 	refineBrief,
@@ -492,27 +498,30 @@ async function acceptRasterVariant(
 		},
 	})
 
-	if (result.ok) {
-		// A saved photograph becomes the project's style anchor: the reference
-		// the NEXT photo can be lit and graded against, so a set of images reads
-		// as one campaign instead of three stock photos. Cutouts are excluded —
-		// their background is gone, so there is no grade to match. In memory
-		// only, same lifetime story as the pending store: an anchor is a
-		// convenience for this sitting, not a record.
-		if (!keyed) {
-			styleAnchors.set(projectPath, { bytes: held.bytes, mime: held.mime, tag: result.entry.tag, at: Date.now() })
-		}
-		discardPending(projectPath)
-	}
+	if (result.ok) discardPending(projectPath)
 	return result.ok ? { ok: true, tag: result.entry.tag } : { ok: false, error: result.reason }
 }
 
-const styleAnchors = new Map<string, { bytes: Buffer; mime: string; tag: string; at: number }>()
-
-/** The saved photo new takes can match, if this sitting has one. */
-export function styleAnchorFor(projectPath: string): { tag: string } | null {
-	const anchor = styleAnchors.get(projectPath)
-	return anchor ? { tag: anchor.tag } : null
+/**
+ * The user-picked style anchor, resolved from the asset library on disk.
+ *
+ * By tag, from the index, at generation time — the first version captured the
+ * last-saved photo into main-process memory, and it silently vanished on every
+ * restart (found because the checkbox disappeared mid-run). The asset already
+ * lives in `.caret/assets/`; a pointer to it has no business being ephemeral.
+ * A tag that no longer resolves means no anchor, never an error: the takes
+ * still generate from the words alone.
+ */
+async function resolveStyleAnchor(projectPath: string, tag: string): Promise<{ bytes: Buffer; mime: string } | undefined> {
+	try {
+		const index = await readAssetIndex(projectPath)
+		const entry = findAsset(index, tag)
+		if (!entry || entry.kind !== "image" || entry.mime === "image/svg+xml") return undefined
+		const bytes = await fs.readFile(path.join(assetsDirectory(projectPath), entry.file))
+		return { bytes, mime: entry.mime }
+	} catch {
+		return undefined
+	}
 }
 
 /** The proposed name for a pick, so the field opens with something usable. */
@@ -544,7 +553,7 @@ function dataUrl(svg: string): string {
  */
 export async function requestTakes(
 	projectPath: string,
-	request: AssetRequest & { styleAnchor?: boolean },
+	request: AssetRequest & { styleAnchor?: string },
 	aspect: string,
 ): Promise<GeneratedVariantWire[]> {
 	const tokens = await readFoundationTokens(projectPath).catch(() => null)
@@ -569,13 +578,13 @@ export async function requestTakes(
 		return []
 	}
 
-	// The anchor rides only when the user asked for it: an explicit checkbox in
-	// the renderer, shown only when a saved photo exists to match. Reference-
-	// image anchoring holds a set's light and grade together far better than
+	// The anchor rides only when the user picked one — a named photo from
+	// their own library, chosen in the renderer's dropdown. Reference-image
+	// anchoring holds a set's light and grade together far better than
 	// repeated prose does.
 	const anchor =
 		request.styleAnchor && request.kind === "image" && !request.transparent
-			? (styleAnchors.get(projectPath) ?? undefined)
+			? await resolveStyleAnchor(projectPath, request.styleAnchor)
 			: undefined
 	return generateRasterVariants(projectPath, recipe, askedAnswers(request), chosen, tokens, palette.surface, anchor)
 }

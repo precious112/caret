@@ -141,13 +141,20 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 	// Refined takes need variant numbers no fresh round will reuse.
 	const nextRefine = useRef(100)
 
-	// The style anchor: the photo saved earlier this sitting that new takes can
-	// be lit and graded against, so a set reads as one campaign. Fetched once —
-	// the surface remounts on every open.
-	const [anchorTag, setAnchorTag] = useState<string | null>(null)
-	const [useAnchor, setUseAnchor] = useState(false)
+	// The style anchor: a photo from the user's own library, chosen from a
+	// dropdown, whose light and grade the new takes borrow. The list comes off
+	// the asset index on disk, so it works in any session — a per-image toggle
+	// was the wrong shape, and a memory-held "last saved" vanished on restart.
+	const [anchorOptions, setAnchorOptions] = useState<string[]>([])
+	const [anchorTag, setAnchorTag] = useState("")
 	useEffect(() => {
-		invoke("generate:styleAnchor", project.path).then((anchor) => setAnchorTag(anchor?.tag ?? null))
+		invoke("assets:list", project.path).then((assets) =>
+			setAnchorOptions(
+				(assets ?? [])
+					.filter((asset) => asset.kind === "image" && asset.mime !== "image/svg+xml")
+					.map((asset) => asset.tag),
+			),
+		)
 	}, [project.path])
 
 	// True while the rebuild stage is writing the brief, so the clarify buttons
@@ -159,10 +166,10 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			kind,
 			text: (textOverride ?? text).trim(),
 			...(kind === "image" && transparent ? { transparent: true } : {}),
-			...(kind === "image" && !transparent && useAnchor && anchorTag ? { styleAnchor: true } : {}),
+			...(kind === "image" && !transparent && anchorTag ? { styleAnchor: anchorTag } : {}),
 			...(answers && Object.keys(answers).length > 0 ? { answers } : {}),
 		}),
-		[kind, text, transparent, useAnchor, anchorTag],
+		[kind, text, transparent, anchorTag],
 	)
 
 	const runTakes = useCallback(
@@ -469,20 +476,24 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 							</label>
 						)}
 
-						{kind === "image" && !transparent && anchorTag && (
-							<label className="mt-2 flex items-center gap-2 text-sm">
-								<input
-									checked={useAnchor}
-									data-testid="generate-style-anchor"
-									onChange={(event) => setUseAnchor(event.target.checked)}
-									type="checkbox"
-								/>
-								<span>
-									Match the light of <code className="text-xs">{anchorTag}</code>
-									<span className="ml-2 text-xs text-shell-muted">
-										Borrows its lighting and grade only — the framing still comes from what you describe.
-									</span>
+						{kind === "image" && !transparent && anchorOptions.length > 0 && (
+							<label className="mt-3 block text-sm">
+								<span className="font-medium">Match the light of a saved photo</span>
+								<span className="ml-2 text-xs text-shell-muted">
+									Borrows its lighting and grade only — the framing still comes from what you describe.
 								</span>
+								<select
+									className="mt-1.5 block w-full rounded-md border border-shell-border bg-transparent px-3 py-2 text-sm outline-none focus:border-caret-accent"
+									data-testid="generate-style-anchor"
+									onChange={(event) => setAnchorTag(event.target.value)}
+									value={anchorTag}>
+									<option value="">None — light it from the description alone</option>
+									{anchorOptions.map((tag) => (
+										<option key={tag} value={tag}>
+											{tag}
+										</option>
+									))}
+								</select>
 							</label>
 						)}
 

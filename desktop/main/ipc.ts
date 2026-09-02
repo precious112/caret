@@ -58,7 +58,6 @@ import {
 	refineAssetBrief,
 	refineRequestTake,
 	requestTakes,
-	styleAnchorFor,
 } from "./generate-assets"
 import { answerInterviewPrompt, currentPrompt } from "./interview"
 import { refreshMenu } from "./menu"
@@ -442,8 +441,6 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	ipcMain.handle("generate:refineBrief", (_event, projectPath: string, request: AssetRequest) =>
 		refineAssetBrief(projectPath, request),
 	)
-
-	ipcMain.handle("generate:styleAnchor", (_event, projectPath: string) => styleAnchorFor(projectPath))
 
 	ipcMain.handle("generate:takes", (_event, projectPath: string, request: AssetRequest, aspect: string) =>
 		requestTakes(projectPath, request, aspect),

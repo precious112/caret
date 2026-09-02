@@ -520,8 +520,13 @@ export interface AssetRequestWire {
 	text: string
 	transparent?: boolean
 	answers?: Record<string, string>
-	/** Light and grade the takes against the last saved photo (user-ticked). */
-	styleAnchor?: boolean
+	/**
+	 * Tag of a saved image to borrow light and grade from, chosen by the user
+	 * from a picker of the project's own photos. Resolved from the asset index
+	 * on disk, so the choice works in any session — the first version held the
+	 * anchor in main-process memory and it silently vanished on every restart.
+	 */
+	styleAnchor?: string
 }
 
 /** One question Caret decided it needed to ask about this particular request. */
@@ -849,8 +854,6 @@ export interface IpcRequests {
 	 * "skip the step and use the words as typed" — never a blocked user.
 	 */
 	"generate:refineBrief": (projectPath: string, request: AssetRequestWire) => { prompt: string } | null
-	/** The saved photo new takes can be lit and graded against, if one exists. */
-	"generate:styleAnchor": (projectPath: string) => { tag: string } | null
 	/** Three takes of the thing the user asked for. Same subject, different treatment. */
 	"generate:takes": (projectPath: string, request: AssetRequestWire, aspect: string) => GeneratedVariantWire[]
 	/** Commits the take the user pointed at, with their own words kept in provenance. */
