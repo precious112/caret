@@ -11,6 +11,7 @@
 import { strict as assert } from "assert"
 
 import { resolveRasterConfig } from "../raster/config"
+import { GeminiImages } from "../raster/gemini"
 
 describe("resolveRasterConfig", () => {
 	it("has nothing to run on when neither a key nor a project is configured", () => {
@@ -53,5 +54,37 @@ describe("resolveRasterConfig", () => {
 
 	it("treats blank prefs as absent rather than as a project named nothing", () => {
 		assert.equal(resolveRasterConfig({ vertexProject: "   ", env: {} }), null)
+	})
+})
+
+describe("the image model in use", () => {
+	// The default was gemini-2.5-flash-image for months, and it is where the
+	// field's refinement failures came from — asked to make a surface matte and
+	// crisp, it added a leather seam. This pins the newer default and the
+	// endpoint rule the newer models need.
+	it("defaults to nano banana 2, not the legacy model", () => {
+		const client = new GeminiImages({ backend: "api-key", apiKey: "k" })
+		const { model } = client.resolve({ prompt: "a cube", avoid: [], aspect: "1:1" })
+		assert.equal(model, "gemini-3.1-flash-image")
+	})
+
+	it("routes the Gemini 3 image models to global even when a region is configured", () => {
+		// Measured: us-central1 404s these with "Publisher model not found",
+		// which reads exactly like the model does not exist.
+		const client = new GeminiImages({ backend: "vertex", project: "p", location: "us-central1" })
+		const { url } = client.resolve({ prompt: "a cube", avoid: [], aspect: "1:1" })
+		assert.ok(url.includes("/locations/global/"), `expected the global endpoint, got ${url}`)
+		assert.ok(!url.includes("us-central1-aiplatform"), "a regional host cannot serve this model")
+	})
+
+	it("still honours the configured region for the legacy model", () => {
+		const client = new GeminiImages({
+			backend: "vertex",
+			project: "p",
+			location: "us-central1",
+			model: "flash-image-legacy",
+		})
+		const { url } = client.resolve({ prompt: "a cube", avoid: [], aspect: "1:1" })
+		assert.ok(url.includes("us-central1-aiplatform"), `expected the regional host, got ${url}`)
 	})
 })

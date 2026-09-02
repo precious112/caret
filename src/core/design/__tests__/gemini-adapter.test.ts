@@ -36,13 +36,23 @@ describe("the Gemini image adapter", () => {
 		vertex
 			.resolve(request)
 			.url.should.equal(
-				"https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/publishers/google/models/gemini-2.5-flash-image:generateContent",
+				"https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/publishers/google/models/gemini-3.1-flash-image:generateContent",
 			)
 
 		// A regional prefix on `global` is a 404 that reads like the model does not
-		// exist, which is the least useful failure available.
-		const regional = new GeminiImages({ backend: "vertex", project: "proj-1", location: "us-central1" })
+		// exist, which is the least useful failure available. The reverse is also
+		// true and newer: Vertex serves the Gemini 3 image models ONLY on global,
+		// so a configured region is overridden for them and honoured for the rest.
+		const regional = new GeminiImages({
+			backend: "vertex",
+			project: "proj-1",
+			location: "us-central1",
+			model: "flash-image-legacy",
+		})
 		regional.resolve(request).url.should.startWith("https://us-central1-aiplatform.googleapis.com/")
+
+		const regionalOnNew = new GeminiImages({ backend: "vertex", project: "proj-1", location: "us-central1" })
+		regionalOnNew.resolve(request).url.should.containEql("/locations/global/")
 
 		const key = new GeminiImages({ backend: "api-key", apiKey: "k" })
 		key.resolve(request).url.should.startWith("https://generativelanguage.googleapis.com/")
@@ -99,7 +109,7 @@ describe("the Gemini image adapter", () => {
 		const success = result as { mime: string; bytes: Buffer; model: string; resolved: string }
 		success.mime.should.equal("image/png")
 		success.bytes.toString().should.equal("pretend-png")
-		success.model.should.equal("gemini-2.5-flash-image")
+		success.model.should.equal("gemini-3.1-flash-image")
 		success.resolved.should.containEql("Do not include:")
 	})
 

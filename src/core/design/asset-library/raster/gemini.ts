@@ -51,12 +51,35 @@ export interface GeminiConfig {
 	model?: GeminiModel
 }
 
-export type GeminiModel = "flash-image" | "pro-image"
+export type GeminiModel = "flash-image" | "flash-image-legacy" | "pro-image"
 
+/**
+ * Measured 2026-09-03, and the reason the default moved.
+ *
+ * `gemini-2.5-flash-image` — the original nano banana — was the default for
+ * months, and it is where the field's refinement complaints came from: given a
+ * reference and the note "make it matte and crisp like folded sheet metal, not
+ * rolled leather", it added a literal leather seam and grain. Google now says
+ * it is no longer recommended. On the same reference with the same note,
+ * `gemini-3.1-flash-image` (nano banana 2) produced the defined crease and
+ * kept composition and light untouched — the refine contract, honoured.
+ * `gemini-3-pro-image` (nano banana pro) obeys hardest but recomposes more
+ * than a refine should, so it is offered rather than defaulted.
+ * `caret-learning/model-probe` holds the three side by side.
+ */
 const MODEL_IDS: Record<GeminiModel, string> = {
-	"flash-image": "gemini-2.5-flash-image",
-	"pro-image": "gemini-3-pro-image-preview",
+	"flash-image": "gemini-3.1-flash-image",
+	"flash-image-legacy": "gemini-2.5-flash-image",
+	"pro-image": "gemini-3-pro-image",
 }
+
+/**
+ * Vertex publishes the Gemini 3 image models on the GLOBAL endpoint only — a
+ * regional location 404s with "Publisher model not found", which reads exactly
+ * like the model does not exist (measured: us-central1 404s all three, global
+ * serves all three). A project configured for a region must still reach them.
+ */
+const GLOBAL_ONLY_MODELS = new Set(["gemini-3.1-flash-image", "gemini-3-pro-image"])
 
 /** The scope an ADC token needs to call Vertex. */
 const VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
@@ -275,7 +298,11 @@ export class GeminiImages {
 		if (this.config.backend === "api-key") {
 			return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
 		}
-		const location = this.config.location?.trim() || "global"
+		// A configured region cannot serve the Gemini 3 image models, so those
+		// route to global regardless of the project's preference — the
+		// alternative is a 404 that reads as "no such model".
+		const configured = this.config.location?.trim() || "global"
+		const location = GLOBAL_ONLY_MODELS.has(model) ? "global" : configured
 		// `global` has no regional prefix, and using one gets a 404 that reads like
 		// the model does not exist.
 		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`
