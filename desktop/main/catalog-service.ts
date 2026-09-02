@@ -24,12 +24,26 @@ import {
 	readCatalogLock,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { askUser, type InterviewPrompt } from "./interview"
 import { getPrefs, setPref } from "./prefs"
 
 export interface CatalogServiceOptions {
 	projectPath: string
 	/** Called after anything installed, so the rules index regenerates. */
 	onInstalled?(): void
+	/**
+	 * Delivers a consent prompt to the chrome, chat-placed.
+	 *
+	 * Consent used to go through `hostFor().notify` — a toast in the chrome's
+	 * DOM, bottom-right. Field failure, 2026-09-02: the canvas is a NATIVE view
+	 * layered over that DOM, so during an agent build turn — the one activity
+	 * that raises this consent — the card rendered somewhere physically
+	 * invisible, and the user watched `install_component` "hang" for 22 minutes
+	 * on a question nobody could see. Blocking asks belong on the chat's ask
+	 * surface, which replaces the composer and shows "Waiting for you" — the
+	 * exact rule the interview and generate_asset consents already follow.
+	 */
+	sendPrompt?(prompt: InterviewPrompt): void
 }
 
 /**
@@ -81,13 +95,24 @@ export class CatalogService {
 		const library = findCatalogLibrary(libraryId)
 		if (!library) return false
 
-		// No "Not now" in the actions: the notification surface has its own
-		// dismiss with that exact label, and offering it twice reads as a bug.
-		const choice = await hostFor(this.options.projectPath).notify(
-			"info",
-			`This design uses ${library.name} (${library.licence}) from the component catalog. Install it into .caret?`,
-			["Allow for this project", "Just this once"],
-		)
+		// Chat-placed, like every blocking ask (see `sendPrompt` above). The
+		// notify toast stays only as the no-chrome fallback so a headless host
+		// still gets an answerable question instead of a silent hang.
+		const choice = this.options.sendPrompt
+			? await askUser(this.options.sendPrompt, {
+					kind: "question",
+					place: "chat",
+					question: `Install ${library.name} into this project?`,
+					hint:
+						`This design uses ${library.name} (${library.licence}) from the component catalog. ` +
+						`Caret writes its vendored source into .caret/components/catalog/ — no network, no npm.`,
+					choices: ["Allow for this project", "Just this once", "Don't install"],
+				})
+			: await hostFor(this.options.projectPath).notify(
+					"info",
+					`This design uses ${library.name} (${library.licence}) from the component catalog. Install it into .caret?`,
+					["Allow for this project", "Just this once"],
+				)
 		if (choice === "Allow for this project") {
 			await setPref("catalogAllowed", [...new Set([...getPrefs().catalogAllowed, this.consentKey(libraryId)])])
 			return true

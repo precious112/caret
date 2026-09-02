@@ -123,6 +123,9 @@ export class ProjectWindow {
 			// re-import what is already installed under a different name.
 			onInstalled: () =>
 				void regenerateRulesFiles(this.projectPath).catch((err) => Logger.warn(`[window] rules regen failed: ${err}`)),
+			// Consent lands in the chat like every blocking ask; the toast path
+			// proved invisible under the native canvas view.
+			sendPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
 		})
 
 		// Constructed before the session, because registering the bridge is what
@@ -237,8 +240,7 @@ export class ProjectWindow {
 		let hasFoundation = false
 		if (await caretDirectoryExists(this.projectPath)) {
 			const tokens = await readFoundationTokens(this.projectPath)
-			hasFoundation =
-				tokens?.meta?.committed === true || Object.keys(tokens?.color?.brand?.scale ?? {}).length > 0
+			hasFoundation = tokens?.meta?.committed === true || Object.keys(tokens?.color?.brand?.scale ?? {}).length > 0
 		}
 		return {
 			path: this.projectPath,
