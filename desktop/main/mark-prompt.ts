@@ -104,7 +104,7 @@ export function targetPrompt(brief: string, palette: GeneratorPalette, direction
 		"The studio reduces that idea to its simplest, boldest geometric essence — the way iconic modernist trademarks reduce — so it reads as a designed symbol, never as a picture of the thing.",
 		direction.prompt,
 		`The whole image is exactly three flat solid colours: the mark's shapes in ${palette.brand} and ${palette.ink}, on a plain ${palette.surface} background that fills every edge of the frame.`,
-		"Every shape is a flat solid fill with clean, confident edges — the crisp look of a finished SVG file, matte and print-ready.",
+		"Every shape is a flat solid fill drawn with compass-and-ruler precision — perfectly smooth curves, straight cuts, crisp corners; the exact look of a finished SVG file, matte and print-ready.",
 		"The construction is deliberate: one consistent stroke logic throughout, optically balanced, the mark centred in the square frame filling about two thirds of it with generous even margins.",
 		"The silhouette alone is recognisable, and every element is bold enough to stay legible at 24 pixels.",
 	].join(" ")

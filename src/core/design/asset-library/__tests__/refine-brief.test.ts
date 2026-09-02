@@ -69,6 +69,17 @@ describe("refineBrief", () => {
 		assert.match(seen.prompt ?? "", /Geometry first/i)
 	})
 
+	it("bans organic vocabulary in mark rewrites — the crumbly-edge regression", async () => {
+		// Field failure, day one of the rebuild stage: the model rewrote a clean
+		// construction into "gently irregular contours" and every candidate came
+		// back with crumbly hand-drawn edges. The playbook must forbid the words.
+		const { seen, backend } = backendReturning({ prompt: "x" })
+		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "mark", text: "an ember" }, tokens: null })
+		assert.match(seen.prompt ?? "", /Mechanical precision only/i)
+		assert.match(seen.prompt ?? "", /irregular, organic, rough/i)
+		assert.match(seen.prompt ?? "", /already names shapes and how they meet/i)
+	})
+
 	it("demands positive phrasing and the user's decisions kept", async () => {
 		const { seen, backend } = backendReturning({ prompt: "x" })
 		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "image", text: "a mug" }, tokens: null })
