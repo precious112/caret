@@ -214,6 +214,24 @@ export async function recipeVariants(
  * collapsing them into "generation failed" would throw away three good images
  * to report one bad one.
  */
+/**
+ * What the style anchor is allowed to contribute.
+ *
+ * Written as a hard split because the failure it fixes was total: the previous
+ * wording ("this must look shot in the same session") produced a second copy of
+ * the reference photograph, and every framing decision the user had just made
+ * in the clarify questions was silently discarded. The description has to be
+ * named as the authority on content, in the same breath as the reference is
+ * named as the authority on light.
+ */
+export const ANCHOR_PREAMBLE = [
+	"The attached image is a COLOUR AND LIGHT REFERENCE ONLY — an earlier photograph from the same campaign.",
+	"Take from it exactly three things: the quality and direction of the light, the colour grade, and the black level.",
+	"Take NOTHING else from it. Its composition, camera distance, crop, subject size, subject position and camera angle are not yours to copy.",
+	"Everything about what is photographed and how it is framed comes only from the description below, and where the two disagree the description wins.",
+	"This is a different photograph from the same shoot, not another version of the reference.",
+].join(" ")
+
 async function generateRasterVariants(
 	projectPath: string,
 	recipe: AssetRecipe,
@@ -249,10 +267,15 @@ async function generateRasterVariants(
 		// the whole retry budget is spent; `retryable` distinguishes "exhausted
 		// right now, worth re-running later" from a refusal that never will be.
 		const result = await client.generate({
-			prompt: anchor
-				? "Match the lighting, colour grade and mood of the reference image exactly — it is an earlier photograph " +
-					`from the same campaign, and this one must look shot in the same session.\n\n${request.prompt}`
-				: request.prompt,
+			// The anchor is a GRADE reference, and saying so is load-bearing.
+			// Measured in the field on its first real use: "match the lighting,
+			// colour grade and mood — this must look shot in the same session"
+			// returned a near-duplicate of the reference, ignoring a described
+			// close-up, a described diagonal, and the clarify answers that asked
+			// for both. An image model reads an attached picture as "make one of
+			// these"; only an explicit split — take the light, take nothing else —
+			// leaves the description in charge of what is actually photographed.
+			prompt: anchor ? `${ANCHOR_PREAMBLE}\n\n${request.prompt}` : request.prompt,
 			avoid: request.avoid,
 			aspect: request.aspect,
 			...(anchor ? { references: [{ mime: anchor.mime, base64: anchor.bytes.toString("base64") }] } : {}),

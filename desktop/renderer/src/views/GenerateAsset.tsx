@@ -478,9 +478,9 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 									type="checkbox"
 								/>
 								<span>
-									Match the look of <code className="text-xs">{anchorTag}</code>
+									Match the light of <code className="text-xs">{anchorTag}</code>
 									<span className="ml-2 text-xs text-shell-muted">
-										Same light, same grade — so the photos read as one set.
+										Borrows its lighting and grade only — the framing still comes from what you describe.
 									</span>
 								</span>
 							</label>
