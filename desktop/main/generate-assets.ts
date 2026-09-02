@@ -453,7 +453,17 @@ async function acceptRasterVariant(
 	}
 
 	const palette = derivePalette(tokens)
-	const [composed] = composeVariants({ recipe, tokens, aspect, answers, count: variant + 1 }).slice(variant)
+	// Refined takes carry variant numbers >= 100 so no fresh round can collide
+	// with them — but composeVariants clamps its count, so composing "at" that
+	// index is out of bounds, and the first ever refined-take save crashed here
+	// on composed.request (field failure, 2026-09-02). A refined take has no
+	// composition of its own: it was made from a reference and a note, and its
+	// true record is held.resolved. Every variant of one request shares aspect,
+	// size and transparency, so the last composable variant's metadata is the
+	// honest stand-in.
+	const compositions = composeVariants({ recipe, tokens, aspect, answers, count: Math.min(variant + 1, RASTER_VARIANT_COUNT) })
+	const composed = compositions[Math.min(variant, compositions.length - 1)]
+	if (!composed) return { ok: false, error: "That option could not be reconstructed. Generate again and pick one." }
 
 	// Only now, on the one the user actually chose. Post-processing every variant
 	// would spend the work on three pictures nobody keeps. (Keying already

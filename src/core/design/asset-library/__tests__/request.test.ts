@@ -10,7 +10,8 @@
  * So every test here starts from something somebody actually wants to make.
  */
 import { strict as assert } from "assert"
-import { clarifyRequest, composeAssetRequest, SHARED_AVOID } from "../request"
+import { composeVariants } from "../index"
+import { clarifyRequest, composeAssetRequest, recipeForRequest, SHARED_AVOID } from "../request"
 import type { GeneratorPalette } from "../types"
 
 const PALETTE: GeneratorPalette = {
@@ -245,5 +246,35 @@ describe("clarifyRequest", () => {
 		})
 		assert.equal(result.sufficient, true, "a missing backend must not make the generator unusable")
 		assert.equal(result.questions.length, 0)
+	})
+})
+
+describe("accepting a refined take", () => {
+	// Field failure, 2026-09-02: refined takes carry variant numbers >= 100 so
+	// fresh rounds cannot collide with them, but composeVariants clamps count —
+	// so composing "at" a refined index is out of bounds, and the first refined
+	// save ever attempted crashed on composed.request. The accept path now
+	// composes within the clamp and falls back to the last composable variant.
+	// These pin both facts that fix depends on.
+	it("composeVariants clamps its count instead of composing 100 variants", () => {
+		const recipe = recipeForRequest({ kind: "image", text: "a paperclip" })
+		const variants = composeVariants({ recipe, tokens: null, aspect: "3:2", answers: {}, count: 101 })
+		assert.ok(variants.length <= 24, `expected a clamped count, got ${variants.length}`)
+		assert.ok(variants.length > 0)
+	})
+
+	it("the fallback index resolves a composition for a refined variant number", () => {
+		const recipe = recipeForRequest({ kind: "image", text: "a paperclip" })
+		const refinedVariant = 100
+		const compositions = composeVariants({
+			recipe,
+			tokens: null,
+			aspect: "3:2",
+			answers: {},
+			count: Math.min(refinedVariant + 1, 4),
+		})
+		const composed = compositions[Math.min(refinedVariant, compositions.length - 1)]
+		assert.ok(composed, "a refined take must still resolve metadata to be saveable")
+		assert.equal(composed.request.lane, "raster")
 	})
 })
