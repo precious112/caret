@@ -96,12 +96,12 @@ function WeightRow({
 	label,
 	choices,
 	selected,
-	onPick,
+	onToggle,
 }: {
 	label: string
 	choices: number[]
-	selected: number
-	onPick(weight: number): void
+	selected: number[]
+	onToggle(weight: number): void
 }) {
 	return (
 		<div className="flex items-center gap-3">
@@ -110,12 +110,12 @@ function WeightRow({
 				{choices.map((weight) => (
 					<button
 						className={`px-2 py-1 text-xs rounded-md border transition-colors ${
-							selected === weight
+							selected.includes(weight)
 								? "border-button-background bg-button-background text-button-foreground"
 								: "border-input bg-input-background text-foreground hover:bg-input-background/80"
 						}`}
 						key={weight}
-						onClick={() => onPick(weight)}
+						onClick={() => onToggle(weight)}
 						style={{ fontWeight: weight }}>
 						{weight}
 					</button>
@@ -147,14 +147,21 @@ export function TypographyStep({ tokens, onChange }: Props) {
 		[tokens, onChange],
 	)
 
-	const setWeights = useCallback(
+	const toggleWeight = useCallback(
 		(role: "display" | "body", weight: number) => {
 			const weights = {
 				display: tokens.typography.weights?.display ?? [600],
 				body: tokens.typography.weights?.body ?? [400, 500],
 			}
-			// One weight per role in the editor; body always keeps 500 for emphasis.
-			weights[role] = role === "body" ? [...new Set([weight, 500])].sort((a, b) => a - b) : [weight]
+			// Multi-select per role: the token model carries arrays, the Google
+			// Fonts import fetches every chosen weight, and a single-weight picker
+			// here was quietly stricter than the interview (which sets several).
+			// The last weight standing cannot be removed — a role with no weight
+			// renders as the browser's fake bold.
+			const current = weights[role]
+			const next = current.includes(weight) ? current.filter((w) => w !== weight) : [...current, weight]
+			if (next.length === 0) return
+			weights[role] = next.sort((a, b) => a - b)
 			onChange({ ...tokens, typography: { ...tokens.typography, weights } })
 		},
 		[tokens, onChange],
@@ -216,15 +223,19 @@ export function TypographyStep({ tokens, onChange }: Props) {
 				<WeightRow
 					choices={DISPLAY_WEIGHTS}
 					label="Headings"
-					onPick={(weight) => setWeights("display", weight)}
-					selected={tokens.typography.weights?.display?.[0] ?? 600}
+					onToggle={(weight) => toggleWeight("display", weight)}
+					selected={tokens.typography.weights?.display ?? [600]}
 				/>
 				<WeightRow
 					choices={BODY_WEIGHTS}
 					label="Body"
-					onPick={(weight) => setWeights("body", weight)}
-					selected={tokens.typography.weights?.body?.[0] ?? 400}
+					onToggle={(weight) => toggleWeight("body", weight)}
+					selected={tokens.typography.weights?.body ?? [400, 500]}
 				/>
+				<p className="text-[10px] text-muted-foreground">
+					Pick every weight the design may use — each one is fetched from Google Fonts; a weight you skip would render
+					as fake bold.
+				</p>
 			</div>
 
 			<div className="flex flex-col gap-2">

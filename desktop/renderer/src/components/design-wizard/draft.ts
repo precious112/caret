@@ -29,7 +29,7 @@ export type FoundationTokensDraft = {
 		scale: Record<string, string>
 		weights?: { display: number[]; body: number[] }
 	}
-	spacing: { baseUnit: 4 | 8; scale: number[] }
+	spacing: { baseUnit: number; scale: number[] }
 	radius: { character: string; scale: number[] }
 	elevation?: { character: "flat" | "subtle" | "pronounced" }
 	border?: { width: number; focusRing: { width: number } }
@@ -72,7 +72,9 @@ export function draftFromSaved(saved: Record<string, any>): FoundationTokensDraf
 		spacing: { ...prev.spacing, ...saved.spacing },
 		radius: { ...prev.radius, ...saved.radius },
 		elevation: saved.elevation ? { character: saved.elevation.character } : undefined,
-		border: saved.border ? { width: saved.border.width, focusRing: { width: saved.border.focusRing?.width ?? 2 } } : undefined,
+		border: saved.border
+			? { width: saved.border.width, focusRing: { width: saved.border.focusRing?.width ?? 2 } }
+			: undefined,
 	}
 }
 
@@ -81,10 +83,7 @@ export function draftFromSaved(saved: Record<string, any>): FoundationTokensDraf
  * everything else in the file rides through untouched. A role the user removed
  * must actually go, so absent draft roles are deleted.
  */
-export function mergeDraftOverSaved(
-	savedRaw: Record<string, any> | null,
-	tokens: FoundationTokensDraft,
-): Record<string, any> {
+export function mergeDraftOverSaved(savedRaw: Record<string, any> | null, tokens: FoundationTokensDraft): Record<string, any> {
 	const merged: Record<string, any> = {
 		...savedRaw,
 		...tokens,

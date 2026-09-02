@@ -38,7 +38,68 @@ export const WIZARD_STEPS = [
 
 export type WizardStepId = (typeof WIZARD_STEPS)[number]["id"]
 
-export const VIBE_TAGS = ["modern", "playful", "dense", "editorial", "enterprise", "minimal", "organic", "technical"] as const
+/**
+ * The full tag vocabulary the foundation library recognises — kept in lockstep
+ * with `LIBRARY_TAGS` (a unit test pins the two together). This was an
+ * eight-entry subset for months, which quietly made the manual door the
+ * COARSER one: tags drive asset-recipe narrowing and motion derivation, and
+ * the person who chose "handle everything yourself" could express less than
+ * the interview could. Found during the Fold manual-lane run.
+ */
+export const VIBE_TAGS = [
+	"agency",
+	"blog",
+	"bold",
+	"calm",
+	"clean",
+	"considered",
+	"consumer",
+	"content",
+	"craft",
+	"creative",
+	"crypto",
+	"dark",
+	"dashboard",
+	"data",
+	"dense",
+	"developer",
+	"documentation",
+	"editorial",
+	"enterprise",
+	"expressive",
+	"fintech",
+	"flexible",
+	"friendly",
+	"geometric",
+	"government",
+	"healthcare",
+	"human",
+	"internal",
+	"launch",
+	"loud",
+	"marketing",
+	"minimal",
+	"mobile",
+	"modern",
+	"neutral",
+	"organic",
+	"playful",
+	"precise",
+	"premium",
+	"product",
+	"publishing",
+	"reading",
+	"retro",
+	"saas",
+	"serious",
+	"startup",
+	"technical",
+	"trustworthy",
+	"unusual",
+	"utility",
+	"warm",
+	"wellness",
+] as const
 
 export const NEUTRAL_CHARACTERS = ["cool", "warm", "true", "slight-tint"] as const
 export type NeutralCharacter = (typeof NEUTRAL_CHARACTERS)[number]

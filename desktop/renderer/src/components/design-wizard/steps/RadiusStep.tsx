@@ -33,6 +33,20 @@ export function RadiusStep({ tokens, onChange }: Props) {
 		[tokens, onChange],
 	)
 
+	// The character picks a starting point; the values themselves stay
+	// editable. "Pick one of four moods" was quietly the whole story before,
+	// and a chair whose bends are exactly 6px could not say so in the manual
+	// lane — the one lane that exists for people with exact opinions.
+	const setStep = useCallback(
+		(index: number, value: number) => {
+			if (!Number.isFinite(value) || value < 0 || value > 64) return
+			const scale = [...tokens.radius.scale]
+			scale[index] = value
+			onChange({ ...tokens, radius: { ...tokens.radius, scale } })
+		},
+		[tokens, onChange],
+	)
+
 	const labels = ["none", "sm", "md", "lg", "xl", "full"]
 
 	return (
@@ -53,10 +67,11 @@ export function RadiusStep({ tokens, onChange }: Props) {
 						</button>
 					))}
 				</div>
+				<p className="text-[10px] text-muted-foreground">A starting point — every value below is yours to change.</p>
 			</div>
 
 			<div className="flex flex-col gap-2">
-				<label className="text-xs font-medium text-muted-foreground">Radius Preview</label>
+				<label className="text-xs font-medium text-muted-foreground">Radius Values</label>
 				<div className="flex gap-3 flex-wrap">
 					{tokens.radius.scale.map((value, i) => (
 						<div className="flex flex-col items-center gap-1" key={i}>
@@ -65,7 +80,19 @@ export function RadiusStep({ tokens, onChange }: Props) {
 								style={{ borderRadius: value === 9999 ? "9999px" : `${value}px` }}
 							/>
 							<span className="text-[9px] text-muted-foreground">{labels[i]}</span>
-							<span className="text-[9px] text-muted-foreground">{value === 9999 ? "full" : `${value}px`}</span>
+							{value === 9999 || i === 0 ? (
+								<span className="text-[9px] text-muted-foreground">{value === 9999 ? "full" : "0px"}</span>
+							) : (
+								<input
+									className="w-12 rounded border border-input bg-input-background px-1 py-0.5 text-center text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+									data-testid={`radius-step-${labels[i]}`}
+									max={64}
+									min={0}
+									onChange={(e) => setStep(i, Number(e.target.value))}
+									type="number"
+									value={value}
+								/>
+							)}
 						</div>
 					))}
 				</div>

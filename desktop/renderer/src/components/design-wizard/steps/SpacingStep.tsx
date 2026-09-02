@@ -12,16 +12,23 @@ type Props = {
  * (multiples of 8 feel airier than multiples of 4), not a factor the entries
  * are multiplied by; this component used to multiply and showed "2 → 16px",
  * a step no page would ever get.
+ *
+ * The unit is a free number now, not a 4-or-8 binary — the ladder derives
+ * from one shared shape, which reproduces the old presets exactly at 4 and 8
+ * and gives every other rhythm the same proportions. The binary was another
+ * place the manual door was quietly coarser than the token model it writes.
  */
-const LADDERS: Record<4 | 8, number[]> = {
-	4: [0, 1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64],
-	8: [0, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128],
+const LADDER_SHAPE = [0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16]
+
+function ladderFor(unit: number): number[] {
+	return [...new Set(LADDER_SHAPE.map((step) => Math.round(unit * step)))]
 }
 
 export function SpacingStep({ tokens, onChange }: Props) {
 	const handleBaseUnitChange = useCallback(
-		(baseUnit: 4 | 8) => {
-			onChange({ ...tokens, spacing: { baseUnit, scale: LADDERS[baseUnit] } })
+		(baseUnit: number) => {
+			if (!Number.isFinite(baseUnit) || baseUnit < 2 || baseUnit > 16) return
+			onChange({ ...tokens, spacing: { baseUnit, scale: ladderFor(baseUnit) } })
 		},
 		[tokens, onChange],
 	)
@@ -30,7 +37,7 @@ export function SpacingStep({ tokens, onChange }: Props) {
 		<div className="flex flex-col gap-5">
 			<div className="flex flex-col gap-2">
 				<label className="text-sm font-medium text-foreground">Rhythm</label>
-				<div className="flex gap-3">
+				<div className="flex items-center gap-3">
 					{([4, 8] as const).map((unit) => (
 						<button
 							className={`px-4 py-2 text-sm rounded-md border transition-colors ${
@@ -43,6 +50,16 @@ export function SpacingStep({ tokens, onChange }: Props) {
 							{unit}px — {unit === 4 ? "tighter" : "airier"}
 						</button>
 					))}
+					<input
+						className="w-16 rounded-md border border-input bg-input-background px-2 py-2 text-center text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+						data-testid="spacing-unit-input"
+						max={16}
+						min={2}
+						onChange={(e) => handleBaseUnitChange(Number(e.target.value))}
+						type="number"
+						value={tokens.spacing.baseUnit}
+					/>
+					<span className="text-xs text-muted-foreground">px, 2–16</span>
 				</div>
 				<p className="text-[10px] text-muted-foreground">
 					The grid gaps snap to. Larger rhythm means more breathing room at every step.
