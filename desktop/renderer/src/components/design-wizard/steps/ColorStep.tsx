@@ -8,6 +8,35 @@ type Props = {
 	onChange: (tokens: FoundationTokensDraft) => void
 }
 
+/**
+ * A typed hex beside every swatch. The brand colour always had one; the
+ * supporting, accent and semantic colours were native swatches only, which
+ * makes an exact hex impossible to enter without the OS eyedropper — found in
+ * the field by a user holding a written-down palette. Commits on Enter or
+ * blur, and only a valid six-digit hex commits; anything else is left in the
+ * box uncommitted rather than corrected behind the user's back.
+ */
+function HexField({ value, onCommit, testid }: { value: string; onCommit(hex: string): void; testid?: string }) {
+	const commit = (raw: string) => {
+		let hex = raw.trim()
+		if (!hex.startsWith("#")) hex = `#${hex}`
+		if (/^#[0-9a-fA-F]{6}$/.test(hex)) onCommit(hex.toLowerCase())
+	}
+	return (
+		<input
+			className="w-24 px-2 py-1 text-sm font-mono rounded border border-input bg-input-background text-foreground"
+			data-testid={testid}
+			defaultValue={value}
+			key={value}
+			onBlur={(e) => commit(e.target.value)}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") commit(e.currentTarget.value)
+			}}
+			placeholder="#000000"
+		/>
+	)
+}
+
 export function ColorStep({ tokens, onChange }: Props) {
 	const [generating, setGenerating] = useState(false)
 
@@ -90,17 +119,6 @@ export function ColorStep({ tokens, onChange }: Props) {
 
 	const scaleEntries = Object.entries(tokens.color.brand.scale || {})
 
-	const handleHexInput = useCallback(
-		(raw: string) => {
-			let hex = raw.trim()
-			if (!hex.startsWith("#")) hex = "#" + hex
-			if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-				handleBrandColorChange(hex)
-			}
-		},
-		[handleBrandColorChange],
-	)
-
 	return (
 		<div className="flex flex-col gap-5">
 			<div className="flex flex-col gap-2">
@@ -112,16 +130,7 @@ export function ColorStep({ tokens, onChange }: Props) {
 						type="color"
 						value={tokens.color.brand.seed}
 					/>
-					<input
-						className="w-24 px-2 py-1 text-sm font-mono rounded border border-input bg-input-background text-foreground"
-						defaultValue={tokens.color.brand.seed}
-						key={tokens.color.brand.seed}
-						onBlur={(e) => handleHexInput(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") handleHexInput(e.currentTarget.value)
-						}}
-						placeholder="#000000"
-					/>
+					<HexField onCommit={handleBrandColorChange} testid="color-brand-hex" value={tokens.color.brand.seed} />
 					{generating && <span className="text-xs text-muted-foreground">Generating scale...</span>}
 				</div>
 			</div>
@@ -159,7 +168,11 @@ export function ColorStep({ tokens, onChange }: Props) {
 										type="color"
 										value={entry.seed}
 									/>
-									<span className="text-xs font-mono text-muted-foreground">{entry.seed}</span>
+									<HexField
+										onCommit={(hex) => handleRoleChange(role, hex)}
+										testid={`color-${role}-hex`}
+										value={entry.seed}
+									/>
 									<button
 										className="text-xs text-muted-foreground hover:text-foreground hover:underline"
 										onClick={() => removeRole(role)}>
@@ -227,7 +240,12 @@ export function ColorStep({ tokens, onChange }: Props) {
 								type="color"
 								value={tokens.color.semantic[key]}
 							/>
-							<span className="text-xs text-foreground capitalize">{key}</span>
+							<span className="w-14 text-xs text-foreground capitalize">{key}</span>
+							<HexField
+								onCommit={(hex) => handleSemanticChange(key, hex)}
+								testid={`color-semantic-${key}-hex`}
+								value={tokens.color.semantic[key]}
+							/>
 						</div>
 					))}
 				</div>
