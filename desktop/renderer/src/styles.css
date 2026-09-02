@@ -43,6 +43,23 @@
 	--color-primary-foreground: #ffffff;
 	--color-ring: #0b7aff;
 	--color-error: #e5484d;
+
+	/*
+	 * Second field-measured instance of the same porting hole (2026-09-02):
+	 * the vibe-tag picker's SELECTED state is `bg-badge-background`, which was
+	 * never aliased — a selected tag painted transparent, indistinguishable
+	 * from unselected, and the user reported "clicking on tags does not work".
+	 * The click always worked; the state was invisible. Aliased with the rest
+	 * of the badge vocabulary so no other variant is waiting to repeat this.
+	 */
+	--color-badge-background: #0b7aff;
+	--color-badge-foreground: #ffffff;
+	--color-success: #22c55e;
+	--color-warning: #e0a83a;
+	--color-error-icon: #e5484d;
+	--color-link: #2e8bff;
+	--color-link-hover: #5aa2ff;
+	--color-background: #0b0d12;
 }
 
 /* The same porting story for INLINE styles: a few components reference
