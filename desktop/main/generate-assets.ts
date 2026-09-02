@@ -165,8 +165,15 @@ const pendingRaster = new Map<
 	}
 >()
 
-/** Ten minutes. Long enough to think, short enough not to be a memory leak. */
-const PENDING_TTL_MS = 10 * 60 * 1000
+/**
+ * One hour. This was ten minutes with the note "long enough to think" — and a
+ * real user thought for ten minutes and four seconds: generated a round,
+ * asked someone which take to pick, decided, and met the expiry refusal on a
+ * picture they had already paid for. Deliberation before spending is the
+ * normal case, not a leak. A round is a few megabytes; an hour of holding it
+ * is cheaper than one regenerated round, and close-of-picker still discards.
+ */
+const PENDING_TTL_MS = 60 * 60 * 1000
 
 function pendingKey(projectPath: string, recipeId: string, aspect: string, variant: number): string {
 	return `${projectPath}::${recipeId}::${aspect}::${variant}`
