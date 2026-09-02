@@ -29,6 +29,7 @@
  * suffix could get added.
  */
 import { fetch } from "@/shared/net"
+import { Logger } from "@/shared/services/Logger"
 
 /** Which backend a configuration selects. */
 export type GeminiBackend = "api-key" | "vertex"
@@ -176,7 +177,7 @@ export class GeminiImages {
 		try {
 			headers = await this.authHeaders()
 		} catch (err) {
-			return { ok: false, reason: `Could not authenticate: ${message(err)}`, retryable: false }
+			return { ok: false, reason: authFailureReason(message(err)), retryable: false }
 		}
 
 		const body = {
@@ -341,4 +342,26 @@ function extractError(body: string): string {
 
 function message(err: unknown): string {
 	return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * An auth failure as a sentence a person can act on.
+ *
+ * The raw failure is Google's OAuth JSON — `{"error":"invalid_grant",
+ * "error_description":"reauth related error (invalid_rapt)"…}` — and it used
+ * to ship to the UI verbatim, three copies of it overflowing the take cards
+ * (field screenshot, 2026-09-02, the user's exact words: "what's this?").
+ * Google's session expiry is a routine event with a routine fix, and the
+ * message's job is to name the fix. The raw detail still goes to the log.
+ */
+function authFailureReason(detail: string): string {
+	Logger.warn(`[gemini] auth failure: ${detail}`)
+	if (detail.includes("invalid_rapt") || detail.includes("invalid_grant")) {
+		return (
+			"Your Google Cloud sign-in has expired. Run `gcloud auth application-default login` in a terminal, " +
+			"then generate again — or add a Gemini API key in Settings to stop depending on the sign-in."
+		)
+	}
+	const brief = detail.length > 160 ? `${detail.slice(0, 160)}…` : detail
+	return `Could not authenticate with the image service: ${brief}`
 }

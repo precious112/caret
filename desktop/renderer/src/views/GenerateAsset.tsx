@@ -690,7 +690,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 									// them into one message would throw away good images to
 									// report a bad one.
 									<p
-										className="rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
+										className="min-w-0 overflow-hidden rounded-lg border border-amber-500/40 p-3 text-xs break-words [overflow-wrap:anywhere] text-shell-muted"
 										data-generate-variant-error={variant.variant}
 										key={variant.variant}>
 										{variant.error}
@@ -1040,7 +1040,7 @@ function MarkFlow({
 						{targets.map((target) =>
 							target.error ? (
 								<p
-									className="rounded-lg border border-amber-500/40 p-3 text-xs text-shell-muted"
+									className="min-w-0 overflow-hidden rounded-lg border border-amber-500/40 p-3 text-xs break-words [overflow-wrap:anywhere] text-shell-muted"
 									data-mark-target-error={target.variant}
 									key={target.variant}>
 									{target.error}
@@ -1723,7 +1723,7 @@ function Model3dFlow({
 					{sourceOptions.map((option) =>
 						option.error ? (
 							<p
-								className="rounded-lg border border-amber-500/40 p-2 text-[11px] text-shell-muted"
+								className="min-w-0 overflow-hidden rounded-lg border border-amber-500/40 p-2 text-[11px] break-words [overflow-wrap:anywhere] text-shell-muted"
 								key={option.variant}>
 								{option.error}
 							</p>
