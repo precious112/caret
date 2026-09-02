@@ -21,10 +21,12 @@
  *
  * The playbook differs per kind because the craft differs per kind: a logo
  * brief is geometry, a photograph brief is light, a 3D brief is one clean
- * object. Constraints are stated POSITIVELY throughout — the image model has
- * no negative-prompt channel and "do not" lists measurably lose to positive
- * description (Google's own prompting guidance, confirmed in the field when
- * a banned glow shipped anyway).
+ * object. The governing principle, ordered above all craft: **clarification
+ * adds and sharpens; it never subtracts.** Grammar fixed, vague words made
+ * precise, page-placement answers translated into composition — and every
+ * piece of information the user supplied carried through, exclusions
+ * included. Positive phrasing is preferred because ban-lists measurably lose
+ * with the image model, but a constraint is rephrased, never dropped.
  *
  * **A failure here is a skipped step, never a blocked user.** No backend, a
  * timeout, malformed output — all of them mean generate with the words we
@@ -52,68 +54,75 @@ const REFINE_SCHEMA = {
 } as const
 
 /**
- * The craft each kind's brief is rebuilt with.
+ * The craft each kind's brief is written with.
  *
- * These are the practices that survived measurement — the probe runs in
- * caret-learning/mark-probe and the published prompting guidance they agree
- * with — not taste assertions.
+ * Deliberately stated as principles of the craft, never as reactions to past
+ * failures: a rule phrased around one incident's vocabulary teaches the model
+ * that incident instead of the craft, and this prompt's first version did
+ * exactly that.
  */
 const PLAYBOOKS: Record<AssetRequest["kind"], string> = {
 	mark: [
-		"This brief is for a LOGO MARK. The generator downstream already fixes the colours, the background and the flat-vector",
-		"treatment from the project's design system — so the brief you write is ONLY the construction of the symbol itself.",
-		"Rules of the craft:",
-		"- Reduce the idea to a symbol. Never describe the object; describe the finished trademark. A brief that names a",
-		"  thing gets a drawing of that thing; a brief that names a construction gets a mark.",
-		"- Geometry first: state exactly which shapes, how many, and how they meet — using whatever primitives fit THIS idea.",
-		"  Every shape is named with a count and a relationship, never as 'an abstract shape' or 'a dynamic form'.",
-		"- The construction must be invented fresh from the user's idea. Never fall back on a stock composition; the geometry",
-		"  has to come from what THIS subject reduces to, so two different ideas must never produce the same brief.",
-		"- Mechanical precision only: perfect circles, true arcs, straight cuts, crisp corners. Never describe any edge or",
-		"  contour as irregular, organic, rough, soft, wobbly, hand-drawn or textured — that vocabulary produces amateur",
-		"  marks — unless the user themselves asked for that character in their own words.",
-		"- If the request already names shapes and how they meet, it IS the brief: return it with at most trivial polish.",
-		"- One idea, executed once. A mark with two ideas is two bad marks.",
-		"- The silhouette alone must carry it, and every element must survive at 20 pixels: no fine detail, no thin lines.",
-		"- Say where negative space works FOR the mark if it does.",
+		"This brief is for a LOGO MARK. The generator downstream already fixes the colours, the background and the",
+		"flat-vector treatment from the project's design system, so the brief is ONLY the construction of the symbol:",
+		"- Reduce the idea to a symbol: name the shapes, their count, and how they meet ('two overlapping circles',",
+		"  'one ring broken at the top') rather than describing the object the idea comes from.",
+		"- Derive the geometry from this subject. A construction that could belong to any brand is a miss.",
+		"- Edges and curves are drawn with compass-and-ruler precision - perfect circles, true arcs, straight cuts,",
+		"  crisp corners - unless the user asked for a hand-drawn character in their own words.",
+		"- One idea, executed once. The silhouette alone must carry it, and every element must survive at 20 pixels.",
+		"- Use negative space deliberately where it serves the mark.",
 	].join("\n"),
 	image: [
-		"This brief is for a PHOTOGRAPH. The generator downstream already supplies the project's palette and key as defaults —",
-		"the brief you write is the shot itself. Rules of the craft:",
-		"- One subject, and say exactly what is in the frame — then say what fills the rest of the frame in positive words",
-		"  ('behind it only darkness', 'a vast empty white wall'), never as a list of things to exclude.",
+		"This brief is for a PHOTOGRAPH. The generator downstream already supplies the project's palette and key as",
+		"defaults, so the brief is the shot itself:",
+		"- One subject, and say exactly what is in the frame - then say what fills the rest of the frame in positive",
+		"  words ('behind it only darkness', 'a vast empty white wall').",
 		"- Give it a light: one named source, its direction and temperature, and what happens where it does not reach.",
 		"- Give it a camera when it helps: lens feel (macro, 85mm portrait, wide), distance, angle.",
-		"- Name the surfaces and materials that matter — they are what makes a picture feel expensive.",
-		"- Keep the user's mood words; sharpen vague ones into physical ones ('cozy' → 'one warm low light, deep soft shadows').",
+		"- Name the surfaces and materials that matter - they are what makes a picture feel expensive.",
+		"- Keep the user's mood words; sharpen vague ones into physical ones ('cozy' becomes 'one warm low light,",
+		"  deep soft shadows').",
 	].join("\n"),
 	texture: [
-		"This brief is for a repeating TEXTURE. Keep it about the material and the scale of its detail, evenly distributed,",
-		"with no focal point and no single object — it must read as a surface, not a picture.",
+		"This brief is for a repeating TEXTURE. Keep it about the material and the scale of its detail, evenly",
+		"distributed, with no focal point and no single object - it must read as a surface, not a picture.",
 	].join("\n"),
 	object3d: [
-		"This brief is for the SOURCE IMAGE of a 3D MODEL — a photograph of one object that reconstruction will turn into a",
-		"mesh. Rules of the craft:",
-		"- One complete object, nothing else. Describe its exact form the way an industrial designer would: primary volumes,",
-		"  profile, proportions, how parts meet.",
-		"- Name the materials and finishes (matte black aluminium, brushed steel) — the texture comes from them.",
-		"- The object carries NO text, no labels, no fine printed detail: reconstruction smears print. If the user asked for",
-		"  branding, keep it as simple geometry (an embossed shape), never lettering.",
-		"- Solid, self-supporting, sculptural. Thin wires, glass and fur reconstruct badly; steer the form toward what a mesh",
-		"  can hold without changing what the user asked for.",
+		"This brief is for the SOURCE IMAGE of a 3D MODEL - a photograph of one object that reconstruction will turn",
+		"into a mesh:",
+		"- One complete object, fully inside the frame, nothing else pictured. Describe its exact form the way an",
+		"  industrial designer would: primary volumes, profile, proportions, how parts meet.",
+		"- Name the materials and finishes (matte black aluminium, brushed steel) - the texture comes from them.",
+		"- The brief must state that the object carries no text, lettering or printed detail: reconstruction smears",
+		"  print. Branding the user asked for becomes simple embossed geometry.",
+		"- Favour solid, self-supporting forms. Thin wires, glass and fur reconstruct badly; steer the form toward",
+		"  what a mesh can hold without changing what the user asked for.",
 	].join("\n"),
 	shader: [
-		"This brief is for an ANIMATED BACKGROUND SHADER, written as what a viewer sees. Rules of the craft:",
-		"- Describe the motion's speed and restraint explicitly — the best background motion is noticed on the second look.",
+		"This brief is for an ANIMATED BACKGROUND SHADER, written as what a viewer sees:",
+		"- Describe the motion's speed and restraint explicitly - the best background motion is noticed on the",
+		"  second look.",
 		"- Name what moves and what stays still; one kind of motion, not three.",
-		"- If text will sit on it, say so and say where it must stay quiet enough to read over.",
+		"- If page text will sit over it, name where the motion must stay quiet - the text itself is HTML, never",
+		"  part of the shader.",
 	].join("\n"),
 }
 
 /**
- * Rebuilds the request into a brief a professional would have written.
+ * Rebuilds the request into the brief a professional would have written.
  *
- * Returns null on ANY failure — the caller generates with the raw text, and
+ * The prompt's architecture follows one principle the field taught twice:
+ * **clarification adds and sharpens; it never subtracts.** The first version
+ * asked for an improved rewrite under a 90-word cap and got exactly what that
+ * asks for - briefs that fit the cap by dropping the user's constraints ("no
+ * hardware, no text" vanished from a 3D brief), and page-placement answers
+ * painted into the picture as literal headlines, because the answers arrived
+ * stripped of their questions. The contract below is ordered above the craft,
+ * the cap is gone, and answers travel WITH their questions so the model can
+ * tell a fact about the page from a fact about the picture.
+ *
+ * Returns null on ANY failure - the caller generates with the raw text, and
  * nobody waits on a step that only exists to improve things.
  */
 export async function refineBrief(input: {
@@ -124,28 +133,51 @@ export async function refineBrief(input: {
 	model?: string
 }): Promise<RefinedBrief | null> {
 	const { request } = input
-	const answers = Object.values(request.answers ?? {})
-		.map((answer) => answer.trim())
-		.filter(Boolean)
+	// Keys are the clarify QUESTIONS where the caller has them (the generate
+	// surface passes question text; older callers pass opaque ids, which format
+	// the same way and simply carry less context).
+	const exchanges = Object.entries(request.answers ?? {})
+		.map(([question, answer]) => ({ question: question.trim(), answer: answer.trim() }))
+		.filter((entry) => entry.answer.length > 0)
 
 	const vibe = input.tokens?.vibe.tags?.join(", ") || "not yet decided"
 	const prompt = [
-		"You are a senior art director rewriting a request into the brief a professional would have written.",
+		"You are a senior art director. Rewrite the request below into the brief a professional would hand an",
+		"image maker, folding in what the clarifying answers settled.",
 		"",
-		`The request: "${request.text.trim()}"`,
-		...(answers.length > 0 ? ["They were asked what was missing, and answered:", ...answers.map((a) => `- ${a}`)] : []),
-		`The project's character: ${vibe}.`,
+		`THE REQUEST: "${request.text.trim()}"`,
+		...(exchanges.length > 0
+			? [
+					"",
+					"CLARIFYING QUESTIONS AND THE USER'S ANSWERS:",
+					...exchanges.flatMap((entry) =>
+						entry.question ? [`Q: ${entry.question}`, `A: ${entry.answer}`] : [`A: ${entry.answer}`],
+					),
+				]
+			: []),
+		`THE PROJECT'S CHARACTER: ${vibe}.`,
 		"",
+		"THE CONTRACT - these outrank everything below:",
+		"1. Preserve every piece of information. Every subject, constraint, exclusion, colour, material, framing",
+		"   and proportion in the request and answers appears in your brief - reworded freely, dropped never.",
+		"   Fixing grammar and replacing vague words with precise ones is your job; losing a detail is failure.",
+		"2. An exclusion is a decision. Where the user ruled something out ('no hardware', 'no text'), carry the",
+		"   exclusion - as a positive statement when one exists ('one uninterrupted surface'), plainly stated",
+		"   when not. Never delete a constraint because it is phrased negatively.",
+		"3. Facts about the page shape the frame, never the picture. Answers about where the asset will live - a",
+		"   hero, a banner, a tile, text sitting over it - become aspect, composition and reserved empty space",
+		"   only. Text that will sit over the image is added later in HTML: write 'a calm empty area with nothing",
+		"   in it', and never place words, headlines or lettering into the image itself.",
+		"4. Add craft only where the user was silent, from the playbook below. If the request is already precise",
+		"   and complete, your changes are grammar, clarity and the answers' additions - nothing else.",
+		"5. One subject. Never swap it for another and never add a second one.",
+		"",
+		"CRAFT FOR THIS KIND:",
 		PLAYBOOKS[request.kind],
 		"",
-		"Hard rules, above everything in the playbook:",
-		"- Every decision the user actually made survives with its meaning intact: their subject, any colour, style,",
-		"  composition or reference they named. You add craft ONLY where they were silent. If the request is already a",
-		"  professional brief, change as little as possible.",
-		"- Never swap the subject for a different one, and never add a second subject.",
-		"- State everything positively — describe what IS in the result, never lists of what to avoid.",
-		"- Write one compact paragraph of plain prose, at most 90 words. The user will read and edit it, so no headings,",
-		"  no bullet points, no meta-talk about prompts.",
+		"OUTPUT: one paragraph of plain prose the user will read and edit - no headings, no bullet points, no",
+		"meta-talk about prompts. As long as it needs to be to carry everything; never shortened by dropping",
+		"information.",
 	].join("\n")
 
 	try {

@@ -263,7 +263,19 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 			setBriefing(true)
 			let rebuilt: string | undefined
 			try {
-				const refined = await invoke("generate:refineBrief", project.path, request(answers))
+				// The rewriter gets each answer WITH its question. An answer alone
+				// ("full-bleed hero with text over it") reads as a fact about the
+				// picture; paired with its question it is recognisable as a fact
+				// about the page, which the contract translates into composition.
+				const withQuestions = Object.fromEntries(
+					questions
+						.filter((question) => answers[question.id]?.trim())
+						.map((question) => [question.question, answers[question.id]]),
+				)
+				const refined = await invoke("generate:refineBrief", project.path, {
+					...request(answers),
+					...(Object.keys(withQuestions).length > 0 ? { answers: withQuestions } : {}),
+				})
 				if (refined?.prompt?.trim()) {
 					rebuilt = refined.prompt.trim()
 					setText(rebuilt)
@@ -282,7 +294,7 @@ export function GenerateAsset({ project, onClose }: { project: ProjectState; onC
 				await route(answers)
 			}
 		},
-		[project.path, request, route],
+		[project.path, request, route, questions],
 	)
 
 	/**

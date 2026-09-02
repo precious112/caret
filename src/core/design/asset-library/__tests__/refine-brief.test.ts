@@ -60,31 +60,47 @@ describe("refineBrief", () => {
 		}
 	})
 
-	it("hands the mark playbook the lesson that briefs are constructions", async () => {
-		// The measured failure this exists to prevent: "a coal with a crack"
-		// generated a coal. The playbook must demand geometry, not description.
-		const { seen, backend } = backendReturning({ prompt: "x" })
-		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "mark", text: "an ember" }, tokens: null })
-		assert.match(seen.prompt ?? "", /Reduce the idea to a symbol/i)
-		assert.match(seen.prompt ?? "", /Geometry first/i)
-	})
-
-	it("bans organic vocabulary in mark rewrites — the crumbly-edge regression", async () => {
-		// Field failure, day one of the rebuild stage: the model rewrote a clean
-		// construction into "gently irregular contours" and every candidate came
-		// back with crumbly hand-drawn edges. The playbook must forbid the words.
-		const { seen, backend } = backendReturning({ prompt: "x" })
-		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "mark", text: "an ember" }, tokens: null })
-		assert.match(seen.prompt ?? "", /Mechanical precision only/i)
-		assert.match(seen.prompt ?? "", /irregular, organic, rough/i)
-		assert.match(seen.prompt ?? "", /already names shapes and how they meet/i)
-	})
-
-	it("demands positive phrasing and the user's decisions kept", async () => {
+	it("orders the preservation contract above the craft", async () => {
+		// The field failure this pins: an earlier prompt asked for an improved
+		// rewrite under a word cap, and the model obeyed by deleting the user's
+		// constraints. The contract must demand that every piece of information
+		// survives, and must treat exclusions as decisions.
 		const { seen, backend } = backendReturning({ prompt: "x" })
 		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "image", text: "a mug" }, tokens: null })
-		assert.match(seen.prompt ?? "", /State everything positively/i)
-		assert.match(seen.prompt ?? "", /survives with its meaning intact/i)
+		assert.match(seen.prompt ?? "", /Preserve every piece of information/i)
+		assert.match(seen.prompt ?? "", /An exclusion is a decision/i)
+		assert.match(seen.prompt ?? "", /dropped never/i)
+		const contractAt = (seen.prompt ?? "").indexOf("THE CONTRACT")
+		const craftAt = (seen.prompt ?? "").indexOf("CRAFT FOR THIS KIND")
+		assert.ok(contractAt >= 0 && craftAt > contractAt, "the contract must come before the craft")
+	})
+
+	it("translates page facts into composition, never into picture content", async () => {
+		// Two projects painted literal headlines into photographs because
+		// placement answers were treated as scene content.
+		const { seen, backend } = backendReturning({ prompt: "x" })
+		await refineBrief({ backend, workingDirectory: "/tmp/p", request: { kind: "image", text: "a mug" }, tokens: null })
+		assert.match(seen.prompt ?? "", /Facts about the page shape the frame, never the picture/i)
+		assert.match(seen.prompt ?? "", /added later in HTML/i)
+	})
+
+	it("carries each answer with its question, and imposes no word cap", async () => {
+		const { seen, backend } = backendReturning({ prompt: "x" })
+		await refineBrief({
+			backend,
+			workingDirectory: "/tmp/p",
+			request: {
+				kind: "image",
+				text: "a mug",
+				answers: { "Where will this image sit?": "Full-bleed hero" },
+			},
+			tokens: null,
+		})
+		assert.match(seen.prompt ?? "", /Q: Where will this image sit\?/)
+		assert.match(seen.prompt ?? "", /A: Full-bleed hero/)
+		// An answer alone reads as a fact about the picture; the question is what
+		// lets the contract classify it as a fact about the page.
+		assert.ok(!/90 words|at most \d+ words/i.test(seen.prompt ?? ""), "a word cap forces deletion")
 	})
 
 	it("returns null on an empty rewrite, a malformed value, or a thrown backend", async () => {
