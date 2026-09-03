@@ -21,11 +21,11 @@ export type ScreenshotResult =
 			ok: true
 			dataUrl: string
 			/**
-			 * Set when the captured frame is known to be visually incomplete —
-			 * images that failed to load or were still loading at capture. Without
-			 * it, a page with a broken asset screenshots as clean evidence that
-			 * the asset "isn't showing", and an agent debugs a rendering problem
-			 * that does not exist.
+			 * Set only for measured failures — an image that completed with zero
+			 * pixels (404/decode error). Without it, a page with a broken asset
+			 * screenshots as clean evidence that the asset "isn't showing".
+			 * Never speculation: no "still loading" guesses, which misfire on
+			 * lazy content that is not meant to load.
 			 */
 			warning?: string
 	  }

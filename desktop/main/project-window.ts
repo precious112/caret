@@ -451,22 +451,15 @@ export class ProjectWindow {
 				return { ok: false, reason: `page "${pageId}" rendered nothing — does it exist, and does it render at 1440x900?` }
 			}
 
-			// A frame with a hole in it must say so. A freshly accepted mark whose
-			// <img> raced this capture screenshotted as "the mark isn't showing",
-			// and the agent went off debugging an SVG that rendered fine on the
-			// canvas the whole time.
-			const problems: string[] = []
-			if (visuals.broken.length > 0) problems.push(`image(s) failed to load: ${visuals.broken.join(", ")}`)
-			if (visuals.pending.length > 0) {
-				problems.push(`image(s) still loading when the frame was captured: ${visuals.pending.join(", ")}`)
-			}
-			if (visuals.pendingModels.length > 0) {
-				problems.push(`3D model(s) still loading when the frame was captured: ${visuals.pendingModels.join(", ")}`)
-			}
+			// Only measured failures are worth a word: an image that completed with
+			// zero pixels 404'd or failed to decode, and naming it saves the agent
+			// from debugging a "missing" asset off a blank region. Anything softer
+			// ("still loading…") is a guess, and the one time it fired in the field
+			// it was wrong — a below-the-fold lazy viewer that never loads by design.
 			return {
 				ok: true,
 				dataUrl: image.toDataURL(),
-				...(problems.length > 0 ? { warning: problems.join("; ") } : {}),
+				...(visuals.broken.length > 0 ? { warning: `image(s) failed to load: ${visuals.broken.join(", ")}` } : {}),
 			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)

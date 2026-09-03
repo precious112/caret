@@ -28,9 +28,11 @@
  * image resolves immediately through the `broken` report); the checks and
  * overlay paths give it a few seconds, enough for the honest cases they read.
  *
- * Returns `{ broken, pending, pendingModels }` — what did NOT settle, so the
- * caller can say "still loading when captured" instead of letting the agent
- * conclude its own work failed.
+ * Returns `{ broken }` — only assets that measurably FAILED (a completed image
+ * with no pixels: a 404 or decode error). "Still loading" guesses are not
+ * reported: a lazy viewer below the fold never loads by design, and one field
+ * run watched an agent chase a fabricated "/%3Cmodel-viewer%3E asset" a
+ * speculative warning invented for exactly that case.
  */
 export function settleScript(deadlineMs: number): string {
 	return `(async () => {
@@ -65,7 +67,18 @@ export function settleScript(deadlineMs: number): string {
 		// 3D models: wait for the element class to exist, then for each viewer's
 		// own load (or error) event. The load event fires only after upgrade, so
 		// listeners attached post-whenDefined cannot miss it.
-		const viewers = [...document.querySelectorAll("model-viewer")]
+		//
+		// Only viewers inside the viewport, with a source to load. The capture is
+		// the viewport, so an off-screen viewer contributes no pixels — and a
+		// lazy/auto-loading viewer below the fold never loads AT ALL, by design;
+		// waiting on one burns the entire deadline on a non-problem.
+		const inFrame = (el) => {
+			const r = el.getBoundingClientRect()
+			return r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+		}
+		const viewers = [...document.querySelectorAll("model-viewer")].filter(
+			(v) => inFrame(v) && (v.src || v.getAttribute("src")),
+		)
 		if (viewers.length > 0) {
 			await Promise.race([
 				customElements.whenDefined("model-viewer").then(() =>
@@ -92,17 +105,13 @@ export function settleScript(deadlineMs: number): string {
 		const relative = (src) => { try { return new URL(src, location.href).pathname } catch { return src } }
 		return {
 			broken: [...document.images].filter((img) => img.complete && img.naturalWidth === 0).map((img) => relative(img.src)),
-			pending: [...document.images].filter((img) => !img.complete).map((img) => relative(img.src)),
-			pendingModels: viewers.filter((v) => !v.loaded).map((v) => relative(v.getAttribute("src") || "<model-viewer>")),
 		}
 	})()`
 }
 
-/** What `settleScript` resolves to: everything that did NOT settle in time. */
+/** What `settleScript` resolves to: assets that measurably failed to load. */
 export interface SettleReport {
 	broken: string[]
-	pending: string[]
-	pendingModels: string[]
 }
 
-export const EMPTY_SETTLE_REPORT: SettleReport = { broken: [], pending: [], pendingModels: [] }
+export const EMPTY_SETTLE_REPORT: SettleReport = { broken: [] }
