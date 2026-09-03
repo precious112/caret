@@ -1,7 +1,9 @@
 /**
- * Probe: the settle script against a real page carrying two <model-viewer>s —
- * an eager in-frame hero, and a lazy one that sits outside the captured frame
- * and therefore NEVER loads (model-viewer's lazy observer never fires for it).
+ * Probe: the settle script in VIEWPORT mode (the checks/overlay paths; the
+ * screenshot path uses fullPage mode — `probe-fullpage-capture.ts` covers it)
+ * against a real page carrying two <model-viewer>s — an eager in-frame hero,
+ * and a lazy one that sits outside the captured frame and therefore NEVER
+ * loads (model-viewer's lazy observer never fires for it).
  *
  * Reproduces the 2026-09-03 field failure: the settle used to wait on that
  * never-loading viewer until the full 30s deadline, then report it "still
@@ -28,7 +30,7 @@ const DEADLINE_MS = 30_000
 
 async function main() {
 	const browser = await chromium.launch({ channel: "chrome" })
-	const page = await browser.newPage({ viewportSize: { width: 1440, height: 900 } })
+	const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 	await page.goto(`${SHELL}/?page=${encodeURIComponent(PAGE_ID)}&isolated=1`)
 
 	const started = Date.now()
@@ -53,7 +55,8 @@ async function main() {
 	const failures: string[] = []
 	if (elapsed > DEADLINE_MS - 2000)
 		failures.push(`settle burned the deadline (${elapsed}ms) — still waiting on the lazy viewer`)
-	if (JSON.stringify(report) !== '{"broken":[]}') failures.push(`report is not a clean {broken: []}: ${JSON.stringify(report)}`)
+	if (JSON.stringify((report as { broken: string[] }).broken) !== "[]")
+		failures.push(`report is not clean: ${JSON.stringify(report)}`)
 	const eager = viewerState.find((v) => v.loading === "eager")
 	if (!eager?.loaded) failures.push("the eager hero viewer had not loaded when settle returned")
 	const lazy = viewerState.find((v) => v.loading === "lazy")

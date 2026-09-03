@@ -41,11 +41,26 @@ import { OverlayVerifyService } from "./overlay-verify"
 import { EMPTY_SETTLE_REPORT, type SettleReport, settleScript } from "./page-settle"
 import { recordRecentProject } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
-import type { DesignInboundMessage, DesignOutboundMessage, ProjectState, ScreenshotResult } from "./types"
+import type { DesignInboundMessage, DesignOutboundMessage, ProjectState, ScreenshotFrame, ScreenshotResult } from "./types"
 import { WatchAndHeal } from "./watch-and-heal"
 
 /** Fallback top-bar height, used until the chrome reports its real layout. */
 const DEFAULT_CHROME_INSET = 44
+
+/** The screenshot viewport, and the size of every full-page capture frame. */
+const FRAME_WIDTH = 1440
+const FRAME_HEIGHT = 900
+
+/**
+ * Frames per get_screenshot part: 5400px of page per call. Enough that most
+ * pages arrive whole, small enough to stay under every provider's
+ * images-per-message ceiling and not spend image tokens on footers nobody
+ * asked about.
+ */
+const FRAMES_PER_PART = 6
+
+/** Post-scroll beat per frame — a GSAP scrub eases toward the scroll position over ~0.6s. */
+const SCRUB_SETTLE_MS = 700
 
 interface ChromeInsets {
 	top: number
@@ -158,7 +173,7 @@ export class ProjectWindow {
 		this.mcp = new CaretMcpServer({
 			projectPath: this.projectPath,
 			onAgentConnectionChanged: () => void this.pushState(),
-			screenshot: (pageId) => this.screenshotPage(pageId),
+			screenshot: (pageId, part) => this.screenshotPage(pageId, part),
 			runChecks: (pageId) => this.checks.run(pageId ? [pageId] : undefined),
 			installComponent: (libraryId, componentId) => this.catalog.install(libraryId, componentId),
 			onInterviewPrompt: (prompt) => this.sendToChrome("interview:prompt", prompt),
@@ -416,25 +431,47 @@ export class ProjectWindow {
 	 * capturing the canvas, which would return whatever the user happens to be
 	 * looking at — possibly zoomed out, scrolled, or showing a different page.
 	 *
-	 * A hidden `BrowserWindow`, not a detached `WebContentsView`: `capturePage`
+	 * A hidden `BrowserWindow`, not a detached `WebContentsView`: capturing
 	 * needs a real compositor surface, and a view that was never added to a window
 	 * has none, so it returns an empty image no matter how long you wait.
 	 * `paintWhenInitiallyHidden` keeps that surface alive while the window stays
 	 * off-screen.
 	 *
+	 * The FULL page is captured, as viewport-height frames, each one "what a
+	 * user sees scrolled to y": the settle sweeps the scroll position once so
+	 * every lazy asset loads and every once-only entrance plays, then each
+	 * frame scrolls there, waits a beat, and captures the viewport. NOT a
+	 * single tall render sliced up: scroll-driven pages (GSAP pin/scrub is in
+	 * the catalog) have no static full-height state — a pinned section exists
+	 * only while scrolled through, and capturing the scroll-0 state beyond the
+	 * viewport photographs its pin spacer as a blank band (measured on
+	 * fold-landing; `scripts/probe-fullpage-capture.ts`). Nor a window resized
+	 * to the page height, which re-lays-out every vh-sized section into a
+	 * shape no user ever sees. Frames rather than one tall image because
+	 * providers downscale to a ~1500px long edge: a tall capture arrives
+	 * illegible, slices arrive at full resolution. `part` pages through long
+	 * pages, `FRAMES_PER_PART` frames at a time.
+	 *
 	 * Failures return a reason rather than null. Every caller is an agent, and
 	 * "could not screenshot" with no cause is a dead end for it and for us.
 	 */
-	private async screenshotPage(pageId: string): Promise<ScreenshotResult> {
+	private async screenshotPage(pageId: string, part = 1): Promise<ScreenshotResult> {
 		const base = this.session.getUrl()
 		if (!base) {
 			return { ok: false, reason: "the design preview is still starting up — try again in a few seconds" }
 		}
+		if (!Number.isInteger(part) || part < 1) {
+			return { ok: false, reason: `part must be a positive integer, got ${part}` }
+		}
 
 		const capture = new BrowserWindow({
 			show: false,
-			width: 1440,
-			height: 900,
+			width: FRAME_WIDTH,
+			height: FRAME_HEIGHT,
+			// The web content itself must be 1440x900 — without this, width and
+			// height describe the window INCLUDING its title bar, and the actual
+			// viewport is 872px on macOS while every caption claims 900.
+			useContentSize: true,
 			paintWhenInitiallyHidden: true,
 			// backgroundThrottling off: Chromium parks timers and rAF in hidden
 			// windows, which is exactly where WebGL content (shaders, 3D viewers)
@@ -446,9 +483,40 @@ export class ProjectWindow {
 			await capture.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
 			const visuals = await this.settle(capture)
 
-			const image = await capture.webContents.capturePage()
-			if (image.isEmpty()) {
-				return { ok: false, reason: `page "${pageId}" rendered nothing — does it exist, and does it render at 1440x900?` }
+			const pageHeight = Math.max(visuals.scrollHeight, FRAME_HEIGHT)
+			const totalFrames = Math.ceil(pageHeight / FRAME_HEIGHT)
+			const parts = Math.ceil(totalFrames / FRAMES_PER_PART)
+			if (part > parts) {
+				return {
+					ok: false,
+					reason: `page "${pageId}" is ${pageHeight}px tall — ${totalFrames} frame(s) in ${parts} part(s); there is no part ${part}`,
+				}
+			}
+
+			const firstIndex = (part - 1) * FRAMES_PER_PART
+			const count = Math.min(FRAMES_PER_PART, totalFrames - firstIndex)
+			const frames: ScreenshotFrame[] = []
+			for (let i = 0; i < count; i++) {
+				// The last frame scrolls to the page bottom rather than past it, so
+				// its reported top is the real scroll position (it may overlap the
+				// frame above; the label stays honest).
+				const target = Math.max(0, Math.min((firstIndex + i) * FRAME_HEIGHT, pageHeight - FRAME_HEIGHT))
+				// The beat after scrolling is for scroll-DRIVEN animation: a GSAP
+				// scrub eases toward the new position over ~0.6s, and capturing
+				// sooner photographs the easing, not the state.
+				const top = (await capture.webContents.executeJavaScript(
+					`(async () => {
+						scrollTo(0, ${target})
+						await new Promise((r) => setTimeout(r, ${SCRUB_SETTLE_MS}))
+						await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+						return Math.round(scrollY)
+					})()`,
+				)) as number
+				const image = await capture.webContents.capturePage()
+				if (image.isEmpty()) {
+					return { ok: false, reason: `page "${pageId}" rendered nothing at y=${top} — does it render at 1440x900?` }
+				}
+				frames.push({ dataUrl: image.toDataURL(), top, height: FRAME_HEIGHT })
 			}
 
 			// Only measured failures are worth a word: an image that completed with
@@ -458,7 +526,11 @@ export class ProjectWindow {
 			// it was wrong — a below-the-fold lazy viewer that never loads by design.
 			return {
 				ok: true,
-				dataUrl: image.toDataURL(),
+				frames,
+				pageHeight,
+				totalFrames,
+				firstFrame: firstIndex + 1,
+				parts,
 				...(visuals.broken.length > 0 ? { warning: `image(s) failed to load: ${visuals.broken.join(", ")}` } : {}),
 			}
 		} catch (err) {
@@ -482,7 +554,9 @@ export class ProjectWindow {
 	 * immediately and exits through the `broken` report.
 	 */
 	private async settle(capture: BrowserWindow): Promise<SettleReport> {
-		return await capture.webContents.executeJavaScript(settleScript(30_000)).catch(() => EMPTY_SETTLE_REPORT)
+		return await capture.webContents
+			.executeJavaScript(settleScript(30_000, { fullPage: true }))
+			.catch(() => EMPTY_SETTLE_REPORT)
 	}
 
 	private layout(): void {

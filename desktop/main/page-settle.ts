@@ -28,15 +28,28 @@
  * image resolves immediately through the `broken` report); the checks and
  * overlay paths give it a few seconds, enough for the honest cases they read.
  *
- * Returns `{ broken }` — only assets that measurably FAILED (a completed image
- * with no pixels: a 404 or decode error). "Still loading" guesses are not
- * reported: a lazy viewer below the fold never loads by design, and one field
- * run watched an agent chase a fabricated "/%3Cmodel-viewer%3E asset" a
- * speculative warning invented for exactly that case.
+ * Returns `{ broken, scrollHeight }` — the page's full height, and only assets
+ * that measurably FAILED (a completed image with no pixels: a 404 or decode
+ * error). "Still loading" guesses are not reported: a lazy viewer below the
+ * fold never loads by design, and one field run watched an agent chase a
+ * fabricated "/%3Cmodel-viewer%3E asset" a speculative warning invented for
+ * exactly that case.
+ *
+ * `fullPage` mode serves the frame-by-frame screenshot path: the whole scroll
+ * height will be captured (scroll-and-shoot, one viewport frame per scroll
+ * stop), so before any waiting it SWEEPS the scroll position down the page
+ * once. Lazy content — native loading="lazy" images, <model-viewer>'s
+ * lazy/auto loading, once-only scroll entrances — starts loading or playing
+ * only when it nears the viewport; the sweep gets all of that going up front
+ * so the frame captures never race it. The model wait then covers the full
+ * page height, not just the top viewport. The window is NOT resized to the
+ * page height: vh-sized sections would balloon with it and the capture would
+ * show a layout no user ever sees.
  */
-export function settleScript(deadlineMs: number): string {
+export function settleScript(deadlineMs: number, opts: { fullPage?: boolean } = {}): string {
 	return `(async () => {
 		const deadline = Date.now() + ${deadlineMs}
+		const fullPage = ${opts.fullPage === true}
 		const timeLeft = () => Math.max(0, deadline - Date.now())
 		const raf2 = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 
@@ -45,6 +58,21 @@ export function settleScript(deadlineMs: number): string {
 			const root = document.getElementById("root")
 			if (root && root.children.length > 0) break
 			await new Promise((r) => setTimeout(r, 50))
+		}
+
+		// Full-page capture: sweep the scroll position through the page once so
+		// everything that loads "when it comes into view" starts loading now.
+		// Re-reads scrollHeight each step — content growing as it loads extends
+		// the sweep. Then back to the top, where the capture expects to be.
+		if (fullPage) {
+			const pageHeight = () => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
+			for (let y = 0; y < pageHeight() && Date.now() < deadline; y += innerHeight) {
+				scrollTo(0, y)
+				await raf2()
+				await new Promise((r) => setTimeout(r, 40))
+			}
+			scrollTo(0, 0)
+			await raf2()
 		}
 
 		// Fonts, then every image, looped until the image set is stable.
@@ -68,13 +96,17 @@ export function settleScript(deadlineMs: number): string {
 		// own load (or error) event. The load event fires only after upgrade, so
 		// listeners attached post-whenDefined cannot miss it.
 		//
-		// Only viewers inside the viewport, with a source to load. The capture is
-		// the viewport, so an off-screen viewer contributes no pixels — and a
-		// lazy/auto-loading viewer below the fold never loads AT ALL, by design;
-		// waiting on one burns the entire deadline on a non-problem.
+		// Only viewers inside the area that will be CAPTURED, with a source to
+		// load: the viewport, or in fullPage mode the whole scroll height. An
+		// element outside that area contributes no pixels — and one parked
+		// off-canvas (translated out, below a non-swept fold) never loads AT
+		// ALL, by design; waiting on it burns the entire deadline on a
+		// non-problem. Rects are viewport-relative, and fullPage measures at
+		// scrollTop 0, so page-y == rect-y.
+		const frameBottom = fullPage ? Math.max(document.documentElement.scrollHeight, innerHeight) : innerHeight
 		const inFrame = (el) => {
 			const r = el.getBoundingClientRect()
-			return r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+			return r.bottom > 0 && r.right > 0 && r.top < frameBottom && r.left < innerWidth
 		}
 		const viewers = [...document.querySelectorAll("model-viewer")].filter(
 			(v) => inFrame(v) && (v.src || v.getAttribute("src")),
@@ -105,13 +137,16 @@ export function settleScript(deadlineMs: number): string {
 		const relative = (src) => { try { return new URL(src, location.href).pathname } catch { return src } }
 		return {
 			broken: [...document.images].filter((img) => img.complete && img.naturalWidth === 0).map((img) => relative(img.src)),
+			scrollHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0, innerHeight),
 		}
 	})()`
 }
 
-/** What `settleScript` resolves to: assets that measurably failed to load. */
+/** What `settleScript` resolves to: the page's height, and assets that measurably failed to load. */
 export interface SettleReport {
 	broken: string[]
+	/** Full scroll height in CSS pixels, at least the viewport height. */
+	scrollHeight: number
 }
 
-export const EMPTY_SETTLE_REPORT: SettleReport = { broken: [] }
+export const EMPTY_SETTLE_REPORT: SettleReport = { broken: [], scrollHeight: 0 }

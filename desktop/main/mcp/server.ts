@@ -33,7 +33,7 @@ export interface CaretMcpServerOptions {
 	/** Fired when an agent connects or disconnects, so the UI can reflect it. */
 	onAgentConnectionChanged?(connected: boolean): void
 	/** Renders one page and captures it, or says why it could not. */
-	screenshot?(pageId: string): Promise<ScreenshotResult>
+	screenshot?(pageId: string, part?: number): Promise<ScreenshotResult>
 	/** Runs the deterministic design checks on one page (or all), returning findings. */
 	runChecks?(pageId?: string): Promise<PageCheckResult[]>
 	/** Installs an allowlisted catalog component into the project (consent-gated). */
@@ -111,8 +111,8 @@ export class CaretMcpServer {
 	private registerTools(mcp: McpServer): void {
 		const ctx: ToolContext = {
 			projectPath: this.options.projectPath,
-			screenshot: (pageId) =>
-				this.options.screenshot?.(pageId) ??
+			screenshot: (pageId, part) =>
+				this.options.screenshot?.(pageId, part) ??
 				Promise.resolve({ ok: false as const, reason: "this project has no window to render pages in" }),
 			runChecks: (pageId) =>
 				this.options.runChecks?.(pageId) ?? Promise.reject(new Error("this project has no window to render pages in")),

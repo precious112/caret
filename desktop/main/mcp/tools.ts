@@ -62,8 +62,8 @@ import type { ScreenshotResult } from "../types"
 
 export interface ToolContext {
 	projectPath: string
-	/** Renders one page and captures it, or says why it could not. */
-	screenshot(pageId: string): Promise<ScreenshotResult>
+	/** Renders one page and captures it (one part of frames), or says why it could not. */
+	screenshot(pageId: string, part?: number): Promise<ScreenshotResult>
 	/** Runs the deterministic design checks on one page (or all). */
 	runChecks(pageId?: string): Promise<PageCheckResult[]>
 	/** Installs an allowlisted catalog component (consent-gated). */
@@ -226,9 +226,17 @@ export const TOOLS: ToolDefinition[] = [
 		name: "get_screenshot",
 		title: "Screenshot a page",
 		description:
-			"A rendered screenshot of a design page, captured fresh at 1440x900. Use this to look at your own work: after writing a page, screenshot it and check it renders the way you intended.",
-		inputSchema: { pageId: z.string().describe("Page id, matching the directory under .caret/pages/") },
-		async handler(ctx, { pageId }: { pageId: string }) {
+			"A rendered screenshot of a design page's FULL scroll height, captured fresh at 1440px wide and delivered as 900px-tall frames (top to bottom) so nothing is downscaled. A long page arrives in parts; the result says how many frames remain and which part to request next. Use this to look at your own work: after writing a page, screenshot it and check the whole page renders the way you intended.",
+		inputSchema: {
+			pageId: z.string().describe("Page id, matching the directory under .caret/pages/"),
+			part: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Which batch of frames, 1-based. Omit for the first; the result says when there is a next part."),
+		},
+		async handler(ctx, { pageId, part = 1 }: { pageId: string; part?: number }) {
 			// Checked before rendering, because an unknown id does not error — the
 			// shell serves an empty document and the capture succeeds. Handing an
 			// agent a blank white image is worse than refusing: it looks like
@@ -239,24 +247,44 @@ export const TOOLS: ToolDefinition[] = [
 				return fail(`No page "${pageId}" in this design layer. Available pages: ${available.join(", ") || "none"}.`)
 			}
 
-			const result = await ctx.screenshot(pageId)
+			const result = await ctx.screenshot(pageId, part)
 			if (!result.ok) return fail(result.reason)
 
-			const [, mimeType = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/.exec(result.dataUrl) ?? []
-			if (!data) return fail(`page "${pageId}" was captured but the image could not be encoded`)
-
-			// A text sibling, so a client that drops image content degrades
-			// honestly. There is no capability negotiation for content types, so
-			// Caret cannot ask whether images will be honoured and gets no signal
-			// when they are not — without this the agent receives an empty result
-			// and answers plausibly from context instead of saying it saw nothing.
+			// Leading text rather than images alone, so a client that drops image
+			// content degrades honestly. There is no capability negotiation for
+			// content types, so Caret cannot ask whether images will be honoured
+			// and gets no signal when they are not — without this the agent
+			// receives an empty result and answers plausibly from context instead
+			// of saying it saw nothing.
 			const caution = result.warning ? ` Note: ${result.warning}.` : ""
-			return {
-				content: [
-					{ type: "text", text: `Screenshot of page "${pageId}", captured just now at 1440x900 CSS pixels.${caution}` },
+			const lastFrame = result.firstFrame + result.frames.length - 1
+			const whichPart =
+				result.parts > 1 ? ` This is part ${part} of ${result.parts}: frames ${result.firstFrame}–${lastFrame}.` : ""
+			const content: ToolResult["content"] = [
+				{
+					type: "text",
+					text: `Screenshot of page "${pageId}", captured just now: ${result.pageHeight}px tall at 1440px wide, as ${result.totalFrames} frame(s) of up to 900px, top to bottom.${whichPart}${caution}`,
+				},
+			]
+			for (const [i, frame] of result.frames.entries()) {
+				const index = result.firstFrame + i
+				const [, mimeType = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/.exec(frame.dataUrl) ?? []
+				if (!data) return fail(`page "${pageId}" was captured but frame ${index} could not be encoded`)
+				content.push(
+					{
+						type: "text",
+						text: `Frame ${index} of ${result.totalFrames} — y ${frame.top}–${frame.top + frame.height}px:`,
+					},
 					{ type: "image", data, mimeType },
-				],
+				)
 			}
+			if (lastFrame < result.totalFrames) {
+				content.push({
+					type: "text",
+					text: `The page continues below frame ${lastFrame}: ${result.totalFrames - lastFrame} more frame(s). Call get_screenshot again with part: ${part + 1} to see them.`,
+				})
+			}
+			return { content }
 		},
 	},
 
