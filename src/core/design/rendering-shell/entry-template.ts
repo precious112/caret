@@ -29,7 +29,14 @@ export async function writeThemeCss(caretDir: string): Promise<void> {
 	await fs.writeFile(path.join(caretDir, FONTS_CSS_FILENAME), fonts)
 }
 
-export async function generateEntryFiles(caretDir: string): Promise<void> {
+/**
+ * The shell's boot files, content by name. Exported (rather than inlined into
+ * the writer) so the healer can compare a live file against what Caret would
+ * generate and restore it the moment something else rewrites it — these files
+ * ARE the Tailwind/Vite setup, and a broken one otherwise stays broken until
+ * the next project open.
+ */
+export function entryFileSources(): Record<"index.html" | "main.tsx" | "global.css", string> {
 	// index.html
 	const indexHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -60,6 +67,46 @@ const params = new URLSearchParams(window.location.search)
 const isolatedPageId = params.get("page")
 const mode = params.get("mode")
 
+// A page that error-cards is a dead document: the failed dynamic import is
+// cached for the document's lifetime, and HMR propagation stops at the
+// self-accepting router, so no update ever reaches this frame again. The only
+// retry that actually clears the failure is a whole-document reload — so a
+// dead document listens for the next design-source change (the server
+// announces every one, see vite.config.ts) and reloads itself. The error
+// screen disappears the moment a fix lands, in every canvas card and in the
+// focused view, with no click.
+let caretPageErrored = false
+const markPageErrored = () => { caretPageErrored = true }
+if (import.meta.hot) {
+  import.meta.hot.on("caret:source-changed", () => {
+    if (caretPageErrored) window.location.reload()
+  })
+}
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+
+// The rejection of a failed dynamic import names the module URL, never the
+// cause; the cause sits in the dev server's 500 body as an error object. One
+// fetch turns "Failed to fetch dynamically imported module" into "Failed to
+// resolve import 'gsap' from pages/x/index.tsx" — the difference between an
+// error card (and checks feedback) an agent can act on and one it can only
+// re-guess from. Falls back to the original text whenever the page's own
+// module transforms fine (the failure was deeper in its import chain).
+const describeLoadError = async (err: unknown): Promise<string> => {
+  const text = String(err)
+  if (!isolatedPageId || !/dynamically imported module|Importing a module script failed/i.test(text)) return text
+  try {
+    const res = await fetch("/pages/" + isolatedPageId + "/index.tsx")
+    if (!res.ok) {
+      const body = await res.text()
+      const match = /"message":"((?:[^"\\\\]|\\\\.)*)"/.exec(body)
+      if (match) return JSON.parse('"' + match[1] + '"')
+    }
+  } catch {}
+  return text
+}
+
 // Routes carry loaders, not components — the router must stay evaluable when
 // one page's imports are broken, so a page fails HERE, in its own document.
 // The loader is AWAITED before anything mounts: rendering a lazy component
@@ -71,11 +118,13 @@ const mode = params.get("mode")
 // render at roughly quarter scale.
 class CaretPageBoundary extends React.Component<{ children?: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
-  static getDerivedStateFromError(error: Error) { return { error } }
+  static getDerivedStateFromError(error: Error) { markPageErrored(); return { error } }
   render() {
     if (!this.state.error) return this.props.children
+    // data-caret-page-error carries the real error for machines — the design
+    // checks read it and feed it back to the agent that wrote the page.
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", padding: 48, background: "#fff5f5", color: "#b91c1c", fontFamily: "system-ui,sans-serif", textAlign: "center" }}>
+      <div data-caret-page-error={"Page crashed: " + String(this.state.error)} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", padding: 48, background: "#fff5f5", color: "#b91c1c", fontFamily: "system-ui,sans-serif", textAlign: "center" }}>
         <div style={{ fontSize: 96, lineHeight: 1 }}>⚠</div>
         <div style={{ fontSize: 48, fontWeight: 700, margin: "24px 0 16px" }}>Page failed to load</div>
         <div style={{ fontSize: 26, color: "#7f1d1d", maxWidth: 900, wordBreak: "break-word" }}>{String(this.state.error)}</div>
@@ -268,12 +317,14 @@ if (isolatedPageId && mode === "focused") {
     }
 
     createRoot(document.getElementById("root")!).render(<FocusedApp />)
-  }).catch((err) => {
+  }).catch(async (err) => {
     flog("FAILED: " + String(err))
+    markPageErrored()
+    const detail = await describeLoadError(err)
     document.getElementById("root")!.innerHTML =
-      '<div style="padding:20px;color:#f87171;font-family:monospace;font-size:13px">' +
+      '<div data-caret-page-error="' + escapeHtml(detail) + '" style="padding:20px;color:#f87171;font-family:monospace;font-size:13px">' +
       '<h3 style="color:#fca5a5">Focused mode failed to load</h3>' +
-      '<pre style="white-space:pre-wrap">' + String(err) + '</pre></div>'
+      '<pre style="white-space:pre-wrap">' + escapeHtml(detail) + '</pre></div>'
   })
 } else if (isolatedPageId) {
   document.body.style.background = "#ffffff"
@@ -282,17 +333,24 @@ if (isolatedPageId && mode === "focused") {
   // Failures must be readable inside a canvas thumbnail (scaled to ~0.26),
   // hence the very large type. A blank white box is indistinguishable from a
   // blank page and hides bad AI output.
-  const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   const showPageError = (title: string, detail: string) => {
+    markPageErrored()
     document.getElementById("root")!.innerHTML =
-      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:48px;background:#fff5f5;color:#b91c1c;font-family:system-ui,sans-serif;text-align:center">' +
+      '<div data-caret-page-error="' + escapeHtml(title + ": " + detail) + '" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:48px;background:#fff5f5;color:#b91c1c;font-family:system-ui,sans-serif;text-align:center">' +
       '<div style="font-size:96px;line-height:1">⚠</div>' +
       '<div style="font-size:48px;font-weight:700;margin:24px 0 16px">' + escapeHtml(title) + '</div>' +
       '<div style="font-size:26px;color:#7f1d1d;max-width:900px;word-break:break-word">' + escapeHtml(detail) + '</div>' +
       '</div>'
   }
+  // Only before React owns #root: overwriting the container after mount
+  // orphans React's live tree onto detached DOM, so even a later successful
+  // re-render paints into nodes no longer in the document. Post-mount crashes
+  // are the boundary's job; an uncaught async error still marks the document
+  // dead so the next source change reloads it.
+  let reactMounted = false
   window.addEventListener("error", (e) => {
-    showPageError("Page crashed", String(e.message || e.error || "Unknown runtime error"))
+    markPageErrored()
+    if (!reactMounted) showPageError("Page crashed", String(e.message || e.error || "Unknown runtime error"))
   })
 
   import("virtual:caret-router").then(async ({ routes }: any) => {
@@ -309,8 +367,9 @@ if (isolatedPageId && mode === "focused") {
         <PageComponent />
       </CaretPageBoundary>
     )
-  }).catch((err) => {
-    showPageError("Page failed to load", String(err))
+    reactMounted = true
+  }).catch(async (err) => {
+    showPageError("Page failed to load", await describeLoadError(err))
   })
 } else {
   // Canvas mode deliberately does NOT load react-grab: the editable page lives
@@ -340,10 +399,10 @@ if (isolatedPageId && mode === "focused") {
 @import "tailwindcss" source(none);
 @import "./caret-theme.css";
 
-@source "./pages/**/*.tsx";
-@source "./components/**/*.tsx";
-@source "./layouts/**/*.tsx";
-@source "./lib/**/*.tsx";
+@source "./pages/**/*.{tsx,jsx}";
+@source "./components/**/*.{tsx,jsx}";
+@source "./layouts/**/*.{tsx,jsx}";
+@source "./lib/**/*.{tsx,jsx}";
 
 body {
   font-family: var(--caret-font-family);
@@ -355,10 +414,13 @@ body {
 }
 `
 
-	// Write core files
-	await fs.writeFile(path.join(caretDir, "index.html"), indexHtml)
-	await fs.writeFile(path.join(caretDir, "main.tsx"), mainTsx)
-	await fs.writeFile(path.join(caretDir, "global.css"), globalCss)
+	return { "index.html": indexHtml, "main.tsx": mainTsx, "global.css": globalCss }
+}
+
+export async function generateEntryFiles(caretDir: string): Promise<void> {
+	for (const [name, content] of Object.entries(entryFileSources())) {
+		await fs.writeFile(path.join(caretDir, name), content)
+	}
 	await writeThemeCss(caretDir)
 
 	// Ensure pages directory exists

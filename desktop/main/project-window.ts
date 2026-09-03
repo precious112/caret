@@ -38,6 +38,7 @@ import { CaretMcpServer } from "./mcp/server"
 import { refreshMenu } from "./menu"
 import { migrateProject } from "./migrate"
 import { OverlayVerifyService } from "./overlay-verify"
+import { EMPTY_SETTLE_REPORT, type SettleReport, settleScript } from "./page-settle"
 import { recordRecentProject } from "./prefs"
 import { regenerateRulesFiles } from "./rules/generate"
 import type { DesignInboundMessage, DesignOutboundMessage, ProjectState, ScreenshotResult } from "./types"
@@ -435,7 +436,10 @@ export class ProjectWindow {
 			width: 1440,
 			height: 900,
 			paintWhenInitiallyHidden: true,
-			webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: false },
+			// backgroundThrottling off: Chromium parks timers and rAF in hidden
+			// windows, which is exactly where WebGL content (shaders, 3D viewers)
+			// stops producing frames — every other capture window sets this too.
+			webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: false, backgroundThrottling: false },
 		})
 
 		try {
@@ -452,14 +456,17 @@ export class ProjectWindow {
 			// and the agent went off debugging an SVG that rendered fine on the
 			// canvas the whole time.
 			const problems: string[] = []
-			if (visuals.broken.length > 0) problems.push(`failed to load: ${visuals.broken.join(", ")}`)
+			if (visuals.broken.length > 0) problems.push(`image(s) failed to load: ${visuals.broken.join(", ")}`)
 			if (visuals.pending.length > 0) {
-				problems.push(`still loading when the frame was captured: ${visuals.pending.join(", ")}`)
+				problems.push(`image(s) still loading when the frame was captured: ${visuals.pending.join(", ")}`)
+			}
+			if (visuals.pendingModels.length > 0) {
+				problems.push(`3D model(s) still loading when the frame was captured: ${visuals.pendingModels.join(", ")}`)
 			}
 			return {
 				ok: true,
 				dataUrl: image.toDataURL(),
-				...(problems.length > 0 ? { warning: `image(s) ${problems.join("; ")}` } : {}),
+				...(problems.length > 0 ? { warning: problems.join("; ") } : {}),
 			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)
@@ -473,53 +480,16 @@ export class ProjectWindow {
 	/**
 	 * Waits for the page to stop changing before capturing it.
 	 *
-	 * `did-finish-load` fires well before a page *looks* finished: webfonts are
-	 * still swapping and images are still decoding, and a capture taken then shows
-	 * fallback type and empty boxes. That reads to an agent as "the page is
-	 * broken" — the most expensive possible false signal in a loop whose whole
-	 * point is the agent judging its own work.
-	 *
-	 * The wait is until EVERY image is loaded, looped until stable — images can
-	 * mount late, and a cold dev server can take seconds per asset, and a
-	 * capture taken one beat early is presented to an agent as evidence its own
-	 * work failed to render. The first version capped the whole wait at 4
-	 * seconds and captured anyway; a user watched the model chase a logo that
-	 * was merely still loading, twice. 30 seconds is the cap now, and it exists
-	 * only for a page with a never-resolving image — a broken image (404)
-	 * resolves immediately and exits the loop through the `broken` report, so
-	 * the cap is not the price of an error, only of a hang.
-	 *
-	 * Returns what did NOT settle: `broken` images captured with a hole,
-	 * `pending` only when the 30s cap genuinely expired.
+	 * The contract itself (mount, fonts, images looped until stable, 3D
+	 * viewers, a WebGL beat) lives in `page-settle.ts`, shared with the checks
+	 * and overlay paths. This caller gives it the long 30-second cap: the
+	 * first version capped at 4 seconds and captured anyway, and a user
+	 * watched the model chase a logo that was merely still loading, twice.
+	 * 30s is only ever paid for a genuine hang — a broken image (404) resolves
+	 * immediately and exits through the `broken` report.
 	 */
-	private async settle(capture: BrowserWindow): Promise<{ broken: string[]; pending: string[] }> {
-		return await capture.webContents
-			.executeJavaScript(
-				`(async () => {
-					const deadline = Date.now() + 30000
-					while (Date.now() < deadline) {
-						await document.fonts.ready
-						const seen = [...document.images]
-						await Promise.race([
-							Promise.all(
-								seen.map((img) =>
-									img.complete ? null : new Promise((r) => { img.onload = r; img.onerror = r }),
-								),
-							),
-							new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now()))),
-						])
-						await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-						const now = [...document.images]
-						if (now.length === seen.length && now.every((img) => img.complete)) break
-					}
-					const relative = (src) => { try { return new URL(src, location.href).pathname } catch { return src } }
-					return {
-						broken: [...document.images].filter((img) => img.complete && img.naturalWidth === 0).map((img) => relative(img.src)),
-						pending: [...document.images].filter((img) => !img.complete).map((img) => relative(img.src)),
-					}
-				})()`,
-			)
-			.catch(() => ({ broken: [], pending: [] }))
+	private async settle(capture: BrowserWindow): Promise<SettleReport> {
+		return await capture.webContents.executeJavaScript(settleScript(30_000)).catch(() => EMPTY_SETTLE_REPORT)
 	}
 
 	private layout(): void {

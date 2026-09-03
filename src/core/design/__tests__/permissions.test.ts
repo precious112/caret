@@ -212,3 +212,35 @@ describe("rulePermission — everything else", () => {
 		assert.equal(ruling.kind, "ask")
 	})
 })
+
+describe("rulePermission — installing into the design layer", () => {
+	// The guide tells the agent to install a library into .caret before
+	// importing it; the exact prescribed shape must run without an ask, and
+	// nothing looser may ride along with it.
+	const allowed = (command: string) => {
+		const ruling = rulePermission({ action: "bash", patterns: [command] }, context())
+		return ruling.kind === "auto" && ruling.decision === "allow"
+	}
+
+	it("allows the exact shape the guide prescribes", () => {
+		assert.ok(allowed("npm install --prefix .caret gsap --ignore-scripts"))
+		assert.ok(allowed("npm i --prefix .caret @google/model-viewer --ignore-scripts"))
+		assert.ok(allowed(`npm install --prefix=${PROJECT}/.caret gsap --ignore-scripts`))
+	})
+
+	it("asks without --ignore-scripts — install-time code is the line", () => {
+		assert.ok(!allowed("npm install --prefix .caret gsap"))
+	})
+
+	it("asks when the prefix lands outside the design layer", () => {
+		assert.ok(!allowed("npm install --prefix . gsap --ignore-scripts"))
+		assert.ok(!allowed("npm install --prefix .caret/../src gsap --ignore-scripts"))
+		assert.ok(!allowed("npm install --prefix /tmp/elsewhere gsap --ignore-scripts"))
+	})
+
+	it("asks without a prefix, and refuses to look past chaining", () => {
+		assert.ok(!allowed("npm install gsap --ignore-scripts"))
+		assert.ok(!allowed("npm install --prefix .caret gsap --ignore-scripts && rm -rf ."))
+		assert.ok(!allowed("cd .caret && npm install gsap --ignore-scripts"))
+	})
+})

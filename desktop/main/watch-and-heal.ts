@@ -21,7 +21,7 @@ import chokidar, { type FSWatcher } from "chokidar"
 import * as fsp from "fs/promises"
 import * as path from "path"
 
-import { assetIndexPath, reindexAssets, writeThemeCss } from "../../src/core/design"
+import { assetIndexPath, entryFileSources, reindexAssets, viteConfigSource, writeThemeCss } from "../../src/core/design"
 import { recordEdit } from "../../src/core/design/provenance"
 import { precomputeAndApply } from "../../src/core/design/visual-editing/post-generation-hook"
 import { Logger } from "../../src/shared/services/Logger"
@@ -346,6 +346,11 @@ export class WatchAndHeal {
 			return
 		}
 
+		if (isShellFile(path.join(this.options.projectPath, ".caret"), filePath)) {
+			await this.onShellFileChanged(resolved, wasSelfWrite)
+			return
+		}
+
 		if (!isHealable(filePath)) {
 			if (!wasSelfWrite && isDesignContent(filePath)) {
 				await this.recordAuthor(filePath, action)
@@ -380,6 +385,43 @@ export class WatchAndHeal {
 		}
 
 		this.options.onPageWritten?.(resolved)
+	}
+
+	/**
+	 * Restores a shell boot file that something rewrote mid-session.
+	 *
+	 * `vite.config.ts`, `global.css`, `main.tsx` and `index.html` ARE the
+	 * Tailwind/Vite setup, and they are only regenerated at project open — so a
+	 * bad write to one of them (edits to the design layer are auto-approved, so
+	 * an agent's write never surfaces to anyone) broke styling for the rest of
+	 * the session and then silently self-repaired on the next open, the worst
+	 * possible shape for a bug. The content compare is the loop guard: the
+	 * restore's own write comes back through the watcher, matches, and no-ops.
+	 */
+	private async onShellFileChanged(resolved: string, wasSelfWrite: boolean): Promise<void> {
+		if (wasSelfWrite) return
+		const name = path.basename(resolved)
+		const generated: Record<string, string> = { "vite.config.ts": viteConfigSource(), ...entryFileSources() }
+		const expected = generated[name]
+		if (!expected) return
+		const current = await fsp.readFile(resolved, "utf-8").catch(() => null)
+		if (current === expected) return
+
+		await recordEdit(this.options.projectPath, { actor: "external", action: "write", file: resolved })
+		try {
+			this.markSelfWrite(resolved)
+			await fsp.writeFile(resolved, expected)
+			await recordEdit(this.options.projectPath, {
+				actor: "caret",
+				action: "heal",
+				file: resolved,
+				note: "restored generated shell file — Caret owns it, edits belong in pages/components/tokens",
+			})
+			Logger.info(`[heal] restored ${name} — a shell file Caret generates was rewritten`)
+		} catch (err) {
+			this.selfWrites.delete(resolved)
+			Logger.warn(`[heal] could not restore ${name}: ${err}`)
+		}
 	}
 
 	/**
@@ -462,6 +504,17 @@ function isHealable(filePath: string): boolean {
 		normalised.includes("/.caret/components/") ||
 		normalised.includes("/.caret/layouts/")
 	)
+}
+
+/**
+ * The shell boot files Caret generates at `.caret/`'s root and restores on
+ * drift. Root only — a page's own `index.html` fixture deeper in the tree is
+ * not one of them.
+ */
+const SHELL_FILES = new Set(["vite.config.ts", "global.css", "main.tsx", "index.html"])
+function isShellFile(caretDir: string, filePath: string): boolean {
+	const rel = path.relative(caretDir, path.resolve(filePath))
+	return !rel.includes(path.sep) && SHELL_FILES.has(rel)
 }
 
 function isFoundationTokens(filePath: string): boolean {

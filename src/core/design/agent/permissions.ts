@@ -94,6 +94,10 @@ export function rulePermission(request: PermissionRequest, context: PermissionCo
 					}
 		}
 
+		if (isCaretInstallCommand(command, context.projectPath)) {
+			return { kind: "auto", decision: "allow", reason: "installing into the design layer is Caret's own to manage" }
+		}
+
 		return { kind: "ask", summary: `Run \`${command}\`?` }
 	}
 
@@ -229,6 +233,43 @@ export function isReadOnlyCommand(command: string, extra?: readonly string[]): b
 	}
 
 	return READ_ONLY_COMMANDS.has(program)
+}
+
+/**
+ * An `npm install` aimed at the design layer's own workspace.
+ *
+ * The guide tells the agent to install a library into `.caret` before
+ * importing it (the import of an uninstalled package stops the whole page
+ * rendering); that instruction is worthless if the install then blocks on a
+ * human ask — the design layer is already Caret's own to write. Only the
+ * exact shape the guide prescribes is allowed:
+ *
+ *   npm install --prefix <path inside .caret> <packages…> --ignore-scripts
+ *
+ * `--ignore-scripts` is required, not optional: it is the difference between
+ * "files land in node_modules" and "the registry runs code on this machine
+ * at install time". No chaining, and both verbs (`install`, `i`) count.
+ * Anything else falls through to the ask below.
+ */
+export function isCaretInstallCommand(command: string, projectPath: string): boolean {
+	if (SHELL_COMPOSITION.test(command)) return false
+	const parts = command.trim().split(/\s+/)
+	if (parts[0] !== "npm" || (parts[1] !== "install" && parts[1] !== "i")) return false
+	if (!parts.includes("--ignore-scripts")) return false
+
+	let prefix: string | undefined
+	for (let index = 2; index < parts.length; index++) {
+		if (parts[index] === "--prefix") prefix = parts[index + 1]
+		else if (parts[index].startsWith("--prefix=")) prefix = parts[index].slice("--prefix=".length)
+	}
+	if (!prefix) return false
+
+	// A relative prefix resolves against the session's working directory,
+	// which is the project root.
+	const root = stripPrivate(path.normalize(projectPath))
+	const resolved = stripPrivate(path.normalize(path.resolve(root, prefix)))
+	const caretDir = path.join(root, ".caret")
+	return resolved === caretDir || resolved.startsWith(caretDir + path.sep)
 }
 
 type Classification = "design" | "app" | "outside"

@@ -29,6 +29,7 @@ import {
 	readOverlayVerifyContext,
 } from "../../src/core/design/visual-editing/verify-script"
 import { Logger } from "../../src/shared/services/Logger"
+import { settleScript } from "./page-settle"
 import { canSeeImages } from "./vision-cache"
 
 /**
@@ -192,26 +193,16 @@ export class OverlayVerifyService {
 			width,
 			height,
 			paintWhenInitiallyHidden: true,
-			webPreferences: { contextIsolation: true, nodeIntegration: false },
+			// backgroundThrottling off: the settle waits on rAF, and Chromium
+			// parks rAF in hidden windows — same as every capture window.
+			webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
 		})
 
 		try {
 			await window.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
-			// Same settle contract as the checks path: fonts and images decide what
-			// gets measured, and geometry against fallback type lies.
-			await window.webContents
-				.executeJavaScript(
-					`(async () => {
-						const deadline = new Promise((r) => setTimeout(r, 4000))
-						const ready = (async () => {
-							await document.fonts.ready
-							await Promise.all([...document.images].map((img) => img.complete ? null : new Promise((r) => { img.onload = r; img.onerror = r })))
-							await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-						})()
-						await Promise.race([ready, deadline])
-					})()`,
-				)
-				.catch(() => {})
+			// Same settle contract as the checks path: what gets measured must be
+			// the finished page, and geometry against fallback type lies.
+			await window.webContents.executeJavaScript(settleScript(4000)).catch(() => {})
 
 			const measurements = (await window.webContents.executeJavaScript(buildOverlayMeasureScript(caretIds))) as
 				| OverlayMeasurement[]

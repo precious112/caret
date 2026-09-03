@@ -28,8 +28,10 @@ import {
 	readChecksConfig,
 	shouldFeedBack,
 	storeChecksResults,
+	tailwindFindings,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { settleScript } from "./page-settle"
 
 /** axe-core's minified source, read once — injected into each rendered page. */
 let axeSource: string | null = null
@@ -113,6 +115,10 @@ export class DesignChecksService {
 		const results: PageCheckResult[] = []
 		const rendererUp = this.options.baseUrl() !== null
 		const lock = await readCatalogLock(this.options.projectPath)
+		// A stray tailwind.config.* affects the whole layer, not one page —
+		// reported once, on the first page checked, or it becomes a chorus.
+		const tailwindConfigs = await this.tailwindConfigFiles()
+		let configsReported = false
 		for (const page of targets) {
 			const findings: CheckFinding[] = [...metaFindings(page)]
 			// Catalog restraint findings are computed from SOURCE — a budget breach
@@ -121,6 +127,8 @@ export class DesignChecksService {
 				.readFile(path.join(this.options.projectPath, ".caret", "pages", page.id, "index.tsx"), "utf-8")
 				.catch(() => "")
 			if (pageSource) findings.push(...catalogFindings(pageSource, page.id, lock))
+			findings.push(...tailwindFindings(page.id, await this.pageCssFiles(page.id), configsReported ? [] : tailwindConfigs))
+			configsReported = true
 			if (rendererUp) {
 				const rendered = await this.checkRendered(page.id).catch((err) => {
 					Logger.warn(`[checks] could not render ${page.id}: ${err}`)
@@ -149,6 +157,26 @@ export class DesignChecksService {
 		return results
 	}
 
+	/** `tailwind.config.*` files at the design layer's root — none should exist. */
+	private async tailwindConfigFiles(): Promise<string[]> {
+		const caretDir = path.join(this.options.projectPath, ".caret")
+		const entries = await fs.readdir(caretDir).catch(() => [] as string[])
+		return entries.filter((name) => /^tailwind\.config\.[cm]?[jt]s$/.test(name)).map((name) => `.caret/${name}`)
+	}
+
+	/** The stylesheets inside one page's directory, path + content. */
+	private async pageCssFiles(pageId: string): Promise<Array<{ file: string; content: string }>> {
+		const dir = path.join(this.options.projectPath, ".caret", "pages", pageId)
+		const entries = await fs.readdir(dir, { recursive: true }).catch(() => [] as string[])
+		const files: Array<{ file: string; content: string }> = []
+		for (const entry of entries) {
+			if (typeof entry !== "string" || !entry.endsWith(".css")) continue
+			const content = await fs.readFile(path.join(dir, entry), "utf-8").catch(() => "")
+			if (content) files.push({ file: `pages/${pageId}/${entry.split(path.sep).join("/")}`, content })
+		}
+		return files
+	}
+
 	/** One page: isolated render, axe contrast audit, DOM slop-tell script. */
 	private async checkRendered(pageId: string): Promise<CheckFinding[]> {
 		const base = this.options.baseUrl()
@@ -167,9 +195,13 @@ export class DesignChecksService {
 						() =>
 							resolve([
 								{
-									check: "render-unavailable",
-									severity: "info",
-									message: "the page render did not settle within 20s — checks that need a render were skipped",
+									// An error, not an info: the usual cause is an import the
+									// dev server cannot resolve, which is the page author's to
+									// fix — and only errors are fed back into the session.
+									check: "page-error",
+									severity: "error",
+									message:
+										"the page render did not settle within 20s — usually an import the dev server cannot resolve; verify every import in the page resolves (and its package is installed) and run the checks again",
 									pageId,
 								},
 							]),
@@ -196,26 +228,29 @@ export class DesignChecksService {
 			width: 1440,
 			height: 900,
 			paintWhenInitiallyHidden: true,
-			webPreferences: { contextIsolation: true, nodeIntegration: false },
+			// backgroundThrottling off: the settle waits on rAF, and Chromium
+			// parks rAF in hidden windows — same as every capture window.
+			webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
 		})
 
 		try {
 			await window.loadURL(`${base}?page=${encodeURIComponent(pageId)}&isolated=1`)
-			// Same settle contract as the screenshot path: fonts and images decide
-			// what the checks see, and a check against fallback type lies.
-			await window.webContents
+			// Same settle contract as the screenshot path: what the checks see must
+			// be the finished page, and a check against fallback type lies.
+			await window.webContents.executeJavaScript(settleScript(4000)).catch(() => {})
+
+			// A page that error-carded is not a design to audit — it is one finding,
+			// carrying the real error, which the enforcement loop feeds back to the
+			// agent that wrote the page. Running the slop checks over an error card
+			// would bury that signal under meaningless ones.
+			const pageError = (await window.webContents
 				.executeJavaScript(
-					`(async () => {
-						const deadline = new Promise((r) => setTimeout(r, 4000))
-						const ready = (async () => {
-							await document.fonts.ready
-							await Promise.all([...document.images].map((img) => img.complete ? null : new Promise((r) => { img.onload = r; img.onerror = r })))
-							await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-						})()
-						await Promise.race([ready, deadline])
-					})()`,
+					`document.querySelector("[data-caret-page-error]")?.getAttribute("data-caret-page-error") ?? null`,
 				)
-				.catch(() => {})
+				.catch(() => null)) as string | null
+			if (pageError) {
+				return [{ check: "page-error", severity: "error", message: `the page does not render: ${pageError}`, pageId }]
+			}
 
 			const findings: CheckFinding[] = []
 

@@ -217,6 +217,7 @@ export {
 	readChecksResults,
 	shouldFeedBack,
 	storeChecksResults,
+	tailwindFindings,
 } from "./design-checks"
 export {
 	listFlows,
@@ -303,9 +304,10 @@ export {
 	recordEdit,
 } from "./provenance"
 export { RenderingShell } from "./rendering-shell"
-export { writeThemeCss } from "./rendering-shell/entry-template"
+export { entryFileSources, writeThemeCss } from "./rendering-shell/entry-template"
 export type { DesignInboundMessage, DesignOutboundMessage } from "./rendering-shell/messages"
 export { foundationThemeCss, THEME_CSS_FILENAME } from "./rendering-shell/theme-css"
+export { viteConfigSource } from "./rendering-shell/vite-config-template"
 export { caretDirectoryExists, ensureCaretDirectoryExists, ensureCaretGitignore } from "./scaffold"
 export {
 	bridgeFor,

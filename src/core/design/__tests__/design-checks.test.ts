@@ -16,6 +16,7 @@ import {
 	readChecksResults,
 	shouldFeedBack,
 	storeChecksResults,
+	tailwindFindings,
 } from "../design-checks"
 
 function finding(check: string, severity: CheckFinding["severity"], pageId = "home"): CheckFinding {
@@ -72,6 +73,37 @@ describe("feedback policy", () => {
 		text.should.containEql("missing-alt")
 		text.should.containEql("1 problem")
 		text.should.not.containEql("border-on-everything")
+	})
+
+	it("a page-error finding is an error, so it reaches the agent that wrote the page", () => {
+		// The whole point of the check: a page that error-cards must cost a
+		// corrective turn, not sit as an info line nobody reads.
+		shouldFeedBack([finding("page-error", "error")]).should.be.true()
+	})
+})
+
+describe("tailwindFindings", () => {
+	it("flags a second Tailwind import in a page stylesheet, with the file named", () => {
+		const found = tailwindFindings(
+			"home",
+			[{ file: "pages/home/hero.css", content: '@import "tailwindcss";\n.x { color: red }' }],
+			[],
+		)
+		found.should.have.length(1)
+		found[0].check.should.equal("tailwind-setup")
+		found[0].severity.should.equal("error")
+		found[0].message.should.containEql("pages/home/hero.css")
+	})
+
+	it("flags a tailwind config file as an error naming the file", () => {
+		const found = tailwindFindings("home", [], [".caret/tailwind.config.js"])
+		found.should.have.length(1)
+		found[0].severity.should.equal("error")
+		found[0].message.should.containEql("tailwind.config.js")
+	})
+
+	it("stays quiet over ordinary stylesheets", () => {
+		tailwindFindings("home", [{ file: "pages/home/hero.css", content: ".x { color: red }" }], []).should.have.length(0)
 	})
 })
 

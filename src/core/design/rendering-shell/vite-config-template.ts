@@ -1,8 +1,13 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 
-export async function generateViteConfig(caretDir: string): Promise<void> {
-	const configContent = `import { defineConfig } from "vite"
+/**
+ * The generated `vite.config.ts`, as a string. Exported (not inlined into the
+ * writer) so the healer can compare a live config against what Caret would
+ * generate and restore it the moment something else rewrites it.
+ */
+export function viteConfigSource(): string {
+	return `import { defineConfig } from "vite"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
 import { resolve, join } from "path"
@@ -114,6 +119,20 @@ function caretRouterPlugin() {
       }
       server.watcher.on("add", handleIndexFile)
       server.watcher.on("unlink", handleIndexFile)
+
+      // Every design-source change is announced on the wire. HMR propagation
+      // stops at this self-accepting module, so a document stuck on an error
+      // card never receives an update — it listens for this event instead and
+      // reloads itself (see main.tsx). "add" matters as much as "change": the
+      // fix for a broken import is often the created file it was pointing at.
+      const sourceRoots = ["pages", "components", "layouts", "lib"].map((d) => resolve(__dirname, d))
+      const announceSourceChange = (p) => {
+        if (!/\\.(tsx|jsx|ts|css)$/.test(p)) return
+        if (!sourceRoots.some((dir) => p.startsWith(dir))) return
+        server.ws.send({ type: "custom", event: "caret:source-changed" })
+      }
+      server.watcher.on("change", announceSourceChange)
+      server.watcher.on("add", announceSourceChange)
     },
   }
 }
@@ -132,7 +151,7 @@ function caretTailwindFreshPlugin() {
     name: "caret-tailwind-fresh",
     configureServer(server) {
       server.watcher.on("add", (p) => {
-        if (!p.endsWith(".tsx")) return
+        if (!p.endsWith(".tsx") && !p.endsWith(".jsx")) return
         if (!sourceDirs.some((dir) => p.startsWith(dir))) return
         try {
           const now = new Date()
@@ -569,6 +588,8 @@ export default defineConfig({
   },
 })
 `
+}
 
-	await fs.writeFile(path.join(caretDir, "vite.config.ts"), configContent)
+export async function generateViteConfig(caretDir: string): Promise<void> {
+	await fs.writeFile(path.join(caretDir, "vite.config.ts"), viteConfigSource())
 }

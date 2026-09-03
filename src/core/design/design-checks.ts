@@ -56,6 +56,8 @@ export const BUILTIN_CHECKS: Record<string, string> = {
 	"missing-states": "a page that declares only its happy path has not been designed, only sketched",
 	"restraint-budget": "one signature move per page — a second showpiece component is how premium libraries become slop",
 	"catalog-unknown": "an import that looks like a catalog path but names nothing in the catalog will never resolve",
+	"page-error": "a page that fails to compile or crashes on load shows an error card, not a design",
+	"tailwind-setup": "Tailwind is loaded once by the shell — a second import or a config file breaks the build or misleads it",
 }
 
 export const CHECKS_CONFIG_FILE = "checks.json"
@@ -189,6 +191,42 @@ export function metaFindings(meta: PageMeta): CheckFinding[] {
 		]
 	}
 	return []
+}
+
+/**
+ * Source-level Tailwind setup tells, computable with the renderer down.
+ *
+ * The shell loads Tailwind v4 exactly once, from `global.css`; the theme comes
+ * from the foundation. A second `@import "tailwindcss"` in any stylesheet
+ * breaks the build, and a `tailwind.config.*` file has no effect in v4 — its
+ * presence means whoever wrote it believes the setup works differently than it
+ * does, and the next edit made under that belief fails too.
+ */
+export function tailwindFindings(
+	pageId: string,
+	cssFiles: Array<{ file: string; content: string }>,
+	configFiles: string[],
+): CheckFinding[] {
+	const findings: CheckFinding[] = []
+	for (const { file, content } of cssFiles) {
+		if (/@import\s+["']tailwindcss/.test(content)) {
+			findings.push({
+				check: "tailwind-setup",
+				severity: "error",
+				message: `${file} imports Tailwind a second time — the shell already loads it once in global.css; remove the import`,
+				pageId,
+			})
+		}
+	}
+	for (const file of configFiles) {
+		findings.push({
+			check: "tailwind-setup",
+			severity: "error",
+			message: `${file} has no effect — Tailwind v4 takes no config file here; delete it (the theme comes from the foundation via caret-theme.css)`,
+			pageId,
+		})
+	}
+	return findings
 }
 
 /** `.caret/pages/<id>/…` files out of a turn's change list → distinct page ids, variant takes excluded. */

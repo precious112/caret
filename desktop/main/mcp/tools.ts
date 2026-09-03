@@ -251,7 +251,7 @@ export const TOOLS: ToolDefinition[] = [
 			// when they are not — without this the agent receives an empty result
 			// and answers plausibly from context instead of saying it saw nothing.
 			const caution = result.warning
-				? ` CAUTION: ${result.warning}. Whatever those images show is MISSING from this frame — before concluding something "isn't rendering", check that the asset path resolves and screenshot again.`
+				? ` CAUTION: ${result.warning}. Whatever those assets show is MISSING from this frame — before concluding something "isn't rendering", check that the asset path resolves and screenshot again.`
 				: ""
 			return {
 				content: [
