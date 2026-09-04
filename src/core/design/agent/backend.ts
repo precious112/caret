@@ -153,6 +153,13 @@ export interface SendInput {
 	text: string
 	/** Data URLs. The overlay editor sends screenshots this way. */
 	images?: string[]
+	/**
+	 * Tool names the backend must not offer the model THIS turn (the backend's
+	 * own namespace, e.g. `caret_get_screenshot`). Playground takes bar the
+	 * screenshot tool: the human is watching the page render live, so a
+	 * screenshot spends minutes verifying what is already on screen.
+	 */
+	disabledTools?: string[]
 }
 
 export type BackendEvent =

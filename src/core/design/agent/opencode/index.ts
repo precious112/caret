@@ -876,6 +876,11 @@ class OpencodeSessionHandle implements BackendSession {
 					],
 					...(this.options.systemPrompt ? { system: this.options.systemPrompt } : {}),
 					...(modelRef(this.options.model, this.options.effort) ?? {}),
+					// Same per-prompt `tools` map the structured path uses on /message:
+					// false removes the tool from this turn entirely.
+					...(input.disabledTools?.length
+						? { tools: Object.fromEntries(input.disabledTools.map((tool) => [tool, false])) }
+						: {}),
 					// The Plan agent is a second line of defence, never the boundary:
 					// upstream subagents have been reported not to inherit it.
 					...(this.options.mode === "read-only" ? { agent: "plan" } : {}),

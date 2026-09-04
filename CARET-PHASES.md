@@ -820,11 +820,16 @@ and e2e-certified autonomously, with their involvement reserved for 7.5's curati
       modifier — the ×3 buttons are gone. One instruction spawns three real variant pages and
       three **parallel unattended** conversations (the explore lane, one per take, capped at
       3 concurrent) — each pushed toward a different reading (restrained / bolder / structural,
-      the angle now shown on the card). Cards are live iframes with per-take narration,
-      elapsed time and cancel; a ready take expands to scale 1, applies (with an undo step,
-      after aborting outstanding turns), or **branches a deeper round** — a tree walked until
-      something is settled. A second door explores a page that doesn't exist yet ("something
-      new"): stub takes, settling adds the page to the canvas. One exploration per project;
+      the angle shown on the card). The surface is a centered lineage walked downward: a
+      working take is a skeleton loader with elapsed time and cancel (no original card, no
+      agent logs — the page appears the moment its take finishes); clicking a page shows it
+      at scale 1; Use/Branch sit below each take. Branching clears the passed-over siblings
+      (cancelling any still generating), opens a prompt under the pick, and grows the next
+      round's skeletons below it; applying captures an undo step after aborting outstanding
+      turns. Take turns run with the screenshot tool disabled per-prompt (`tools` map on the
+      message — the user watches the page render live). A second door explores a page that
+      doesn't exist yet ("something new"): stub takes, settling adds the page to the canvas.
+      One exploration per project;
       leaving the canvas keeps it visible via a pill + an "Exploring" chip in the chrome.
       Variant pages are gitignored (`pages/*--v<n>`) and excluded from the grid, the rules
       context and the sync inventory. `propose_variants` + a rules-file instruction register

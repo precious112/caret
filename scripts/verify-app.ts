@@ -5267,7 +5267,7 @@ export default function CatalogDemo() {
 							const result = await wc
 								.executeJavaScript(
 									`(async () => {
-									const b = document.querySelector('[data-testid="explore-expand-${target}"]')
+									const b = document.querySelector('[data-testid="explore-preview-${target}"]')
 									if (!b) return null
 									b.click()
 									await new Promise((r) => setTimeout(r, 400))

@@ -107,6 +107,7 @@ export class ExploreLane {
 						images: task.images,
 						note: task.note,
 						unattended: true,
+						disabledTools: task.disabledTools,
 						context: task.context,
 					})
 					if (entry.cancelled) throw new ExploreCancelledError()

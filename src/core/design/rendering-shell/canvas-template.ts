@@ -357,20 +357,16 @@ function generateExploreView(): string {
 
 		/**
 		 * The playground: exploration on its own canvas mode, never an overlay.
-		 * With nothing open it is the start screen — variants of an existing page,
-		 * or a page that doesn't exist yet. With an exploration open every take is
-		 * a LIVE iframe card with its own narration, elapsed time and cancel; a
-		 * ready take expands to full size, applies, or branches the next round —
-		 * a tree walked until something is worth settling on.
+		 * With nothing open it is the start screen. With an exploration open the
+		 * view is a centered lineage walked downward: the current round's takes
+		 * side by side — skeletons while they generate, the live page the moment
+		 * each finishes — and branching clears the siblings, keeps the pick, and
+		 * grows the next round below it. Clicking a page shows it full size.
 		 */
-
-		const PUSH_FURTHER = "Push this direction noticeably further."
 
 		function send(type: string, payload: any) {
 		  window.parent.postMessage({ source: "caret-vite", type, payload }, "*")
 		}
-
-		interface TakeStatus { phase: string; detail?: string; error?: string }
 
 		/** A live page iframe scaled to exactly fill its card — no dead space at any column width. */
 		function ScaledFrame({ pageId, border }: { pageId: string; border?: string }) {
@@ -464,12 +460,10 @@ function generateExploreView(): string {
 		    send("variant-request", { newPage: { name: newName.trim() }, instruction: newInstruction.trim() })
 		  }
 
-		  const cardStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 10, padding: 20,
-		    borderRadius: 12, border: "1px solid #2a2a3a", background: "#15151f", width: 360 }
-		  const inputStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 6, border: "1px solid #3a3a4a",
-		    background: "#1e1e2a", color: "#e5e7eb", fontSize: 13, outline: "none" }
-		  const goStyle: React.CSSProperties = { background: "#0b7aff", border: "none", color: "#fff", borderRadius: 7,
-		    padding: "8px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", alignSelf: "flex-start" }
+		  const cardStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 12, padding: 24,
+		    borderRadius: 14, border: "1px solid #2a2a3a", background: "#15151f", width: 440, maxWidth: "90%" }
+		  const inputStyle: React.CSSProperties = { padding: "10px 14px", borderRadius: 8, border: "1px solid #3a3a4a",
+		    background: "#1e1e2a", color: "#e5e7eb", fontSize: 13.5, outline: "none" }
 
 		  return (
 		    <>
@@ -480,9 +474,9 @@ function generateExploreView(): string {
 		          <div style={{ fontSize: 12.5, color: "#8b93a7" }}>Three independent takes per round — pick one, or branch a direction further.</div>
 		        </div>
 		      </div>
-		      {starting && <div style={{ padding: "10px 24px", fontSize: 13, color: "#8b93a7" }}>Starting the first round…</div>}
-		      {error && <div data-testid="explore-start-error" style={{ padding: "10px 24px", fontSize: 13, color: "#f87171" }}>{error}</div>}
-		      <div style={{ flex: 1, display: "flex", gap: 24, padding: 32, alignItems: "flex-start", flexWrap: "wrap" }}>
+		      {starting && <div style={{ padding: "10px 24px", fontSize: 13, color: "#8b93a7", textAlign: "center" }}>Starting the first round…</div>}
+		      {error && <div data-testid="explore-start-error" style={{ padding: "10px 24px", fontSize: 13, color: "#f87171", textAlign: "center" }}>{error}</div>}
+		      <div style={{ flex: 1, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "14vh" }}>
 		        {pageId ? (
 		        <div data-testid="explore-start-page" style={cardStyle}>
 		          <div style={{ fontSize: 14, fontWeight: 600 }}>Variants of {(page && page.title) || pageId}</div>
@@ -490,7 +484,7 @@ function generateExploreView(): string {
 		          <input autoFocus data-testid="explore-instruction" style={inputStyle} placeholder="What should the takes explore?"
 		            value={pageInstruction} onChange={e => setPageInstruction(e.target.value)}
 		            onKeyDown={e => { if (e.key === "Enter") startPage() }} />
-		          <button style={goStyle} data-testid="explore-start-page-go" disabled={starting} onClick={startPage}>Generate 3 takes</button>
+		          <button className="caret-explore-primary" data-testid="explore-start-page-go" disabled={starting} onClick={startPage}>Generate 3 takes</button>
 		        </div>
 		        ) : (
 		        <div data-testid="explore-start-new" style={cardStyle}>
@@ -501,7 +495,7 @@ function generateExploreView(): string {
 		          <input data-testid="explore-new-instruction" style={inputStyle} placeholder="What should it be?"
 		            value={newInstruction} onChange={e => setNewInstruction(e.target.value)}
 		            onKeyDown={e => { if (e.key === "Enter") startNew() }} />
-		          <button style={goStyle} data-testid="explore-start-new-go" disabled={starting} onClick={startNew}>Generate 3 takes</button>
+		          <button className="caret-explore-primary" data-testid="explore-start-new-go" disabled={starting} onClick={startNew}>Generate 3 takes</button>
 		        </div>
 		        )}
 		      </div>
@@ -517,24 +511,36 @@ function generateExploreView(): string {
 		  const nodes = exploration.nodes
 		  const isNew = exploration.mode === "new"
 		  const isProposal = exploration.kind === "drift-proposal"
-		  const [statuses, setStatuses] = useState<Record<string, TakeStatus>>({})
-		  const [focusId, setFocusId] = useState<string | null>(null)
 		  const [expandedId, setExpandedId] = useState<string | null>(null)
 		  const [branchingId, setBranchingId] = useState<string | null>(null)
 		  const [branchText, setBranchText] = useState("")
+		  // Set on branch submit; renders three skeletons until the round registers.
+		  const [pendingBranch, setPendingBranch] = useState<string | null>(null)
 
-		  // Each take's live narration, keyed by node — pushed by the host as the
-		  // take's own conversation works.
+		  const byId: Record<string, ExploreNode> = {}
+		  nodes.forEach(n => { byId[n.id] = n })
+
+		  // The lineage: every branch point picked so far, oldest first. Branching
+		  // commits to it — the passed-over siblings leave the view (the header's
+		  // discard is still the way out of the whole exploration). Derived from
+		  // the data on mount so a reopened exploration lands on its deepest round.
+		  const [lineage, setLineage] = useState<string[]>(() => {
+		    const map: Record<string, ExploreNode> = {}
+		    nodes.forEach(n => { map[n.id] = n })
+		    const chain: string[] = []
+		    let p = nodes.length ? nodes[nodes.length - 1].parentId : ""
+		    while (p && map[p]) { chain.unshift(p); p = map[p].parentId }
+		    return chain
+		  })
+
+		  const branchPoint = lineage.length ? lineage[lineage.length - 1] : exploration.pageId
+		  const row = nodes.filter(n => n.parentId === branchPoint)
+
+		  // The submitted branch's skeletons are placeholders only until the real
+		  // nodes land in the scratch — then the row IS the round.
 		  useEffect(() => {
-		    const onMsg = (e: MessageEvent) => {
-		      const d = e.data
-		      if (!d || d.source !== "caret-host" || d.type !== "explore-status" || !d.payload) return
-		      const p = d.payload
-		      setStatuses(prev => ({ ...prev, [p.nodeId]: { phase: p.phase, detail: p.detail, error: p.error } }))
-		    }
-		    window.addEventListener("message", onMsg)
-		    return () => window.removeEventListener("message", onMsg)
-		  }, [])
+		    if (pendingBranch && nodes.some(n => n.parentId === pendingBranch)) setPendingBranch(null)
+		  }, [nodes.length, pendingBranch])
 
 		  // Re-render each second while anything generates, for the elapsed tickers.
 		  const workingCount = nodes.filter(n => n.status === "working").length
@@ -545,23 +551,19 @@ function generateExploreView(): string {
 		    return () => clearInterval(t)
 		  }, [workingCount])
 
-		  const byId: Record<string, ExploreNode> = {}
-		  nodes.forEach(n => { byId[n.id] = n })
-		  const depthOf = (n: ExploreNode) => { let d = 1; let p = n.parentId; while (byId[p]) { d++; p = byId[p].parentId } return d }
+		  const readyIds = nodes.filter(n => n.status === "ready").map(n => n.id)
 
-		  // Default focus: the branch point of the newest round, so fresh takes are
-		  // what greets you. The rail overrides it.
-		  const defaultFocus = nodes.length ? nodes[nodes.length - 1].parentId : exploration.pageId
-		  const focus = focusId ?? defaultFocus
-		  const children = nodes.filter(n => n.parentId === focus)
-		  const focusNode = byId[focus] || null
-		  const readyIds = (isNew ? [] : [exploration.pageId]).concat(nodes.filter(n => n.status === "ready").map(n => n.id))
+		  const cancelBranch = () => {
+		    setBranchingId(null); setBranchText("")
+		    // Un-commit: the passed-over siblings come back.
+		    setLineage(l => l.slice(0, -1))
+		  }
 
 		  useEffect(() => {
 		    const onKey = (e: KeyboardEvent) => {
 		      if (e.key === "Escape") {
 		        if (expandedId) setExpandedId(null)
-		        else if (branchingId) setBranchingId(null)
+		        else if (branchingId) cancelBranch()
 		        else onBack()
 		      }
 		      if (expandedId && (e.key === "ArrowLeft" || e.key === "ArrowRight") && readyIds.length > 1) {
@@ -581,11 +583,25 @@ function generateExploreView(): string {
 		    if (workingCount > 0 && !window.confirm("Takes are still generating — settle on this one and drop the rest?")) return
 		    onPick(id)
 		  }
-		  const branchFrom = (fromId: string, instruction: string) => {
-		    if (!instruction.trim()) return
-		    send("variant-request", { fromId, instruction: instruction.trim() })
-		    setBranchingId(null); setBranchText("")
-		    setFocusId(fromId)
+		  const startBranch = (id: string) => {
+		    setLineage(l => [...l, id])
+		    setBranchingId(id)
+		    setBranchText("")
+		  }
+		  const submitBranch = () => {
+		    if (!branchingId || !branchText.trim()) return
+		    const picked = byId[branchingId]
+		    if (picked) {
+		      // Branching IS the verdict on this round — passed-over siblings still
+		      // generating are cancelled, not left spending quietly out of view.
+		      nodes
+		        .filter(n => n.parentId === picked.parentId && n.id !== branchingId && n.status === "working")
+		        .forEach(n => send("variant-cancel", { nodeId: n.id }))
+		    }
+		    send("variant-request", { fromId: branchingId, instruction: branchText.trim() })
+		    setPendingBranch(branchingId)
+		    setBranchingId(null)
+		    setBranchText("")
 		  }
 
 		  const useLabel = isProposal ? "Use the app's version" : isNew ? "Add to canvas" : "Use this one"
@@ -601,11 +617,11 @@ function generateExploreView(): string {
 		        <div className="caret-explore-header">
 		          <button className="caret-explore-btn" data-testid="explore-collapse" onClick={() => setExpandedId(null)} title="Back to the cards (Esc)">←</button>
 		          <div style={{ minWidth: 0, flex: 1 }}>
-		            <div style={{ fontSize: 14, fontWeight: 600 }}>{node ? node.label : "Original"}{node ? " · " + node.angleLabel : ""}</div>
+		            <div style={{ fontSize: 14, fontWeight: 600 }}>{node ? node.label : "Current design"}{node ? " · " + node.angleLabel : ""}</div>
 		            <div style={{ fontSize: 12, color: "#8b93a7" }}>full size — ←/→ compares, Esc goes back</div>
 		          </div>
 		          {node && node.status === "ready" && (
-		            <button className="caret-explore-go" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
+		            <button className="caret-explore-primary" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
 		          )}
 		        </div>
 		        <div style={{ flex: 1, overflow: "auto", background: "#0d0d14", display: "flex", justifyContent: "center" }}>
@@ -615,6 +631,73 @@ function generateExploreView(): string {
 		      </div>
 		    )
 		  }
+
+		  // One take, rendered for any position in the lineage. What a take shows
+		  // is decided by its status alone: a skeleton while the model works, the
+		  // live page the moment it lands, a readable message when it didn't.
+		  // Actions live BELOW the frame so every frame in a row starts at the
+		  // same height, and the frame itself is the click target for full size.
+		  const takeCard = (node: ExploreNode, opts: { ancestor?: boolean } = {}) => (
+		    <div key={node.id} data-testid={"variant-card-" + node.id}
+		      style={{ width: opts.ancestor ? 380 : 400, display: "flex", flexDirection: "column", gap: 10 }}>
+		      <div style={{ display: "flex", alignItems: "baseline", gap: 8, whiteSpace: "nowrap" }}>
+		        <span style={{ fontSize: 13, fontWeight: 600 }}>{node.label}</span>
+		        <span style={{ fontSize: 11.5, color: "#8b93a7" }}>{node.angleLabel}</span>
+		        <span style={{ marginLeft: "auto" }} />
+		        {node.status === "working" && (
+		          <>
+		            <span style={{ fontSize: 12, color: "#8b93a7", fontVariantNumeric: "tabular-nums" }}>{elapsedLabel(node.startedAt)}</span>
+		            <button className="caret-explore-mini" data-testid={"explore-cancel-" + node.id}
+		              title="Cancel this take" onClick={() => send("variant-cancel", { nodeId: node.id })}>×</button>
+		          </>
+		        )}
+		      </div>
+
+		      {node.status === "working" && (
+		        <div className="caret-explore-skel" data-testid={"explore-skeleton-" + node.id}>
+		          <div className="caret-explore-skel-bar" style={{ width: "42%", height: 22 }} />
+		          <div className="caret-explore-skel-bar" style={{ width: "88%" }} />
+		          <div className="caret-explore-skel-bar" style={{ width: "76%" }} />
+		          <div className="caret-explore-skel-bar" style={{ width: "82%", height: 64 }} />
+		          <div className="caret-explore-skel-bar" style={{ width: "64%" }} />
+		        </div>
+		      )}
+		      {node.status === "ready" && (
+		        <div className="caret-explore-frame" data-testid={"explore-preview-" + node.id}
+		          title="Click to see it full size" onClick={() => setExpandedId(node.id)}>
+		          <ScaledFrame pageId={node.id} />
+		        </div>
+		      )}
+		      {(node.status === "failed" || node.status === "cancelled") && (
+		        <div style={{ borderRadius: 10, border: "1px solid #4a2a2a", background: "#1c1216", padding: 16,
+		          fontSize: 12.5, color: "#f0a8a8", lineHeight: 1.5, minHeight: 80 }}>
+		          {node.status === "cancelled"
+		            ? "Cancelled." + (node.error ? " " + node.error : "")
+		            : (node.error || "This take failed — the other cards are unaffected.")}
+		        </div>
+		      )}
+
+		      {node.status === "ready" && (
+		        <div style={{ display: "flex", justifyContent: "center", gap: 10 }}>
+		          <button className="caret-explore-primary" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
+		          {!isProposal && !opts.ancestor && (
+		            <button className="caret-explore-ghost" data-testid={"explore-branch-" + node.id} onClick={() => startBranch(node.id)}>Branch</button>
+		          )}
+		        </div>
+		      )}
+		    </div>
+		  )
+
+		  const skeletonPlaceholder = (index: number) => (
+		    <div key={"pending-" + index} data-testid={"explore-skeleton-pending-" + index} style={{ width: 400 }}>
+		      <div className="caret-explore-skel" style={{ marginTop: 30 }}>
+		        <div className="caret-explore-skel-bar" style={{ width: "42%", height: 22 }} />
+		        <div className="caret-explore-skel-bar" style={{ width: "88%" }} />
+		        <div className="caret-explore-skel-bar" style={{ width: "76%" }} />
+		        <div className="caret-explore-skel-bar" style={{ width: "82%", height: 64 }} />
+		      </div>
+		    </div>
+		  )
 
 		  return (
 		    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -633,105 +716,37 @@ function generateExploreView(): string {
 		        <button className="caret-explore-btn" data-testid="variant-keep-original" onClick={discard}>{keepLabel}</button>
 		      </div>
 
-		      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-		        {/* The tree rail: every round at a glance, any branch point one click away. */}
-		        {!isProposal && (
-		          <div style={{ width: 230, flexShrink: 0, overflow: "auto", borderRight: "1px solid #2a2a3a", padding: "12px 8px" }} data-testid="explore-rail">
-		            <div
-		              className={"caret-explore-rail-row" + (focus === exploration.pageId ? " active" : "")}
-		              data-testid="explore-rail-root"
-		              onClick={() => setFocusId(exploration.pageId)}>
-		              {isNew ? (exploration.title || exploration.pageId) : "Original: " + exploration.pageId}
-		            </div>
-		            {nodes.map(n => (
-		              <div key={n.id}
-		                className={"caret-explore-rail-row" + (focus === n.id ? " active" : "")}
-		                data-testid={"explore-rail-" + n.id}
-		                style={{ paddingLeft: 10 + depthOf(n) * 14 }}
-		                onClick={() => setFocusId(n.id)}>
-		                <span>{n.label}</span>
-		                <span style={{ color: "#666e82", marginLeft: 6, fontSize: 11 }}>{n.angleLabel}</span>
-		                <span style={{ marginLeft: "auto", fontSize: 11,
-		                  color: n.status === "ready" ? "#34d399" : n.status === "working" ? "#8b93a7" : "#f87171" }}>
-		                  {n.status === "working" ? "…" : n.status === "ready" ? "●" : "×"}
-		                </span>
+		      <div style={{ flex: 1, overflow: "auto", padding: "36px 24px 80px" }}>
+		        <div style={{ maxWidth: 1320, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 32 }}>
+		          {/* A drift review is a comparison — the current design stays visible
+		              beside the app's version. Everywhere else the original earns no
+		              card: the exploration is about where the page is going. */}
+		          {isProposal && (
+		            <div data-testid={"variant-card-" + exploration.pageId} style={{ width: 400, display: "flex", flexDirection: "column", gap: 10 }}>
+		              <div style={{ fontSize: 13, fontWeight: 600 }}>Current design</div>
+		              <div className="caret-explore-frame" data-testid={"explore-preview-" + exploration.pageId}
+		                title="Click to see it full size" onClick={() => setExpandedId(exploration.pageId)}>
+		                <ScaledFrame pageId={exploration.pageId} border="1px solid #3a3a4a" />
 		              </div>
-		            ))}
-		          </div>
-		        )}
-
-		        <div style={{ flex: 1, overflow: "auto", display: "grid", gap: 20, padding: 24,
-		          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", alignContent: "start" }}>
-		          {/* The branch point itself, so every child is judged against it. */}
-		          {(focus === exploration.pageId && isNew) ? null : (
-		            <div data-testid={"variant-card-" + focus} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-		              <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 26 }}>
-		                <span style={{ fontSize: 13, fontWeight: 600 }}>{focusNode ? focusNode.label : "Original"}</span>
-		                <span style={{ fontSize: 11, color: "#8b93a7" }}>{focusNode ? focusNode.angleLabel : "the page as it is"}</span>
-		                <span style={{ marginLeft: "auto" }} />
-		                <button className="caret-explore-mini" data-testid={"explore-expand-" + focus} onClick={() => setExpandedId(focus)}>Expand</button>
-		                {/* A ready take you walked to is still a candidate — the pick
-		                    must not depend on which card happens to be the focus. */}
-		                {focusNode && focusNode.status === "ready" && (
-		                  <button className="caret-explore-go" data-testid={"variant-use-" + focus} onClick={() => settle(focus)}>{useLabel}</button>
-		                )}
-		              </div>
-		              <ScaledFrame pageId={focus} border="1px solid #3a3a4a" />
 		            </div>
 		          )}
 
-		          {children.map(node => {
-		            const live = statuses[node.id]
-		            return (
-		              <div key={node.id} data-testid={"variant-card-" + node.id} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-		                <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 26 }}>
-		                  <span style={{ fontSize: 13, fontWeight: 600 }}>{node.label}</span>
-		                  <span style={{ fontSize: 11, color: "#a5b4fc" }}>{node.angleLabel}</span>
-		                  <span style={{ marginLeft: "auto" }} />
-		                  {node.status === "working" && (
-		                    <>
-		                      <span style={{ fontSize: 12, color: "#8b93a7" }}>{elapsedLabel(node.startedAt)}</span>
-		                      <button className="caret-explore-mini" data-testid={"explore-cancel-" + node.id}
-		                        title="Cancel this take" onClick={() => send("variant-cancel", { nodeId: node.id })}>×</button>
-		                    </>
-		                  )}
-		                  {node.status === "ready" && (
-		                    <>
-		                      <button className="caret-explore-mini" data-testid={"explore-expand-" + node.id} onClick={() => setExpandedId(node.id)}>Expand</button>
-		                      {!isProposal && (
-		                        <button className="caret-explore-mini" data-testid={"explore-branch-" + node.id}
-		                          onClick={() => { setBranchingId(branchingId === node.id ? null : node.id); setBranchText("") }}>Branch</button>
-		                      )}
-		                      <button className="caret-explore-go" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
-		                    </>
-		                  )}
-		                </div>
-		                {node.status === "working" && live && live.detail && (
-		                  <div style={{ fontSize: 11.5, color: "#8b93a7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{live.detail}</div>
-		                )}
-		                {branchingId === node.id && (
-		                  <div style={{ display: "flex", gap: 6 }}>
-		                    <input autoFocus data-testid={"explore-branch-input-" + node.id}
-		                      style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a4a", background: "#1e1e2a", color: "#e5e7eb", fontSize: 12.5, outline: "none" }}
-		                      placeholder="How should the next round push this?"
-		                      value={branchText} onChange={e => setBranchText(e.target.value)}
-		                      onKeyDown={e => { if (e.key === "Enter") branchFrom(node.id, branchText) }} />
-		                    <button className="caret-explore-mini" onClick={() => branchFrom(node.id, PUSH_FURTHER)} title={PUSH_FURTHER}>Push further</button>
-		                  </div>
-		                )}
-		                {node.status === "working" || node.status === "ready" ? (
-		                  <ScaledFrame pageId={node.id} />
-		                ) : (
-		                  <div style={{ borderRadius: 10, border: "1px solid #4a2a2a", background: "#1c1216", padding: 16,
-		                    fontSize: 12.5, color: "#f0a8a8", lineHeight: 1.5, minHeight: 80 }}>
-		                    {node.status === "cancelled"
-		                      ? "Cancelled." + (node.error ? " " + node.error : "")
-		                      : (node.error || (live && live.error) || "This take failed — the other cards are unaffected.")}
-		                  </div>
-		                )}
-		              </div>
-		            )
-		          })}
+		          {/* The lineage: each branch point picked so far, walked downward. */}
+		          {lineage.map(id => byId[id] && takeCard(byId[id], { ancestor: true }))}
+
+		          {branchingId && (
+		            <input autoFocus data-testid={"explore-branch-input-" + branchingId}
+		              style={{ width: 400, padding: "10px 14px", borderRadius: 8, border: "1px solid #0b7aff88",
+		                background: "#1e1e2a", color: "#e5e7eb", fontSize: 13.5, outline: "none" }}
+		              placeholder="How should the next round push this? — Enter to generate, Esc to go back"
+		              value={branchText} onChange={e => setBranchText(e.target.value)}
+		              onKeyDown={e => { if (e.key === "Enter") submitBranch() }} />
+		          )}
+
+		          <div style={{ display: "flex", gap: 24, justifyContent: "center", alignItems: "flex-start", flexWrap: "wrap", width: "100%" }}>
+		            {row.map(node => takeCard(node))}
+		            {pendingBranch && row.length === 0 && [0, 1, 2].map(skeletonPlaceholder)}
+		          </div>
 		        </div>
 		      </div>
 		    </div>
@@ -2429,17 +2444,35 @@ function generateCanvasCSS(): string {
 		  cursor: pointer;
 		}
 		.caret-explore-btn:hover { background: #ffffff10; }
-		.caret-explore-go {
-		  background: #0b7aff;
-		  border: none;
+		.caret-explore-primary {
+		  background: linear-gradient(180deg, #2f8bff, #0b6de6);
+		  border: 1px solid #0b6de6;
 		  color: #fff;
-		  border-radius: 7px;
-		  padding: 5px 12px;
-		  font-size: 12.5px;
-		  font-weight: 500;
+		  border-radius: 9px;
+		  padding: 8px 20px;
+		  font-size: 13px;
+		  font-weight: 600;
+		  letter-spacing: 0.01em;
+		  white-space: nowrap;
 		  cursor: pointer;
+		  box-shadow: 0 2px 10px rgba(11, 122, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+		  transition: filter 120ms ease, transform 120ms ease;
 		}
-		.caret-explore-go:hover { background: #2b8aff; }
+		.caret-explore-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+		.caret-explore-primary:active { transform: translateY(0); }
+		.caret-explore-primary:disabled { opacity: 0.55; cursor: default; transform: none; }
+		.caret-explore-ghost {
+		  background: transparent;
+		  border: 1px solid #3a3a4a;
+		  color: #c7cad3;
+		  border-radius: 9px;
+		  padding: 8px 16px;
+		  font-size: 13px;
+		  white-space: nowrap;
+		  cursor: pointer;
+		  transition: background 120ms ease, border-color 120ms ease;
+		}
+		.caret-explore-ghost:hover { background: #ffffff0a; border-color: #4a4a5a; }
 		.caret-explore-mini {
 		  background: #1e1e2a;
 		  border: 1px solid #3a3a4a;
@@ -2450,18 +2483,35 @@ function generateCanvasCSS(): string {
 		  cursor: pointer;
 		}
 		.caret-explore-mini:hover { background: #2a2a3a; }
-		.caret-explore-rail-row {
-		  display: flex;
-		  align-items: center;
-		  padding: 6px 10px;
-		  border-radius: 6px;
-		  font-size: 12.5px;
-		  cursor: pointer;
-		  white-space: nowrap;
-		  overflow: hidden;
+		/* The frame IS the click target for full size — no Expand button. */
+		.caret-explore-frame {
+		  cursor: zoom-in;
+		  border-radius: 10px;
+		  transition: box-shadow 140ms ease, transform 140ms ease;
 		}
-		.caret-explore-rail-row:hover { background: #ffffff08; }
-		.caret-explore-rail-row.active { background: #0b7aff22; color: #cfe5ff; }
+		.caret-explore-frame:hover { box-shadow: 0 0 0 2px #0b7aff66, 0 8px 24px rgba(0, 0, 0, 0.35); transform: translateY(-2px); }
+		/* A take being generated: quiet shimmer, no agent logs, no stale page. */
+		.caret-explore-skel {
+		  aspect-ratio: 16 / 10;
+		  border-radius: 10px;
+		  border: 1px solid #2a2a3a;
+		  background: #15151f;
+		  padding: 22px;
+		  display: flex;
+		  flex-direction: column;
+		  gap: 12px;
+		}
+		.caret-explore-skel-bar {
+		  height: 12px;
+		  border-radius: 6px;
+		  background: linear-gradient(90deg, #23232f 25%, #2e2e3d 45%, #23232f 65%);
+		  background-size: 200% 100%;
+		  animation: caret-skel-shimmer 1.4s ease-in-out infinite;
+		}
+		@keyframes caret-skel-shimmer {
+		  0% { background-position: 180% 0; }
+		  100% { background-position: -60% 0; }
+		}
 		/* The way back to an open exploration from any other canvas mode. Sits
 		   below the focused view's toolbar so it never covers its controls. */
 		.caret-explore-pill {

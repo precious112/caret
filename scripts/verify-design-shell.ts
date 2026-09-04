@@ -1274,15 +1274,16 @@ async function main() {
 		return "text-brand-500 followed a token edit through one CSS hot update, no reload"
 	})
 
-	await scenario("u. the playground renders an exploration tree, expands full size, branches, and picks", async () => {
-		// The pick half of the playground, without a model: seed a two-round tree
-		// on disk. The canvas must show the way-in pill (never an overlay), keep
-		// takes out of the grid, walk the tree by rail, expand a take to scale 1,
-		// post variant-request on a branch and variant-pick on a settle. The
-		// apply half needs the host router and is certified in verify:app.
+	await scenario("u. the playground shows skeletons, expands on click, branches down a lineage, and picks", async () => {
+		// The pick half of the playground, without a model: seed one round on
+		// disk, walk the whole surface. The canvas must show the way-in pill
+		// (never an overlay), keep takes out of the grid, show NO original card
+		// and NO agent logs, expand a page on click, clear siblings on branch,
+		// grow skeletons for the next round, and post variant-pick on a settle.
+		// The apply half needs the host router and is certified in verify:app.
 		const contactDir = path.join(caretDir, "pages", "contact")
 		const startedAt = new Date().toISOString()
-		for (const n of [1, 2, 3]) {
+		const seedTakeDir = async (n: number) => {
 			const dir = path.join(caretDir, "pages", `contact--v${n}`)
 			await fs.mkdir(dir, { recursive: true })
 			await fs.copyFile(path.join(contactDir, "index.tsx"), path.join(dir, "index.tsx"))
@@ -1298,6 +1299,8 @@ async function main() {
 				}),
 			)
 		}
+		await seedTakeDir(1)
+		await seedTakeDir(2)
 		const node = (id: string, parentId: string, angleLabel: string, status: string, error?: string) => ({
 			id,
 			parentId,
@@ -1309,26 +1312,22 @@ async function main() {
 			...(error ? { error } : {}),
 			startedAt,
 		})
-		await fs.writeFile(
-			path.join(caretDir, ".variants.json"),
-			JSON.stringify({
-				version: 2,
-				mode: "page",
-				pageId: "contact",
-				instruction: "make it feel warmer",
-				startedAt,
-				source: "caret",
-				nextTake: 5,
-				nodes: [
-					// Round 2 (v3, branched from v2) sits between round-1 nodes so the
-					// "newest round" default focus lands on round 1 (last node's parent).
-					node("contact--v1", "contact", "Restrained", "ready"),
-					node("contact--v2", "contact", "Bolder", "ready"),
-					node("contact--v3", "contact--v2", "Restrained", "ready"),
-					node("contact--v4", "contact", "Structural", "failed", "model refused: too spicy"),
-				],
-			}),
-		)
+		const scratch = (nodes: unknown[]) => ({
+			version: 2,
+			mode: "page",
+			pageId: "contact",
+			instruction: "make it feel warmer",
+			startedAt,
+			source: "caret",
+			nextTake: 5,
+			nodes,
+		})
+		const round1 = [
+			node("contact--v1", "contact", "Restrained", "ready"),
+			node("contact--v2", "contact", "Bolder", "ready"),
+			node("contact--v3", "contact", "Structural", "failed", "model refused: too spicy"),
+		]
+		await fs.writeFile(path.join(caretDir, ".variants.json"), JSON.stringify(scratch(round1)))
 
 		const { page } = await openCanvas(ctx)
 		try {
@@ -1346,21 +1345,33 @@ async function main() {
 			await page.waitForSelector('[data-testid="explore-view"]', { timeout: 10000 })
 			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
 
+			// No original card, no expand buttons, no agent-log lines, no rail.
+			const clutter = await page.evaluate(() => ({
+				original: !!document.querySelector('[data-testid="variant-card-contact"]'),
+				rail: !!document.querySelector('[data-testid="explore-rail"]'),
+				expandButtons: document.querySelectorAll('[data-testid^="explore-expand-"]').length,
+				pathsShown: (document.querySelector('[data-testid="explore-view"]')?.textContent || "").includes(".caret/pages/"),
+			}))
+			if (clutter.original) throw new Error("the original page still gets a card — the exploration is about the takes")
+			if (clutter.rail) throw new Error("the tree rail is still rendered")
+			if (clutter.expandButtons > 0) throw new Error("Expand buttons still exist — the page itself is the click target")
+			if (clutter.pathsShown) throw new Error("file paths are shown on the cards — that is an agent log")
+
 			// The failed take's error is readable in the card, not a tooltip.
 			const failedText = await page.evaluate(
-				() => document.querySelector('[data-testid="variant-card-contact--v4"]')?.textContent || "",
+				() => document.querySelector('[data-testid="variant-card-contact--v3"]')?.textContent || "",
 			)
 			if (!failedText.includes("model refused: too spicy")) {
 				throw new Error(`failed card shows "${failedText.slice(0, 80)}" — the error message is not readable`)
 			}
-			// The angle is finally shown.
+			// The angle is shown.
 			const v2Text = await page.evaluate(
 				() => document.querySelector('[data-testid="variant-card-contact--v2"]')?.textContent || "",
 			)
 			if (!v2Text.includes("Bolder")) throw new Error("the take's angle label is not on its card")
 
-			// Expand: a scale-1, full-width frame, and Escape comes back.
-			await page.click('[data-testid="explore-expand-contact--v1"]')
+			// Clicking the page expands it to scale 1; Escape comes back.
+			await page.click('[data-testid="explore-preview-contact--v1"]')
 			await page.waitForSelector('[data-testid="explore-expanded"]', { timeout: 10000 })
 			const frameWidth = await page.evaluate(() => {
 				const frame = document.querySelector('[data-testid="explore-expanded"] iframe') as HTMLIFrameElement | null
@@ -1369,11 +1380,7 @@ async function main() {
 			if (Math.round(frameWidth) !== 1440)
 				throw new Error(`expanded frame is ${frameWidth}px wide, expected 1440 (scale 1)`)
 			await page.keyboard.press("Escape")
-			await page.waitForSelector('[data-testid="explore-rail"]', { timeout: 10000 })
-
-			// The rail walks the tree: focusing v2 shows its child v3.
-			await page.click('[data-testid="explore-rail-contact--v2"]')
-			await page.waitForSelector('[data-testid="variant-card-contact--v3"]', { timeout: 10000 })
+			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
 
 			await page.evaluate(() => {
 				;(window as any).__POSTED__ = []
@@ -1384,9 +1391,19 @@ async function main() {
 				})
 			})
 
-			// Branch from the deep take: the request must carry fromId.
-			await page.click('[data-testid="explore-branch-contact--v3"]')
-			await page.type('[data-testid="explore-branch-input-contact--v3"]', "even warmer")
+			// Branch: the passed-over siblings leave the view and a prompt box
+			// appears under the pick. Escape un-commits and brings them back.
+			await page.click('[data-testid="explore-branch-contact--v2"]')
+			await page.waitForSelector('[data-testid="explore-branch-input-contact--v2"]', { timeout: 10000 })
+			const siblingsCleared = await page.evaluate(() => !document.querySelector('[data-testid="variant-card-contact--v1"]'))
+			if (!siblingsCleared) throw new Error("branching left the passed-over siblings on screen")
+			await page.keyboard.press("Escape")
+			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
+
+			// Branch for real: Enter posts the request and three skeletons grow
+			// below the pick while the round registers.
+			await page.click('[data-testid="explore-branch-contact--v2"]')
+			await page.type('[data-testid="explore-branch-input-contact--v2"]', "even warmer")
 			await page.keyboard.press("Enter")
 			await waitFor(
 				async () =>
@@ -1397,12 +1414,31 @@ async function main() {
 			const branch = ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).find(
 				(m) => m.type === "variant-request",
 			)
-			if (branch.payload?.fromId !== "contact--v3" || branch.payload?.instruction !== "even warmer") {
-				throw new Error(`branch posted ${JSON.stringify(branch.payload)} — expected fromId contact--v3`)
+			if (branch.payload?.fromId !== "contact--v2" || branch.payload?.instruction !== "even warmer") {
+				throw new Error(`branch posted ${JSON.stringify(branch.payload)} — expected fromId contact--v2`)
 			}
+			await page.waitForSelector('[data-testid="explore-skeleton-pending-2"]', { timeout: 10000 })
+
+			// The round lands (no host here, so play the router's part): a working
+			// child arrives, its REAL skeleton replaces the placeholders, and
+			// flipping it ready swaps in the live page.
+			await seedTakeDir(4)
+			await fs.writeFile(
+				path.join(caretDir, ".variants.json"),
+				JSON.stringify(scratch([...round1, node("contact--v4", "contact--v2", "Restrained", "working")])),
+			)
+			await page.waitForSelector('[data-testid="explore-skeleton-contact--v4"]', { timeout: 15000 })
+			const ancestorStill = await page.evaluate(() => !!document.querySelector('[data-testid="variant-card-contact--v2"]'))
+			if (!ancestorStill) throw new Error("the branched-from take vanished — the lineage must stay visible")
+
+			await fs.writeFile(
+				path.join(caretDir, ".variants.json"),
+				JSON.stringify(scratch([...round1, node("contact--v4", "contact--v2", "Restrained", "ready")])),
+			)
+			await page.waitForSelector('[data-testid="explore-preview-contact--v4"]', { timeout: 15000 })
 
 			// Settle on the deep leaf.
-			await page.click('[data-testid="variant-use-contact--v3"]')
+			await page.click('[data-testid="variant-use-contact--v4"]')
 			await waitFor(
 				async () =>
 					((await page.evaluate(() => (window as any).__POSTED__)) as any[]).some((m) => m.type === "variant-pick"),
@@ -1412,8 +1448,8 @@ async function main() {
 			const picked = ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).find(
 				(m) => m.type === "variant-pick",
 			)
-			if (picked.payload?.variantId !== "contact--v3") {
-				throw new Error(`picked "${picked.payload?.variantId}", expected contact--v3`)
+			if (picked.payload?.variantId !== "contact--v4") {
+				throw new Error(`picked "${picked.payload?.variantId}", expected contact--v4`)
 			}
 
 			// The doors are direct — the door you came through IS the choice. The
@@ -1447,11 +1483,11 @@ async function main() {
 				throw new Error("the page door still shows a chooser — it must go straight to that page's instruction box")
 			}
 
-			return "pill → tree rail → scale-1 expand → branch carried fromId → pick posted contact--v3; both doors land direct, no chooser"
+			return "pill → click-to-expand at scale 1 → branch cleared siblings, grew skeletons, carried fromId → pick posted contact--v4; no original card, no logs, doors land direct"
 		} finally {
 			await page.close()
 			await fs.rm(path.join(caretDir, ".variants.json"), { force: true })
-			for (const n of [1, 2, 3]) {
+			for (const n of [1, 2, 3, 4]) {
 				await fs.rm(path.join(caretDir, "pages", `contact--v${n}`), { recursive: true, force: true })
 			}
 		}

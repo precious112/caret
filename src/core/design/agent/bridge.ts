@@ -35,11 +35,13 @@ export interface AgentTask {
 	/** Shown above the turn in the chat, in Caret's own voice. */
 	note?: string
 	/**
-	 * Nobody is watching this turn's prompts — a variant take running behind the
-	 * compare surface. Anything that would ASK the user is denied with a reason
+	 * Nobody is watching this turn's prompts — a playground take running
+	 * unattended. Anything that would ASK the user is denied with a reason
 	 * instead: a question no one can see is a deadlock, not a safeguard.
 	 */
 	unattended?: boolean
+	/** Tools withheld from the model this turn, in the backend's namespace. */
+	disabledTools?: string[]
 }
 
 export interface AgentBridge {
@@ -101,6 +103,7 @@ export class BackendBridge implements AgentBridge {
 			images: task.images,
 			note: task.note,
 			unattended: task.unattended,
+			disabledTools: task.disabledTools,
 			context: task.context,
 		})
 

@@ -155,11 +155,13 @@ export interface RunRequest {
 	/** Line shown above the turn, in Caret's own voice. */
 	note?: string
 	/**
-	 * Nobody is watching this turn's prompts (a variant take running behind the
-	 * compare surface). A permission that would ASK is denied with a reason
-	 * instead — an invisible question is a deadlock, not a safeguard.
+	 * Nobody is watching this turn's prompts (a playground take). A permission
+	 * that would ASK is denied with a reason instead — an invisible question is
+	 * a deadlock, not a safeguard.
 	 */
 	unattended?: boolean
+	/** Tools withheld from the model this turn, in the backend's namespace. See {@link SendInput.disabledTools}. */
+	disabledTools?: string[]
 	/**
 	 * Kind-specific structured context, carried through the turn untouched so
 	 * `onTurnComplete` subscribers can read what the task was about (the overlay
@@ -437,7 +439,11 @@ export class AgentConversation {
 		let stallRetried = false
 		let nudged = false
 		try {
-			let input: { text: string; images?: string[] } = { text: request.prompt, images: request.images }
+			let input: { text: string; images?: string[]; disabledTools?: string[] } = {
+				text: request.prompt,
+				images: request.images,
+				disabledTools: request.disabledTools,
+			}
 			while (true) {
 				stalled = false
 				let lastActivity = Date.now()
@@ -512,7 +518,7 @@ export class AgentConversation {
 						`The provider went silent for ${Math.round(stallMs / 60_000)} minutes — the stream likely died upstream, and the backend does not time out on its own. Retrying the turn.`,
 					)
 					this.push(true)
-					input = { text: STALL_CONTINUE_PROMPT }
+					input = { text: STALL_CONTINUE_PROMPT, disabledTools: request.disabledTools }
 					continue
 				}
 
@@ -536,6 +542,7 @@ export class AgentConversation {
 					this.push(true)
 					input = {
 						text: buildNudgePrompt([...this.denialsThisTurn.keys()].map((key) => key.slice(key.indexOf(":") + 1))),
+						disabledTools: request.disabledTools,
 					}
 					continue
 				}

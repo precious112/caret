@@ -393,6 +393,8 @@ Rules for this take:
   markup into this page's own source instead.
 - This take runs unattended: shell commands and anything else that needs permission will be
   DENIED automatically. Use only your file read and edit tools.
+- Do not screenshot or otherwise visually verify your work — the user is watching this take
+  render live while you write it, and the screenshot tool is disabled for this turn.
 - The other takes read the same instruction differently — do not hedge toward a middle ground;
   commit fully to this take's reading.`
 }
@@ -459,6 +461,9 @@ async function handleVariantRequest(payload: import("./messages").VariantRequest
 			displayPrompt: `${node.label}: ${payload.instruction}`,
 			context: { filePath: `.caret/pages/${node.id}/index.tsx` },
 			unattended: true,
+			// The user is watching the take render live — a screenshot spends
+			// minutes verifying what is already on screen.
+			disabledTools: ["caret_get_screenshot"],
 		}
 		try {
 			if (lane) await lane.run(node.id, task)
