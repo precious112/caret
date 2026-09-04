@@ -130,6 +130,16 @@ export class AgentService {
 	}
 
 	/**
+	 * Whether ANY lane is writing right now — chat, canvas edit, or playground
+	 * takes. The healer's watcher asks this to attribute a file write: checking
+	 * only the chat made every take's write read as an "external" hand-edit,
+	 * polluting provenance and threatening the direct-write notice.
+	 */
+	isWorking(): boolean {
+		return this.conversation.getState().streaming || this.editConversation.getState().streaming || this.exploreLane.busy()
+	}
+
+	/**
 	 * The Plan/Act toggle's landing point, and where a flip becomes an approval.
 	 *
 	 * Flipping to Act with a settled plan IS the user saying "do it" — Cline's

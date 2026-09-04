@@ -29,6 +29,11 @@ export async function readPageMeta(workspacePath: string, pageId: string): Promi
 			type: typeof raw.type === "string" ? raw.type : "page",
 			states: Array.isArray(raw.states) ? raw.states : [],
 			tags: Array.isArray(raw.tags) ? raw.tags : [],
+			// Load-bearing, not decorative: every "hide takes" exclusion — design
+			// checks, the sync inventory, the rules context — filters on this.
+			// Dropping it in normalization silently disabled all three (found as
+			// ghost check findings for deleted take pages).
+			...(typeof raw.variantOf === "string" && raw.variantOf ? { variantOf: raw.variantOf } : {}),
 		}
 	} catch (err) {
 		Logger.warn(`[design] Page meta ${metaPath} is not valid JSON and will be ignored: ${err}`)

@@ -187,7 +187,7 @@ export class ProjectWindow {
 
 		this.healer = new WatchAndHeal({
 			projectPath: this.projectPath,
-			isAgentActive: () => this.agent.conversation.getState().streaming,
+			isAgentActive: () => this.agent.isWorking(),
 			onFirstDirectWrite: (file) => this.noticeDirectWrite(file),
 			onTokensChanged: () => void this.pushState(),
 			// An asset can arrive from an agent or from Finder, not only from the

@@ -49,6 +49,27 @@ describe("readPageMeta", () => {
 		await fs.rm(root, { recursive: true, force: true })
 	})
 
+	it("carries variantOf through normalization — every hide-takes filter depends on it", async () => {
+		const root = await fixture()
+		await writePage(root, "home--v1", { title: "Home — take 1", variantOf: "home" })
+		await writePage(root, "home", { title: "Home" })
+
+		const meta = await readPageMeta(root, "home--v1")
+		assert.equal(
+			meta?.variantOf,
+			"home",
+			"variantOf was dropped — design checks, sync and rules would all see takes as pages",
+		)
+
+		const visible = (await listPages(root)).filter((p) => !p.variantOf)
+		assert.deepEqual(
+			visible.map((p) => p.id),
+			["home"],
+			"the take survived the standard exclusion filter",
+		)
+		await fs.rm(root, { recursive: true, force: true })
+	})
+
 	it("returns null on unparseable json rather than inventing a page", async () => {
 		const root = await fixture()
 		const pageDir = path.join(root, ".caret", "pages", "broken")
