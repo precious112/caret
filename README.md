@@ -94,7 +94,9 @@ npm run test:unit
 ## Licence
 
 Apache-2.0. The direct-manipulation editor is local-forever and free-forever: no
-key, no network, no account.
+key, no account. The only thing Caret ever sends is anonymous usage and crash
+data, which one click turns off — see [docs/telemetry.md](docs/telemetry.md) for
+exactly what is (and is never) collected.
 
 Caret began as a fork of [Cline](https://github.com/cline/cline), which is also
 Apache-2.0.

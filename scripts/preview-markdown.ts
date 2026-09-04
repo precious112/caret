@@ -156,7 +156,7 @@ app.whenReady().then(() => {
 })`,
 	)
 
-	const browser = await electron.launch({ args: [mainScript] })
+	const browser = await electron.launch({ args: [mainScript], env: { ...process.env, CARET_DISABLE_TELEMETRY: "1" } })
 	try {
 		const page = await browser.firstWindow({ timeout: 60_000 })
 		const errors: string[] = []

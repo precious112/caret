@@ -16,6 +16,7 @@ import { CHAT_SIDEBAR_WIDTH, ChatSidebar } from "./views/ChatSidebar"
 import { FoundationView } from "./views/FoundationView"
 import { NotificationStack } from "./views/NotificationStack"
 import { ProjectPicker } from "./views/ProjectPicker"
+import { TelemetryNotice } from "./views/TelemetryNotice"
 import { TopBar } from "./views/TopBar"
 
 /** Which full-window surface is covering the canvas, if any. */
@@ -162,8 +163,11 @@ export function App() {
 	 * honoured, which makes the flag self-healing.
 	 */
 	const requestSurface = useCallback((next: Surface) => {
+		// Only navigations that actually land are reported — a vetoed switch
+		// never reaches either emit, so the funnel counts what users saw.
 		if (!interviewPendingRef.current || next === "foundation") {
 			setSurface(next)
+			void invoke("analytics:event", "surface_switched", { surface: next })
 			return
 		}
 
@@ -173,6 +177,7 @@ export function App() {
 			if (pending && !landsInChat(pending)) return
 			interviewPendingRef.current = false
 			setSurface(next)
+			void invoke("analytics:event", "surface_switched", { surface: next })
 		})
 	}, [])
 
@@ -186,6 +191,9 @@ export function App() {
 			<>
 				<ProjectPicker onOpen={openProject} />
 				<NotificationStack />
+				{/* Also here: a first run can end without a project ever opening,
+				    and the telemetry notice still has to have been seen. */}
+				<TelemetryNotice />
 			</>
 		)
 	}
@@ -233,6 +241,7 @@ export function App() {
 			</div>
 
 			<NotificationStack rightInset={chatOpen ? CHAT_SIDEBAR_WIDTH + 16 : 16} />
+			<TelemetryNotice />
 		</div>
 	)
 }

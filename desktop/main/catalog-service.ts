@@ -24,6 +24,7 @@ import {
 	readCatalogLock,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { capture } from "./analytics"
 import { askUser, type InterviewPrompt } from "./interview"
 import { getPrefs, setPref } from "./prefs"
 
@@ -122,14 +123,22 @@ export class CatalogService {
 		return false
 	}
 
+	/** A library id is only sent when it resolves against the fixed catalog — never a free-form string. */
+	private libraryProp(libraryId: string): string {
+		return findCatalogLibrary(libraryId) ? libraryId : "unknown"
+	}
+
 	/** Direct install (the MCP tool, or a future UI). Consent still applies. */
 	async install(libraryId: string, componentId: string): Promise<InstallResult> {
+		capture("catalog_install_requested", { initiator: "agent", library: this.libraryProp(libraryId) })
 		if (!(await this.hasConsent(libraryId))) {
+			capture("catalog_install_denied", { initiator: "agent", library: this.libraryProp(libraryId) })
 			return { ok: false, reason: `the user has not approved installing from ${libraryId} into this project` }
 		}
 		const result = await installCatalogComponent(this.options.projectPath, libraryId, componentId, {
 			mirrorDir: resolveMirrorDir(),
 		})
+		if (result.ok) capture("catalog_install_completed", { initiator: "agent", library: this.libraryProp(libraryId) })
 		if (result.ok && !result.alreadyInstalled) this.options.onInstalled?.()
 		return result
 	}
@@ -151,10 +160,15 @@ export class CatalogService {
 		if (plan.install.length === 0 && plan.overBudget.length === 0) return
 
 		for (const ref of plan.install) {
-			if (!(await this.hasConsent(ref.libraryId))) continue
+			capture("catalog_install_requested", { initiator: "auto", library: this.libraryProp(ref.libraryId) })
+			if (!(await this.hasConsent(ref.libraryId))) {
+				capture("catalog_install_denied", { initiator: "auto", library: this.libraryProp(ref.libraryId) })
+				continue
+			}
 			const result = await installCatalogComponent(this.options.projectPath, ref.libraryId, ref.componentId, {
 				mirrorDir: resolveMirrorDir(),
 			})
+			if (result.ok) capture("catalog_install_completed", { initiator: "auto", library: this.libraryProp(ref.libraryId) })
 			if (result.ok && !result.alreadyInstalled) {
 				Logger.info(
 					`[catalog] auto-supplied ${ref.libraryId}/${ref.componentId} for ${path.basename(path.dirname(pageFile))}`,

@@ -413,7 +413,9 @@ async function main(): Promise<void> {
 
 	app = await electron.launch({
 		args: [path.resolve("out/main/index.js"), `--user-data-dir=${userData}`, fixture],
-		env: { ...process.env, CARET_VERIFY_PROJECT: fixture, NODE_ENV: "test" },
+		// CARET_DISABLE_TELEMETRY: the fresh profile means telemetry defaults ON,
+		// and every certification run would otherwise land in production analytics.
+		env: { ...process.env, CARET_VERIFY_PROJECT: fixture, NODE_ENV: "test", CARET_DISABLE_TELEMETRY: "1" },
 	})
 
 	// Main-process output, kept.

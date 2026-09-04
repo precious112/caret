@@ -11,9 +11,13 @@ import { fileURLToPath } from "url"
 
 import { disposeBackends, setBundledBackendDirectory } from "../../src/core/design"
 import { extendOpencodeServerConfig } from "../../src/core/design/agent/opencode"
+import { subscribeDesignEvents } from "../../src/core/design/telemetry-hooks"
 import { Logger } from "../../src/shared/services/Logger"
+import { hashText, scrubAndTruncate } from "../shared/telemetry"
+import { capture, captureError, captureErrorLine, initAnalytics, sessionDurationSeconds, shutdownAnalytics } from "./analytics"
 import { registerIpcHandlers } from "./ipc"
 import { closeLauncherWindow, hasLauncherWindow, type LauncherWindowOptions, openLauncherWindow } from "./launcher-window"
+import { startFileLog } from "./log-file"
 import { ensureMcpBridge } from "./mcp/stdio-bridge"
 import { MUTATING_TOOL_NAMES } from "./mcp/tools"
 import { buildMenu } from "./menu"
@@ -23,8 +27,10 @@ import { WindowManager } from "./window-manager"
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 // Logger's default is silent — nothing subscribes in a bare Node process — so
-// wire it to stdout before anything else can try to report a failure.
+// wire it to stdout before anything else can try to report a failure. The file
+// writer attaches equally early and buffers until the logs dir is resolvable.
 Logger.subscribe((line) => console.log(`[caret] ${line}`))
+startFileLog()
 
 /**
  * `--user-data-dir` must actually work, and must be applied before anything
@@ -67,6 +73,19 @@ async function main(): Promise<void> {
 		if (!icon.isEmpty()) app.dock.setIcon(icon)
 	}
 	loadPrefs()
+	initAnalytics()
+	// The design core reports product events without knowing telemetry exists;
+	// this is the one place that decides listening means analytics.
+	subscribeDesignEvents((event, props) => capture(event, props))
+	// Error-level log lines become deduped, scrubbed, budgeted events — the
+	// field visibility half of observability. The scrub happens before hashing
+	// so one error class dedupes across the paths it mentions.
+	Logger.subscribe((line) => {
+		if (!line.startsWith("ERROR ")) return
+		const source = /^ERROR \[([^\]]+)\]/.exec(line)?.[1] ?? "unknown"
+		const message = scrubAndTruncate(line.slice("ERROR ".length))
+		captureErrorLine(hashText(message), source, message)
+	})
 
 	// Where the bundled coding backend lives. Only the main process knows this,
 	// and the design core is deliberately host-free, so it is told rather than
@@ -146,6 +165,11 @@ async function main(): Promise<void> {
 	} else {
 		closeLauncherWindow()
 	}
+	capture(
+		"app_launched",
+		{ restored_windows: restored },
+		{ app_version: app.getVersion(), platform: process.platform, arch: process.arch },
+	)
 
 	app.on("activate", () => {
 		if (windows.isEmpty() && !hasLauncherWindow()) openLauncherWindow(launcherOptions)
@@ -161,10 +185,22 @@ async function main(): Promise<void> {
 		// Diagnostic: full-suite runs died with a clean shutdown mid-scenario and
 		// no attributable initiator. Name the moment quit begins.
 		Logger.info(`[main] before-quit fired (windows open: ${BrowserWindow.getAllWindows().length})`)
+		capture("app_quit", { session_duration_s: sessionDurationSeconds() })
 		void windows.closeAll()
 		// The embedded backend is a child process. Left running it would outlive
 		// the app and keep holding a port.
 		void disposeBackends()
+	})
+
+	// Electron does not await `before-quit`, so the tail of the event queue
+	// (notably app_quit) would be lost on every exit. Hold quit once, flush with
+	// a hard bound so a dead network can never hold the app hostage, then leave.
+	let flushed = false
+	app.on("will-quit", (event) => {
+		if (flushed) return
+		flushed = true
+		event.preventDefault()
+		void shutdownAnalytics(1500).finally(() => app.exit())
 	})
 }
 
@@ -204,10 +240,12 @@ function isLocal(url: string): boolean {
 function installCrashHandlers(): void {
 	process.on("uncaughtException", (err) => {
 		Logger.error("[main] uncaught exception:", err)
+		captureError(err, "main")
 		showCrash("Caret hit an unexpected error", err)
 	})
 	process.on("unhandledRejection", (reason) => {
 		Logger.error("[main] unhandled rejection:", reason)
+		captureError(reason, "main")
 	})
 }
 

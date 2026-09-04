@@ -14,12 +14,8 @@ All deferred until a Caret domain exists. Replace these strings once the domain 
 - `https://github.com/cline/cline` (and `/issues`) — bug/repo links in `package.json`, `cli/package.json`, man page, READMEs.
 - Google Cloud Storage image URLs (`storage.googleapis.com/cline_public_images/...`) in walkthrough markdown — host owned by Cline; replace once Caret has its own asset host.
 
-## Telemetry (no Caret endpoint yet)
-- `src/shared/services/config/posthog-config.ts` still posts to `https://data.cline.bot`. Either:
-  - Point at a Caret-owned PostHog (or alternative) endpoint, or
-  - Set `apiKey`/`errorTrackingApiKey` to empty and short-circuit `isPostHogConfigValid()` to disable telemetry entirely.
-- `BUILD_CONSTANTS.TELEMETRY_SERVICE_API_KEY` and `ERROR_SERVICE_API_KEY` are injected by the Cline CI/CD pipeline (see `.github/workflows/publish.yml`); needs Caret CI when we cut over.
-- `process.env.CLINE_ENVIRONMENT` env var name (kept as internal identifier per scope).
+## Telemetry
+- DONE — Cline's telemetry stack was deleted with the extension host; Caret has its own PostHog-based analytics (`desktop/main/analytics.ts`, contract in `docs/telemetry.md`). The one open item: paste the PostHog EU project key into `POSTHOG_KEY` in `desktop/main/analytics.ts` before release.
 
 ## Brand assets that still show Cline visuals
 - `assets/icons/cline-bot.woff` / `.ttf` / `.svg` — custom icon font used as `$(caret-icon)` in `package.json`. The icon registration key was renamed but the underlying font glyph is still the Cline robot. Regenerate the font from the Caret SVG (icomoon/fontello) when convenient.

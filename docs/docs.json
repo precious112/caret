@@ -305,17 +305,6 @@
 									"enterprise-solutions/configuration/infrastructure-configuration/control-other-cline-features/mcp-marketplace"
 								]
 							},
-							{
-								"group": "Monitoring",
-								"pages": [
-									"enterprise-solutions/monitoring/overview",
-									"enterprise-solutions/monitoring/telemetry",
-									"enterprise-solutions/monitoring/prompt-storage",
-									"enterprise-solutions/monitoring/opentelemetry",
-									"enterprise-solutions/monitoring/opentelemetry-events",
-									"enterprise-solutions/monitoring/opentelemetry_override"
-								]
-							},
 							"enterprise-solutions/api-reference"
 						]
 					}
@@ -602,10 +591,6 @@
 		{
 			"source": "/mcp/configuring-mcp-servers",
 			"destination": "/mcp/adding-and-configuring-servers"
-		},
-		{
-			"source": "/more-info/telemetry",
-			"destination": "/enterprise-solutions/monitoring/telemetry"
 		},
 		{
 			"source": "/enterprise-solutions/configure-AWS-Bedrock-Admin",

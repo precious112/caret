@@ -48,6 +48,7 @@
 		"chokidar": "^4.0.1",
 		"google-auth-library": "^11.0.0",
 		"onnxruntime-node": "~1.23.0",
+		"posthog-node": "^5.21.2",
 		"react-markdown": "^10.1.0",
 		"recast": "^0.23.11",
 		"remark-gfm": "^4.0.1",

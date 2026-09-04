@@ -16,6 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "net"
 import type { InstallResult, PageCheckResult } from "../../../src/core/design"
 import { Logger } from "../../../src/shared/services/Logger"
+import { capture } from "../analytics"
 import { cancelInterviewPrompts, type InterviewPrompt } from "../interview"
 import type { ScreenshotResult } from "../types"
 import { authorize, generateToken } from "./auth"
@@ -141,8 +142,16 @@ export class CaretMcpServer {
 				(async (args: unknown) => {
 					this.setConnected(true)
 					try {
-						return await tool.handler(ctx, args)
+						const result = await tool.handler(ctx, args)
+						// Tool names are Caret's own fixed vocabulary — safe to send.
+						capture("mcp_tool_invoked", {
+							tool: tool.name,
+							ok: (result as { isError?: boolean }).isError !== true,
+							initiator: "agent",
+						})
+						return result
 					} catch (err) {
+						capture("mcp_tool_invoked", { tool: tool.name, ok: false, initiator: "agent" })
 						return logToolError(tool.name, err)
 					}
 				}) as never,

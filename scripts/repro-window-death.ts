@@ -59,7 +59,7 @@ async function main(): Promise<void> {
 
 	const app: ElectronApplication = await electron.launch({
 		args: [path.resolve("out/main/index.js"), `--user-data-dir=${userData}`, fixture],
-		env: { ...process.env, NODE_ENV: "test" },
+		env: { ...process.env, NODE_ENV: "test", CARET_DISABLE_TELEMETRY: "1" },
 	})
 	app.process().stdout?.on("data", (chunk) => process.stdout.write(`  [main] ${chunk}`))
 	app.process().stderr?.on("data", (chunk) => process.stdout.write(`  [main!] ${chunk}`))

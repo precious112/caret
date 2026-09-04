@@ -208,6 +208,8 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
 
 				<McpSection project={project} />
 
+				<PrivacySection />
+
 				<button
 					className="mt-8 rounded-lg px-3 py-1.5 text-shell-muted transition-colors hover:bg-white/5"
 					onClick={onClose}
@@ -231,6 +233,48 @@ export function BackendPanel({ project, onClose }: { project: ProjectState; onCl
  * sees it. Which providers appear, and how each one is entered, both come from
  * the server, so a flow that changes upstream changes here without a release.
  */
+/**
+ * The permanent home of the telemetry switch — the first-run notice points
+ * here. Main reacts to the pref flip inside its `prefs:set` handler, so this
+ * writes the preference and nothing else.
+ */
+function PrivacySection() {
+	const [enabled, setEnabled] = useState<boolean | null>(null)
+
+	useEffect(() => {
+		void invoke("prefs:get").then((prefs) => setEnabled(prefs.telemetryEnabled !== false))
+	}, [])
+
+	return (
+		<section className="mt-8 border-t border-shell-border pt-6" data-testid="privacy-section">
+			<h2 className="font-medium">Privacy</h2>
+			<label className="mt-2 flex items-start gap-2">
+				<input
+					checked={enabled === true}
+					className="mt-1"
+					disabled={enabled === null}
+					onChange={(event) => {
+						setEnabled(event.target.checked)
+						void invoke("prefs:set", { telemetryEnabled: event.target.checked })
+					}}
+					type="checkbox"
+				/>
+				<span className="leading-relaxed">
+					Send anonymous usage and crash data
+					<span className="mt-0.5 block text-[11.5px] leading-relaxed text-shell-muted">
+						No account, no file contents, no paths — feature names, error shapes and nothing else.{" "}
+						<a
+							className="underline hover:text-white"
+							href="https://github.com/precious112/caret/blob/main/docs/telemetry.md">
+							Exactly what's collected.
+						</a>
+					</span>
+				</span>
+			</label>
+		</section>
+	)
+}
+
 function ProvidersSection({ onChanged }: { onChanged(): void }) {
 	const [connected, setConnected] = useState<ModelGroupWire[] | null>(null)
 	const [doors, setDoors] = useState<ProviderDoorWire[] | null>(null)

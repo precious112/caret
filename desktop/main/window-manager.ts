@@ -11,6 +11,7 @@ import * as path from "path"
 
 import { caretDirectoryExists } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
+import { capture } from "./analytics"
 import { getPrefs, setPref } from "./prefs"
 import { ProjectWindow } from "./project-window"
 import type { ProjectSummary } from "./types"
@@ -82,6 +83,7 @@ export class WindowManager {
 		// than the user staring at nothing.
 		window.start().catch((err) => Logger.error(`[windows] failed to start ${resolved}:`, err))
 
+		capture("project_opened", { open_windows: this.windows.size })
 		return window
 	}
 

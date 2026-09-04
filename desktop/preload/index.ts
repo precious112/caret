@@ -95,6 +95,7 @@ const REQUEST_CHANNELS: Record<IpcRequestChannel, boolean> = {
 	"agent:deleteSession": true,
 	"prefs:get": true,
 	"prefs:set": true,
+	"analytics:event": true,
 	"canvas:message": true,
 	"canvas:setBounds": true,
 	"canvas:setVisible": true,

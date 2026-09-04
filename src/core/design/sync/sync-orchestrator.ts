@@ -11,6 +11,7 @@ import {
 import { NoBackendError } from "../agent/backend"
 import { caretDirectoryExists } from "../scaffold"
 import { bridgeFor, conversationFor } from "../services"
+import { emitDesignEvent } from "../telemetry-hooks"
 import { partitionWorklist } from "./drift"
 import { runBackendSync } from "./sync-backend"
 import { clearPendingSync, registerPendingSync } from "./sync-completion"
@@ -72,6 +73,16 @@ export interface SyncOptions {
  * apply, and Caret advances the bookmark itself (`sync-backend.ts`).
  */
 export async function runSync(cwd: string, opts: SyncOptions = {}): Promise<SyncResult> {
+	// One wrapper reads the funnel off the result instead of ten emit sites
+	// inside the preflight: every non-started status IS the drop-off name.
+	emitDesignEvent("sync_started", { audience: opts.audience ?? "backend" })
+	const result = await runSyncInner(cwd, opts)
+	if (result.status === "up-to-date") emitDesignEvent("sync_noop")
+	else if (result.status !== "started") emitDesignEvent("sync_blocked", { status: result.status })
+	return result
+}
+
+async function runSyncInner(cwd: string, opts: SyncOptions = {}): Promise<SyncResult> {
 	if (!(await caretDirectoryExists(cwd))) {
 		return { status: "no-caret-dir", message: "No .caret/ design layer in this project — nothing to sync." }
 	}

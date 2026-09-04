@@ -1,10 +1,12 @@
 /**
  * The seam where hosted features will attach.
  *
- * Caret has no server today and the entire editor is free forever with no key,
- * no network and no account. That commitment is the product, not a phase — see
- * the monetization boundary: the paid line is Share, then team collaboration,
- * then CI drift diffs, and every one of those genuinely requires a server.
+ * Caret has no server today and the entire editor is free forever with no key
+ * and no account; the only network traffic the app initiates on its own is
+ * anonymous, opt-out telemetry (docs/telemetry.md). That commitment is the
+ * product, not a phase — see the monetization boundary: the paid line is Share,
+ * then team collaboration, then CI drift diffs, and every one of those
+ * genuinely requires a server.
  *
  * This interface exists now so adding the first of them is wiring rather than
  * surgery, and — more importantly — so the *refusal* is written once, honestly,
@@ -35,7 +37,7 @@ export interface CaretServices {
 }
 
 const LOCAL_ONLY_REASON =
-	"Caret is running entirely on your machine. Sharing, team collaboration and CI drift diffs are hosted features that don't exist yet — everything in the editor works without an account and always will."
+	"Caret is running entirely on your machine. Sharing, team collaboration and CI drift diffs are hosted features that don't exist yet — everything in the editor works without an account and always will. The only thing Caret ever sends is anonymous usage data, which you can switch off in one click."
 
 /**
  * The only implementation that ships today. It refuses, and says why.

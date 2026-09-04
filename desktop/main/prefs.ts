@@ -87,6 +87,19 @@ export interface Prefs {
 	 */
 	laneModels: { mark?: string; model3d?: string; shader?: string }
 	/**
+	 * Anonymous, opt-out product telemetry. One click to turn off — the
+	 * first-run notice, the Privacy toggle, or CARET_DISABLE_TELEMETRY=1.
+	 * What is collected (and what never is) lives in docs/telemetry.md.
+	 */
+	telemetryEnabled: boolean
+	/**
+	 * Random UUID identifying this install to PostHog. Minted on first send,
+	 * never derived from the machine or tied to any account.
+	 */
+	telemetryId: string
+	/** Set once the first-run telemetry notice has been shown and dismissed. */
+	telemetryNoticeShown: boolean
+	/**
 	 * Whether the chat agent may generate assets itself.
 	 *
 	 * Off by default, deliberately: the agent's one-line briefs produced
@@ -117,6 +130,9 @@ const DEFAULTS: Prefs = {
 	secrets: {},
 	visionChecks: {},
 	laneModels: {},
+	telemetryEnabled: true,
+	telemetryId: "",
+	telemetryNoticeShown: false,
 	chatAssetGeneration: false,
 }
 

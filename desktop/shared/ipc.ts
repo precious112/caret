@@ -953,6 +953,8 @@ export interface IpcRequests {
 
 	"prefs:get": () => Record<string, unknown>
 	"prefs:set": (patch: Record<string, unknown>) => void
+	/** Fire-and-forget renderer telemetry; names outside RENDERER_EVENTS are dropped main-side. */
+	"analytics:event": (name: string, props?: Record<string, unknown>) => void
 
 	/**
 	 * Whether a credential is set, and whether this machine can store one.

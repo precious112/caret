@@ -14,6 +14,7 @@ import { join } from "path"
 
 import { Logger } from "@/shared/services/Logger"
 import { expandReferences, readAssetIndex } from "../assets"
+import { emitDesignEvent } from "../telemetry-hooks"
 import {
 	type BackendEvent,
 	type BackendId,
@@ -324,6 +325,7 @@ export class AgentConversation {
 	 * outbound path had.
 	 */
 	async run(request: RunRequest): Promise<RunOutcome> {
+		const turnStarted = Date.now()
 		// Reset before anything async: a Stop pressed while the session is still
 		// being opened is aimed at this turn.
 		this.stopRequested = false
@@ -632,6 +634,13 @@ export class AgentConversation {
 		}
 
 		const outcome: RunOutcome = { ok, sessionId: session.id, text, closingText, filesChanged: [...this.transcript.files] }
+		emitDesignEvent("agent_turn_completed", {
+			kind: request.kind,
+			ok,
+			duration_s: Math.round((Date.now() - turnStarted) / 1000),
+			files_changed: outcome.filesChanged.length,
+			unattended: this.unattendedTurn,
+		})
 		try {
 			this.deps.onTurnComplete?.(outcome, request)
 		} catch (err) {
@@ -680,6 +689,7 @@ export class AgentConversation {
 
 	async abort(): Promise<void> {
 		this.stopRequested = true
+		emitDesignEvent("agent_turn_aborted", { kind: this.activity?.kind ?? "chat" })
 		await this.session?.abort()
 		this.streaming = false
 		this.push(true)

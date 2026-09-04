@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 app.whenReady().then(() => { new BrowserWindow({ width: 1400, height: 900 }).loadURL("${url}") })`,
 	)
 
-	const browser = await electron.launch({ args: [mainScript] })
+	const browser = await electron.launch({ args: [mainScript], env: { ...process.env, CARET_DISABLE_TELEMETRY: "1" } })
 	try {
 		const view = await browser.firstWindow({ timeout: 60_000 })
 		await view.waitForSelector(".caret-canvas-frame", { timeout: 60_000 })

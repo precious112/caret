@@ -23,6 +23,7 @@
  */
 import { Logger } from "@/shared/services/Logger"
 import type { AgentConversation } from "../agent/conversation"
+import { emitDesignEvent } from "../telemetry-hooks"
 import { clearPendingSync, completeSync, readPendingSync } from "./sync-completion"
 import { diffCountAgainstSnapshot } from "./sync-snapshot"
 
@@ -108,7 +109,9 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 		// and `closingText`, not `text`, is the check, because a preamble
 		// ("I'll inventory the routes…") followed by silent tool work once
 		// passed a whole-text guard and settled as "the plan".
-		if (!plan.ok || plan.closingText.trim() === "") {
+		const planOk = plan.ok && plan.closingText.trim() !== ""
+		emitDesignEvent("sync_plan_completed", { ok: planOk })
+		if (!planOk) {
 			conversation.note("The plan didn't finish, so nothing was applied. Your design layer is untouched.")
 			await clearPendingSync(cwd)
 			return
@@ -118,6 +121,7 @@ export async function runBackendSync(conversation: AgentConversation, request: B
 		// revises by typing and approves by flipping to Act, which is the
 		// host's cue to call `runSyncApply`.
 	} catch (err) {
+		emitDesignEvent("sync_plan_completed", { ok: false })
 		Logger.error("[sync] backend sync failed:", err)
 		conversation.note(`Sync stopped: ${err instanceof Error ? err.message : String(err)}`)
 		await clearPendingSync(cwd).catch(() => {})
@@ -164,6 +168,7 @@ export async function runSyncApply(
 		})
 
 		if (!applied.ok) {
+			emitDesignEvent("sync_apply_completed", { ok: false, files_changed: 0 })
 			conversation.note("The changes didn't finish cleanly. Use Undo sync if the app is in a bad state.")
 			return
 		}
@@ -184,6 +189,7 @@ export async function runSyncApply(
 		const pending = await readPendingSync(cwd)
 		const changed = pending?.preSyncSnapshot ? await diffCountAgainstSnapshot(cwd, pending.preSyncSnapshot) : 0
 
+		emitDesignEvent("sync_apply_completed", { ok: changed > 0, files_changed: changed })
 		if (changed === 0) {
 			conversation.note(
 				"The agent finished without changing anything in your app, so this sync hasn't been recorded — the same design changes will be offered again next time. Try again, or use a stronger model.",
@@ -199,6 +205,7 @@ export async function runSyncApply(
 				: `Applied, but the sync bookmark didn't advance (${outcome}). The next sync will re-report these files.`,
 		)
 	} catch (err) {
+		emitDesignEvent("sync_apply_completed", { ok: false, files_changed: 0 })
 		Logger.error("[sync] apply failed:", err)
 		conversation.note(`Sync stopped: ${err instanceof Error ? err.message : String(err)}`)
 		await clearPendingSync(cwd).catch(() => {})

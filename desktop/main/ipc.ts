@@ -42,7 +42,9 @@ import {
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import type { AssetRequestWire, ComposerImage } from "../shared/ipc"
+import { CHANNEL_EVENTS, RENDERER_EVENTS, scrubAndTruncate, scrubText } from "../shared/telemetry"
 import { buildAgentClientConfigs } from "./agent-configs"
+import { capture, captureError, setTelemetryEnabled } from "./analytics"
 import { acceptMark, authorMark, discardMark, holdMark } from "./authored-marks"
 import { acceptShader, authorShader, discardShader, holdShader, refineHeldShader, type ShaderOutcome } from "./authored-shaders"
 import { resolveNotification } from "./electron-host"
@@ -137,10 +139,45 @@ function shaderOutcomeWire(shader: ShaderOutcome) {
 	}
 }
 
+const rawHandle = ipcMain.handle.bind(ipcMain)
+
+/**
+ * `ipcMain.handle` plus product telemetry. Channels listed in CHANNEL_EVENTS
+ * (desktop/shared/telemetry.ts) emit their event with `ok` and duration; every
+ * other channel behaves exactly as before and emits nothing — tracking a new
+ * surface requires adding it to that allowlist, never the other way round.
+ * `ok` reads a result's own `ok: false` when it has one; a throw counts too.
+ */
+function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: never[]) => unknown): void {
+	const mapped = CHANNEL_EVENTS[channel]
+	if (!mapped) {
+		rawHandle(channel, listener as Parameters<typeof rawHandle>[1])
+		return
+	}
+	rawHandle(channel, async (event, ...args) => {
+		const started = Date.now()
+		const emit = (ok: boolean) =>
+			capture(mapped.event, {
+				...mapped.props?.(args),
+				ok,
+				duration_s: Math.round((Date.now() - started) / 1000),
+			})
+		try {
+			const result = await (listener as (...a: unknown[]) => unknown)(event, ...args)
+			const failed = typeof result === "object" && result !== null && (result as { ok?: unknown }).ok === false
+			emit(!failed)
+			return result
+		} catch (error) {
+			emit(false)
+			throw error
+		}
+	})
+}
+
 export function registerIpcHandlers(windows: WindowManager): void {
 	// ── projects ──────────────────────────────────────────────────────────────
 
-	ipcMain.handle("project:pickFolder", async () => {
+	handle("project:pickFolder", async () => {
 		const result = await dialog.showOpenDialog({
 			title: "Open a project",
 			properties: ["openDirectory", "createDirectory"],
@@ -149,32 +186,32 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return result.canceled ? null : (result.filePaths[0] ?? null)
 	})
 
-	ipcMain.handle("project:open", async (_event, projectPath: string) => {
+	handle("project:open", async (_event, projectPath: string) => {
 		const window = await windows.open(projectPath)
 		return window ? window.getState() : null
 	})
 
-	ipcMain.handle("project:close", async (_event, projectPath: string) => {
+	handle("project:close", async (_event, projectPath: string) => {
 		await windows.close(projectPath)
 	})
 
-	ipcMain.handle("project:recents", () => windows.listRecents())
+	handle("project:recents", () => windows.listRecents())
 
-	ipcMain.handle("project:forgetRecent", async (_event, projectPath: string) => {
+	handle("project:forgetRecent", async (_event, projectPath: string) => {
 		await forgetRecentProject(projectPath)
 		refreshMenu()
 	})
 
-	ipcMain.handle("project:state", async (_event, projectPath: string) => {
+	handle("project:state", async (_event, projectPath: string) => {
 		const window = windows.get(projectPath)
 		return window ? window.getState() : null
 	})
 
 	// ── tokens and fonts ──────────────────────────────────────────────────────
 
-	ipcMain.handle("tokens:read", (_event, projectPath: string) => readFoundationTokens(projectPath))
+	handle("tokens:read", (_event, projectPath: string) => readFoundationTokens(projectPath))
 
-	ipcMain.handle("tokens:write", async (_event, projectPath: string, tokens: FoundationTokens) => {
+	handle("tokens:write", async (_event, projectPath: string, tokens: FoundationTokens) => {
 		if (!validateFoundationTokens(tokens)) {
 			return { ok: false, error: "Those tokens are missing required fields (vibe, color, typography, spacing, radius)." }
 		}
@@ -203,18 +240,18 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle(
+	handle(
 		"tokens:generateScale",
 		(_event, type: "color" | "typography" | "spacing" | "radius", seed: string, options?: Record<string, unknown>) =>
 			generateTokenScale(type, seed, options),
 	)
 
-	ipcMain.handle("tokens:blastRadius", async (_event, projectPath: string) => {
+	handle("tokens:blastRadius", async (_event, projectPath: string) => {
 		const tokens = await readFoundationTokens(projectPath)
 		return countAllTokenUses(path.join(projectPath, ".caret"), tokens)
 	})
 
-	ipcMain.handle("fonts:search", (_event, query: string) =>
+	handle("fonts:search", (_event, query: string) =>
 		searchGoogleFonts(query, {
 			apiKey: getPrefs().googleFontsApiKey,
 			cacheFile: path.join(app.getPath("userData"), "google-fonts-catalog.json"),
@@ -223,11 +260,11 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── pages ─────────────────────────────────────────────────────────────────
 
-	ipcMain.handle("pages:list", (_event, projectPath: string) => listPages(projectPath))
+	handle("pages:list", (_event, projectPath: string) => listPages(projectPath))
 
 	// ── assets ────────────────────────────────────────────────────────────────
 
-	ipcMain.handle("assets:list", async (_event, projectPath: string) => {
+	handle("assets:list", async (_event, projectPath: string) => {
 		const index = await readAssetIndex(projectPath)
 		return index.assets.map((asset) => ({
 			tag: asset.tag,
@@ -263,7 +300,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}))
 	})
 
-	ipcMain.handle("assets:pickFiles", async () => {
+	handle("assets:pickFiles", async () => {
 		const result = await dialog.showOpenDialog({
 			title: "Add assets",
 			properties: ["openFile", "multiSelections"],
@@ -279,7 +316,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * repo is not versioned with the design and breaks for the next person to
 	 * clone it, which defeats the reason `.caret/` exists.
 	 */
-	ipcMain.handle("assets:add", async (_event, projectPath: string, sourcePaths: string[]) => {
+	handle("assets:add", async (_event, projectPath: string, sourcePaths: string[]) => {
 		const directory = assetsDirectory(projectPath)
 		await fs.mkdir(directory, { recursive: true })
 
@@ -325,7 +362,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * and nothing else. Refusing them would make the drop zone work for Finder
 	 * and mysteriously not for anything else.
 	 */
-	ipcMain.handle("assets:addBytes", async (_event, projectPath: string, files: Array<{ name: string; base64: string }>) => {
+	handle("assets:addBytes", async (_event, projectPath: string, files: Array<{ name: string; base64: string }>) => {
 		const directory = assetsDirectory(projectPath)
 		await fs.mkdir(directory, { recursive: true })
 
@@ -372,13 +409,13 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return { added, rejected }
 	})
 
-	ipcMain.handle("assets:retag", async (_event, projectPath: string, from: string, to: string) => {
+	handle("assets:retag", async (_event, projectPath: string, from: string, to: string) => {
 		const result = await retagAsset(projectPath, from, to)
 		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
 		return result.ok ? { ok: true } : { ok: false, error: result.reason }
 	})
 
-	ipcMain.handle(
+	handle(
 		"assets:describe",
 		async (_event, projectPath: string, tag: string, fields: { alt?: string; description?: string }) => {
 			const result = await describeAsset(projectPath, tag, fields)
@@ -387,7 +424,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		},
 	)
 
-	ipcMain.handle("assets:setPoster", async (_event, projectPath: string, tag: string, dataUrl: string) => {
+	handle("assets:setPoster", async (_event, projectPath: string, tag: string, dataUrl: string) => {
 		const base64 = dataUrl.startsWith("data:image/png;base64,") ? dataUrl.slice("data:image/png;base64,".length) : null
 		// The renderer is the least trusted thing that talks to this process, and
 		// this handler writes a file. Only a PNG data URL is accepted, and the
@@ -398,7 +435,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return result.ok ? { ok: true } : { ok: false, error: result.reason }
 	})
 
-	ipcMain.handle("assets:remove", async (_event, projectPath: string, tag: string) => {
+	handle("assets:remove", async (_event, projectPath: string, tag: string) => {
 		const index = await readAssetIndex(projectPath)
 		const entry = findAsset(index, tag)
 		if (!entry) return { ok: false, error: `No asset tagged "${tag}".` }
@@ -418,35 +455,31 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── generated assets ──────────────────────────────────────────────────────
 
-	ipcMain.handle("secrets:status", (_event, name: string) => secretStatus(name as SecretName))
+	handle("secrets:status", (_event, name: string) => secretStatus(name as SecretName))
 
-	ipcMain.handle("secrets:set", async (_event, name: string, value: string) => {
+	handle("secrets:set", async (_event, name: string, value: string) => {
 		const result = await setSecret(name as SecretName, value)
 		return result.ok ? { ok: true } : { ok: false, error: result.error }
 	})
 
-	ipcMain.handle("secrets:clear", (_event, name: string) => clearSecret(name as SecretName))
+	handle("secrets:clear", (_event, name: string) => clearSecret(name as SecretName))
 
-	ipcMain.handle("generate:questions", () => generationQuestions())
+	handle("generate:questions", () => generationQuestions())
 
 	// The user says what they want; these three are that path. `clarify` decides
 	// whether anything more is needed, `takes` produces three of the thing they
 	// asked for, `accept` writes the one they pointed at.
-	ipcMain.handle("generate:clarify", (_event, projectPath: string, request: AssetRequest) =>
-		clarifyAssetRequest(projectPath, request),
-	)
+	handle("generate:clarify", (_event, projectPath: string, request: AssetRequest) => clarifyAssetRequest(projectPath, request))
 
 	// The rebuild stage sits between clarify and takes: the answers become a
 	// polished per-kind brief the user reads and edits before spending anything.
-	ipcMain.handle("generate:refineBrief", (_event, projectPath: string, request: AssetRequest) =>
-		refineAssetBrief(projectPath, request),
-	)
+	handle("generate:refineBrief", (_event, projectPath: string, request: AssetRequest) => refineAssetBrief(projectPath, request))
 
-	ipcMain.handle("generate:takes", (_event, projectPath: string, request: AssetRequest, aspect: string) =>
+	handle("generate:takes", (_event, projectPath: string, request: AssetRequest, aspect: string) =>
 		requestTakes(projectPath, request, aspect),
 	)
 
-	ipcMain.handle(
+	handle(
 		"generate:acceptTake",
 		async (_event, projectPath: string, request: AssetRequest, aspect: string, variant: number, tag: string) => {
 			const result = await acceptRequestTake(projectPath, request, aspect, variant, tag)
@@ -455,7 +488,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		},
 	)
 
-	ipcMain.handle(
+	handle(
 		"generate:refineTake",
 		(
 			_event,
@@ -468,13 +501,13 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		) => refineRequestTake(projectPath, request, aspect, sourceVariant, note, newVariant),
 	)
 
-	ipcMain.handle("generate:markTargets", async (_event, projectPath: string, subject: string) => {
+	handle("generate:markTargets", async (_event, projectPath: string, subject: string) => {
 		const { markTargetTakes } = await import("./authored-marks")
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		return markTargetTakes(projectPath, subject, tokens)
 	})
 
-	ipcMain.handle(
+	handle(
 		"generate:markTargetRefine",
 		async (_event, projectPath: string, sourceVariant: number, note: string, newVariant: number) => {
 			const { refineMarkTarget } = await import("./authored-marks")
@@ -483,7 +516,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		},
 	)
 
-	ipcMain.handle("generate:mark", async (_event, projectPath: string, subject: string, targetVariant?: number) => {
+	handle("generate:mark", async (_event, projectPath: string, subject: string, targetVariant?: number) => {
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		const window = windows.get(projectPath)
 
@@ -523,13 +556,13 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle("generate:markAccept", async (_event, projectPath: string, tag: string) => {
+	handle("generate:markAccept", async (_event, projectPath: string, tag: string) => {
 		const result = await acceptMark(projectPath, tag)
 		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
 		return result.ok ? { ok: true, tag: result.tag } : { ok: false, error: result.error }
 	})
 
-	ipcMain.handle("generate:shader", async (_event, projectPath: string, request: AssetRequestWire) => {
+	handle("generate:shader", async (_event, projectPath: string, request: AssetRequestWire) => {
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		const window = windows.get(projectPath)
 
@@ -553,7 +586,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return shaderOutcomeWire(result.shader)
 	})
 
-	ipcMain.handle("generate:shaderRefine", async (_event, projectPath: string, note: string) => {
+	handle("generate:shaderRefine", async (_event, projectPath: string, note: string) => {
 		const tokens = await readFoundationTokens(projectPath).catch(() => null)
 		const window = windows.get(projectPath)
 		const result = await refineHeldShader(projectPath, note, tokens, taskModel("shader") || undefined, (update) =>
@@ -568,18 +601,13 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return shaderOutcomeWire(result.shader)
 	})
 
-	ipcMain.handle(
-		"generate:shaderAccept",
-		async (_event, projectPath: string, tag: string, tuned?: Record<string, number | string>) => {
-			const result = await acceptShader(projectPath, tag, tuned)
-			if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
-			return result.ok
-				? { ok: true, tag: result.tag, componentPath: result.componentPath }
-				: { ok: false, error: result.error }
-		},
-	)
+	handle("generate:shaderAccept", async (_event, projectPath: string, tag: string, tuned?: Record<string, number | string>) => {
+		const result = await acceptShader(projectPath, tag, tuned)
+		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
+		return result.ok ? { ok: true, tag: result.tag, componentPath: result.componentPath } : { ok: false, error: result.error }
+	})
 
-	ipcMain.handle("generate:model3d", async (_event, projectPath: string, sourceTag: string) => {
+	handle("generate:model3d", async (_event, projectPath: string, sourceTag: string) => {
 		const window = windows.get(projectPath)
 		return generateModel3d(projectPath, sourceTag, (update) =>
 			window?.sendToChrome("generate:progress", projectPath, {
@@ -590,37 +618,37 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		)
 	})
 
-	ipcMain.handle("generate:model3dAccept", async (_event, projectPath: string, tag: string) => {
+	handle("generate:model3dAccept", async (_event, projectPath: string, tag: string) => {
 		const result = await acceptModel3d(projectPath, tag)
 		if (result.ok) await regenerateRulesFiles(projectPath).catch(() => {})
 		return result.ok ? { ok: true, tag: result.tag } : { ok: false, error: result.error }
 	})
 
-	ipcMain.handle("generate:taskModels", (_event, task: LaneTask) => listTaskModels(task))
+	handle("generate:taskModels", (_event, task: LaneTask) => listTaskModels(task))
 
-	ipcMain.handle("generate:setTaskModel", (_event, task: LaneTask, model: string) => setTaskModel(task, model))
+	handle("generate:setTaskModel", (_event, task: LaneTask, model: string) => setTaskModel(task, model))
 
 	// Photographs that were generated and not chosen are held in memory so a pick
 	// hands over the picture the user pointed at rather than a fresh one. Closing
 	// the picker is the moment they stop being candidates.
-	ipcMain.handle("generate:discard", (_event, projectPath: string) => {
+	handle("generate:discard", (_event, projectPath: string) => {
 		discardPending(projectPath)
 		discardMark(projectPath)
 		discardModel3d(projectPath)
 		discardShader(projectPath)
 	})
 
-	ipcMain.handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>, kind?: string) =>
+	handle("generate:recipes", (_event, projectPath: string, answers: Record<string, string>, kind?: string) =>
 		recipeCards(projectPath, answers, kind),
 	)
 
-	ipcMain.handle(
+	handle(
 		"generate:variants",
 		(_event, projectPath: string, recipeId: string, answers: Record<string, string>, aspect: string, count: number) =>
 			recipeVariants(projectPath, recipeId, answers, aspect, count),
 	)
 
-	ipcMain.handle(
+	handle(
 		"generate:accept",
 		async (
 			_event,
@@ -641,16 +669,16 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── sync ──────────────────────────────────────────────────────────────────
 
-	ipcMain.handle("sync:now", async (_event, projectPath: string) => {
+	handle("sync:now", async (_event, projectPath: string) => {
 		const window = windows.get(projectPath)
 		if (!window) return { status: "error", message: "That project isn't open." }
 		await window.requestSync()
 		return { status: "ok", message: "" }
 	})
 
-	ipcMain.handle("sync:rollback", (_event, projectPath: string) => rollbackSync(projectPath))
+	handle("sync:rollback", (_event, projectPath: string) => rollbackSync(projectPath))
 
-	ipcMain.handle("sync:markSynced", async (_event, projectPath: string) => {
+	handle("sync:markSynced", async (_event, projectPath: string) => {
 		const outcome = await completeSync(projectPath)
 		const message =
 			outcome === "advanced"
@@ -663,7 +691,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── agent ─────────────────────────────────────────────────────────────────
 
-	ipcMain.handle("agent:clientConfigs", (_event, projectPath: string) => {
+	handle("agent:clientConfigs", (_event, projectPath: string) => {
 		const window = windows.get(projectPath)
 		if (!window) return []
 		const mcp = window.getMcpServer()
@@ -672,7 +700,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── the coding backend ────────────────────────────────────────────────────
 
-	ipcMain.handle("agent:state", (_event, projectPath: string) => {
+	handle("agent:state", (_event, projectPath: string) => {
 		return windows.get(projectPath)?.getAgent().conversation.getState() ?? null
 	})
 
@@ -682,7 +710,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * for the whole turn and give it nothing the event stream has not already
 	 * delivered.
 	 */
-	ipcMain.handle("agent:send", (_event, projectPath: string, text: string, images?: string[]) => {
+	handle("agent:send", (_event, projectPath: string, text: string, images?: string[]) => {
 		const agent = windows.get(projectPath)?.getAgent()
 		if (!agent) return
 		void agent.conversation.sendMessage(text, images).catch((err) => {
@@ -698,7 +726,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * decode is worse than an absent one, because the turn proceeds as though the
 	 * model saw something.
 	 */
-	ipcMain.handle("chat:pickImages", async () => {
+	handle("chat:pickImages", async () => {
 		const result = await dialog.showOpenDialog({
 			title: "Attach images",
 			properties: ["openFile", "multiSelections"],
@@ -724,32 +752,32 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		return attached
 	})
 
-	ipcMain.handle("agent:abort", async (_event, projectPath: string) => {
+	handle("agent:abort", async (_event, projectPath: string) => {
 		await windows.get(projectPath)?.getAgent().conversation.abort()
 	})
 
-	ipcMain.handle(
+	handle(
 		"agent:permission",
 		async (_event, projectPath: string, requestId: string, decision: "allow" | "deny" | "allow-always") => {
 			await windows.get(projectPath)?.getAgent().conversation.respondToPermission(requestId, decision)
 		},
 	)
 
-	ipcMain.handle("agent:setMode", (_event, projectPath: string, mode: "read-only" | "write", steering?: string) => {
+	handle("agent:setMode", (_event, projectPath: string, mode: "read-only" | "write", steering?: string) => {
 		return windows.get(projectPath)?.getAgent().setChatMode(mode, steering) ?? { executed: false }
 	})
 
-	ipcMain.handle("agent:discardPlan", (_event, projectPath: string) => {
+	handle("agent:discardPlan", (_event, projectPath: string) => {
 		windows.get(projectPath)?.getAgent().discardPlan()
 	})
 
-	ipcMain.handle("agent:reset", (_event, projectPath: string) => {
+	handle("agent:reset", (_event, projectPath: string) => {
 		windows.get(projectPath)?.getAgent().conversation.reset()
 	})
 
-	ipcMain.handle("agent:backends", () => probeBackends())
+	handle("agent:backends", () => probeBackends())
 
-	ipcMain.handle("agent:selectBackend", async (_event, id: BackendId | null) => {
+	handle("agent:selectBackend", async (_event, id: BackendId | null) => {
 		await setPref("backendId", id)
 		// Every open project re-resolves, so a backend chosen in one window stops
 		// the other windows refusing too.
@@ -762,7 +790,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * Empty when the backend cannot enumerate, which the picker renders as "type
 	 * an id" rather than as an empty list that looks broken.
 	 */
-	ipcMain.handle("agent:models", async () => {
+	handle("agent:models", async () => {
 		try {
 			return (await catalogueBackend().listModels?.()) ?? []
 		} catch (err) {
@@ -778,7 +806,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * model is behind a sign-in you have not done" and "that model does not exist"
 	 * look identical from a list that only shows what works.
 	 */
-	ipcMain.handle("agent:providerDoors", async () => {
+	handle("agent:providerDoors", async () => {
 		try {
 			return (await catalogueBackend().listProviderDoors?.()) ?? []
 		} catch (err) {
@@ -794,7 +822,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * to probe is not a refusal — a network hiccup must not accuse someone's plan
 	 * of not covering a model it covers — so an unknown answer reads as fine.
 	 */
-	ipcMain.handle("agent:probeModel", async (_event, projectPath: string, model: string) => {
+	handle("agent:probeModel", async (_event, projectPath: string, model: string) => {
 		const id = getPrefs().backendId
 		if (!id || !model) return null
 
@@ -824,7 +852,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 	 * renderer must not be able to navigate anything anywhere — and because this
 	 * is the same `shell.openExternal` path every other outbound link uses.
 	 */
-	ipcMain.handle("agent:connectProvider", async (_event, providerId: string, methodId: string, key?: string) => {
+	handle("agent:connectProvider", async (_event, providerId: string, methodId: string, key?: string) => {
 		try {
 			const challenge = (await catalogueBackend().connectProvider?.(providerId, methodId, key)) ?? null
 			probedModels.clear()
@@ -837,7 +865,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle("agent:completeOauth", async (_event, providerId: string, methodId: string, code: string) => {
+	handle("agent:completeOauth", async (_event, providerId: string, methodId: string, code: string) => {
 		try {
 			const ok = (await catalogueBackend().completeOauth?.(providerId, methodId, code)) ?? false
 			probedModels.clear()
@@ -847,7 +875,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle("agent:oauthStatus", async (_event, providerId: string) => {
+	handle("agent:oauthStatus", async (_event, providerId: string) => {
 		try {
 			const status = (await catalogueBackend().oauthStatus?.(providerId)) ?? { connected: false }
 			// A credential just arrived from outside Caret's own call path, so every
@@ -860,7 +888,7 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle("agent:disconnectProvider", async (_event, providerId: string) => {
+	handle("agent:disconnectProvider", async (_event, providerId: string) => {
 		try {
 			await catalogueBackend().disconnectProvider?.(providerId)
 			probedModels.clear()
@@ -871,18 +899,18 @@ export function registerIpcHandlers(windows: WindowManager): void {
 		}
 	})
 
-	ipcMain.handle("agent:sessions", async (_event, projectPath: string) => {
+	handle("agent:sessions", async (_event, projectPath: string) => {
 		const id = getPrefs().backendId
 		if (!id) return []
 		const backend = getBackend(id)
 		return (await backend.listSessions?.(projectPath).catch(() => [])) ?? []
 	})
 
-	ipcMain.handle("agent:replay", async (_event, projectPath: string, sessionId: string) => {
+	handle("agent:replay", async (_event, projectPath: string, sessionId: string) => {
 		return (await windows.get(projectPath)?.getAgent().conversation.replay(sessionId)) ?? false
 	})
 
-	ipcMain.handle("agent:deleteSession", async (_event, projectPath: string, sessionId: string) => {
+	handle("agent:deleteSession", async (_event, projectPath: string, sessionId: string) => {
 		const id = getPrefs().backendId
 		if (!id) return
 		await getBackend(id).deleteSession?.(projectPath, sessionId)
@@ -890,52 +918,79 @@ export function registerIpcHandlers(windows: WindowManager): void {
 
 	// ── preferences ───────────────────────────────────────────────────────────
 
-	ipcMain.handle("prefs:get", () => getPrefs())
+	handle("prefs:get", () => getPrefs())
 
-	ipcMain.handle("prefs:set", async (_event, patch: Record<string, unknown>) => {
+	handle("prefs:set", async (_event, patch: Record<string, unknown>) => {
+		const wasEnabled = getPrefs().telemetryEnabled
 		await setPrefs(patch)
+		// A consent flip must reach the analytics client, not just the JSON file:
+		// off tears the client down (after one farewell event), on re-arms it.
+		// The notice's "Turn off" sets telemetryNoticeShown in the same patch,
+		// which is what distinguishes it from the settings toggle.
+		if (typeof patch.telemetryEnabled === "boolean" && patch.telemetryEnabled !== wasEnabled) {
+			const at = patch.telemetryNoticeShown === true ? "first_run_notice" : "settings"
+			await setTelemetryEnabled(patch.telemetryEnabled, at)
+		}
 		// The chat composer names the model and effort, and both live here. Without
 		// this the panel writes the preference and nothing on screen moves.
 		for (const window of windows.list()) window.getAgent().conversation.touch()
 	})
 
+	// Renderer-originated telemetry. The event names are validated here because
+	// the renderer is the least trusted process able to reach this channel; its
+	// free-text fields are scrubbed again on this side for the same reason.
+	handle("analytics:event", (_event, name: string, props?: Record<string, unknown>) => {
+		if (!RENDERER_EVENTS.has(name)) return
+		if (name === "renderer_exception") {
+			const error = new Error(scrubAndTruncate(String(props?.message ?? "renderer error")))
+			if (typeof props?.stack === "string") error.stack = scrubText(props.stack).slice(0, 4000)
+			captureError(error, "renderer")
+			return
+		}
+		const surface = props?.surface
+		capture(name, {
+			surface:
+				typeof surface === "string" && ["canvas", "foundation", "agent", "assets"].includes(surface) ? surface : "other",
+		})
+	})
+
 	// ── canvas + chrome plumbing ──────────────────────────────────────────────
 
-	ipcMain.handle("canvas:message", async (_event, projectPath: string, message: DesignInboundMessage) => {
+	handle("canvas:message", async (_event, projectPath: string, message: DesignInboundMessage) => {
 		await windows.get(projectPath)?.handleCanvasMessage(message)
 	})
 
-	ipcMain.handle("canvas:setBounds", (_event, projectPath: string, insets: { top: number; right: number }) => {
+	handle("canvas:setBounds", (_event, projectPath: string, insets: { top: number; right: number }) => {
 		windows.get(projectPath)?.setChromeInsets(insets)
 	})
 
-	ipcMain.handle("canvas:setVisible", (_event, projectPath: string, visible: boolean) => {
+	handle("canvas:setVisible", (_event, projectPath: string, visible: boolean) => {
 		windows.get(projectPath)?.setCanvasVisible(visible)
 	})
 
-	ipcMain.handle("notification:respond", (_event, id: string, action: string | null) => {
+	handle("notification:respond", (_event, id: string, action: string | null) => {
 		resolveNotification(id, action)
 	})
 
-	ipcMain.handle("interview:respond", (_event, id: string, answer: string | null) => {
+	handle("interview:respond", (_event, id: string, answer: string | null) => {
 		answerInterviewPrompt(id, answer)
 	})
 
-	ipcMain.handle("interview:library", () => fullLibrary())
+	handle("interview:library", () => fullLibrary())
 
-	ipcMain.handle("interview:pending", () => currentPrompt())
+	handle("interview:pending", () => currentPrompt())
 
 	// The AI-run token wizard — the Foundation surface's default door.
-	ipcMain.handle("wizard:resume", (_event, projectPath: string) => resumeWizard(projectPath))
-	ipcMain.handle("wizard:start", (_event, projectPath: string, description: string, mode?: "ai-led" | "collaborative") =>
+	handle("wizard:resume", (_event, projectPath: string) => resumeWizard(projectPath))
+	handle("wizard:start", (_event, projectPath: string, description: string, mode?: "ai-led" | "collaborative") =>
 		startWizard(projectPath, description, mode ?? "collaborative"),
 	)
-	ipcMain.handle("wizard:answer", (_event, projectPath: string, answer: WizardAnswer) => answerWizard(projectPath, answer))
-	ipcMain.handle("wizard:finishNow", (_event, projectPath: string) => finishWizard(projectPath))
-	ipcMain.handle("wizard:retry", (_event, projectPath: string) => retryWizard(projectPath))
-	ipcMain.handle("wizard:back", (_event, projectPath: string) => wizardBack(projectPath))
-	ipcMain.handle("wizard:commit", (_event, projectPath: string) => commitWizard(projectPath))
-	ipcMain.handle("wizard:abandon", (_event, projectPath: string) => abandonWizard(projectPath))
+	handle("wizard:answer", (_event, projectPath: string, answer: WizardAnswer) => answerWizard(projectPath, answer))
+	handle("wizard:finishNow", (_event, projectPath: string) => finishWizard(projectPath))
+	handle("wizard:retry", (_event, projectPath: string) => retryWizard(projectPath))
+	handle("wizard:back", (_event, projectPath: string) => wizardBack(projectPath))
+	handle("wizard:commit", (_event, projectPath: string) => commitWizard(projectPath))
+	handle("wizard:abandon", (_event, projectPath: string) => abandonWizard(projectPath))
 }
 
 /**

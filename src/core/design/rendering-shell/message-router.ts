@@ -24,6 +24,7 @@ import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
 import { bridgeFor, editLaneFor, exploreLaneFor, hostFor } from "../services"
 import { recordMappings } from "../sync/mapping-manifest"
+import { emitDesignEvent } from "../telemetry-hooks"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
 import { captureUndoStep, redoStep, undoLastStep } from "../undo/design-undo"
 import {
@@ -164,11 +165,36 @@ function startsWithPath(child: string, parent: string): boolean {
 	return child.toLowerCase().startsWith(parent.toLowerCase())
 }
 
+/**
+ * Product events for canvas actions, keyed by message type — the action name
+ * and nothing from the payload. One lookup here covers every canvas gesture,
+ * so no individual case can grow tracking of its own content.
+ */
+const CANVAS_EVENTS: Partial<Record<DesignInboundMessage["type"], { event: string; props?: Record<string, unknown> }>> = {
+	"inline-edit": { event: "canvas_action", props: { action: "inline_edit" } },
+	"ai-edit-request": { event: "canvas_action", props: { action: "ai_edit" } },
+	"overlay-edit": { event: "canvas_action", props: { action: "overlay_edit" } },
+	"param-edit": { event: "canvas_action", props: { action: "param_edit" } },
+	"resize-commit": { event: "canvas_action", props: { action: "resize_commit" } },
+	"promote-token": { event: "canvas_action", props: { action: "promote_token" } },
+	"flow-edge-create": { event: "canvas_action", props: { action: "flow_edge_create" } },
+	"flow-edge-delete": { event: "canvas_action", props: { action: "flow_edge_delete" } },
+	"flow-edge-update": { event: "canvas_action", props: { action: "flow_edge_update" } },
+	"design-undo": { event: "canvas_action", props: { action: "design_undo" } },
+	"design-redo": { event: "canvas_action", props: { action: "design_redo" } },
+	"variant-request": { event: "explore_variants_requested" },
+	"variant-pick": { event: "explore_variant_picked" },
+	"variant-cancel": { event: "explore_cancelled" },
+}
+
 async function handleMessage(message: DesignInboundMessage, deps: MessageRouterDeps): Promise<void> {
 	if (!isValidDesignMessagePayload(message.type, message.payload)) {
 		Logger.error(`[design] Ignoring malformed ${message.type} payload: ${JSON.stringify(message.payload)}`)
 		return
 	}
+
+	const tracked = CANVAS_EVENTS[message.type]
+	if (tracked) emitDesignEvent(tracked.event, tracked.props)
 
 	const { workspacePath } = deps
 
