@@ -59,6 +59,9 @@ const IGNORED_FILES = new Set([
 	// tokens change → theme regenerated → healer wakes → regenerates again.
 	"caret-theme.css",
 	"caret-fonts.css",
+	// The vite plugin rewrites it per open playground take (Tailwind @source
+	// registration) — healing it would wake the healer once per round.
+	"caret-take-sources.css",
 	"canvas-layout.json",
 	".sync-pending.json",
 	// Mapping metadata Caret writes during sync — versioned, but not healable

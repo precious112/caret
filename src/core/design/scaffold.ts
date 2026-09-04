@@ -81,6 +81,7 @@ canvas-layout.json
 .variants.json
 .checks-results.json
 .undo-journal.json
+caret-take-sources.css
 pages/*--v*/
 assets/.posters/
 `

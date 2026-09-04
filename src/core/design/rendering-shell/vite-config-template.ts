@@ -147,16 +147,53 @@ function caretRouterPlugin() {
 function caretTailwindFreshPlugin() {
   const cssPath = resolve(__dirname, "global.css")
   const sourceDirs = ["pages", "components", "layouts", "lib"].map((d) => resolve(__dirname, d))
+  const variantsPath = resolve(__dirname, ".variants.json")
+  const takeSourcesPath = resolve(__dirname, "caret-take-sources.css")
+
+  // Playground take pages are gitignored (pages/*--v*/), and Tailwind's
+  // scanner honours .gitignore even under an explicit @source glob — so a
+  // take's classes would silently produce no CSS and every take would render
+  // half-styled. A per-FILE @source does bypass the ignore (measured on the
+  // pinned version by scripts/probe-take-css.ts), so this keeps one @source
+  // line per open take in a stylesheet global.css imports. Writing it is what
+  // triggers Tailwind's re-scan, so no extra nudge is needed.
+  const syncTakeSources = () => {
+    let lines = ""
+    try {
+      const raw = JSON.parse(readFileSync(variantsPath, "utf-8"))
+      const nodes = Array.isArray(raw?.nodes) ? raw.nodes : []
+      lines = nodes
+        .filter((n) => typeof n?.id === "string" && /^[A-Za-z0-9_-]+$/.test(n.id))
+        .map((n) => \`@source "./pages/\${n.id}/index.tsx";\`)
+        .join("\\n")
+    } catch {}
+    const content = "/* Generated: @source lines for open playground takes — see caret-tailwind-fresh. */\\n" + lines + "\\n"
+    try {
+      if (existsSync(takeSourcesPath) && readFileSync(takeSourcesPath, "utf-8") === content) return
+      writeFileSync(takeSourcesPath, content)
+    } catch {}
+  }
+
   return {
     name: "caret-tailwind-fresh",
     configureServer(server) {
+      // A restart mid-exploration must come back styled: rebuild before the
+      // first transform reads global.css.
+      syncTakeSources()
       server.watcher.on("add", (p) => {
+        if (p === variantsPath) return syncTakeSources()
         if (!p.endsWith(".tsx") && !p.endsWith(".jsx")) return
         if (!sourceDirs.some((dir) => p.startsWith(dir))) return
         try {
           const now = new Date()
           utimesSync(cssPath, now, now)
         } catch {}
+      })
+      server.watcher.on("change", (p) => {
+        if (p === variantsPath) syncTakeSources()
+      })
+      server.watcher.on("unlink", (p) => {
+        if (p === variantsPath) syncTakeSources()
       })
     },
   }

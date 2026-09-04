@@ -398,6 +398,7 @@ if (isolatedPageId && mode === "focused") {
 	const globalCss = `@import "./caret-fonts.css";
 @import "tailwindcss" source(none);
 @import "./caret-theme.css";
+@import "./caret-take-sources.css";
 
 @source "./pages/**/*.{tsx,jsx}";
 @source "./components/**/*.{tsx,jsx}";
@@ -422,6 +423,19 @@ export async function generateEntryFiles(caretDir: string): Promise<void> {
 		await fs.writeFile(path.join(caretDir, name), content)
 	}
 	await writeThemeCss(caretDir)
+
+	// global.css imports it unconditionally; the vite plugin owns its content
+	// (one @source line per open playground take — Tailwind's scanner honours
+	// .gitignore, so gitignored take pages need per-file registration). Seeded
+	// empty here so a boot with no exploration never 500s on a missing import;
+	// NOT overwritten if present — a restart mid-exploration keeps its lines
+	// until the plugin rebuilds them from the scratch.
+	const takeSources = path.join(caretDir, "caret-take-sources.css")
+	try {
+		await fs.access(takeSources)
+	} catch {
+		await fs.writeFile(takeSources, "/* Generated: @source lines for open playground takes — see caret-tailwind-fresh. */\n")
+	}
 
 	// Ensure pages directory exists
 	await fs.mkdir(path.join(caretDir, "pages"), { recursive: true })
