@@ -166,6 +166,14 @@ const READ_ONLY_COMMANDS = new Set([
 	"tree",
 	"wc",
 	"which",
+	// Windows spellings of the same reads — a backend running its shell through
+	// cmd/PowerShell reaches for these, and refusing a read kills whole turns
+	// (see the git note below).
+	"dir",
+	"findstr",
+	"more",
+	"type",
+	"where",
 ])
 
 // `ls-tree`, `rev-parse` and `cat-file` earned their places the hard way:
@@ -195,9 +203,10 @@ const SHELL_COMPOSITION = /[;&|><`$(){}]|\n/
  *
  * `find … 2>/dev/null` is how every agent writes `find`, and refusing it sent
  * the plan phase into a retry loop over a command that does nothing but silence
- * permission-denied noise. The null device is not a file.
+ * permission-denied noise. The null device is not a file — and on Windows it is
+ * spelled `NUL`.
  */
-const HARMLESS_REDIRECTS = /\s*\d?>\s*\/dev\/null|\s*2>&1/g
+const HARMLESS_REDIRECTS = /\s*\d?>\s*(?:\/dev\/null|nul\b)|\s*2>&1/gi
 
 /**
  * Quoted arguments, which the shell does not interpret as composition.
@@ -267,8 +276,8 @@ export function isCaretInstallCommand(command: string, projectPath: string): boo
 	// A relative prefix resolves against the session's working directory,
 	// which is the project root.
 	const root = stripPrivate(path.normalize(projectPath))
-	const resolved = stripPrivate(path.normalize(path.resolve(root, prefix)))
-	const caretDir = path.join(root, ".caret")
+	const resolved = comparable(stripPrivate(path.normalize(path.resolve(root, prefix))))
+	const caretDir = comparable(path.join(root, ".caret"))
 	return resolved === caretDir || resolved.startsWith(caretDir + path.sep)
 }
 
@@ -308,7 +317,7 @@ export function classify(target: string, projectPath: string): Classification {
 }
 
 function within(root: string, candidate: string): Exclude<Classification, "outside"> | null {
-	const relative = path.relative(root, stripPrivate(path.normalize(candidate)))
+	const relative = path.relative(comparable(root), comparable(stripPrivate(path.normalize(candidate))))
 	if (relative.startsWith("..") || path.isAbsolute(relative)) return null
 	return relative.split(path.sep)[0] === ".caret" ? "design" : "app"
 }
@@ -316,6 +325,17 @@ function within(root: string, candidate: string): Exclude<Classification, "outsi
 /** macOS resolves `/tmp` and `/var` through `/private`; both spellings are the same file. */
 function stripPrivate(value: string): string {
 	return value.startsWith("/private/") ? value.slice("/private".length) : value
+}
+
+/**
+ * Windows filesystems are case-insensitive, and backends spell the drive letter
+ * and path segments however they like — `c:\users\…` against a root recorded as
+ * `C:\Users\…` must not classify as "outside", which is the silent-refusal
+ * failure mode the doc comment above warns about. Comparison only; paths shown
+ * to the user keep their original casing.
+ */
+function comparable(value: string): string {
+	return process.platform === "win32" ? value.toLowerCase() : value
 }
 
 function describeFiles(targets: string[], projectPath: string): string {

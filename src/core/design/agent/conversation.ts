@@ -79,12 +79,11 @@ export interface ConversationState {
 	 * a token, a thought, a tool event. The renderer computes the silence from
 	 * this on its own clock, which is what lets "Working…" distinguish a model
 	 * that is thinking (reasoning deltas keep this fresh) from a provider that
-	 * is failing and being silently retried. The PINNED server (1.18.11) emits
-	 * no event for a retried stream — measured against its own API doc — so
-	 * silence is the only version-proof signal; newer servers emit
-	 * `session.retry.scheduled`, which the mapper already understands and which
-	 * refreshes this clock with a transcript note when the pin catches up.
-	 * Null outside a turn.
+	 * is failing and being silently retried. The pinned server (1.18.23)
+	 * documents `session.retry.scheduled` and the mapper consumes it, but the
+	 * event has never been observed live — so silence stays the version-proof
+	 * signal, refreshed with a transcript note whenever the retry event does
+	 * arrive. Null outside a turn.
 	 */
 	lastEventAt: number | null
 	transcript: TranscriptState

@@ -75,12 +75,22 @@ export function createElectronDesignHost(targets: ElectronHostTargets): DesignHo
 			// editors that don't understand `:line` still open the file.
 			const [bin, ...baseArgs] = command.split(/\s+/)
 			const target = lineNumber ? `${filePath}:${lineNumber}` : filePath
-			try {
-				spawn(bin, [...baseArgs, target], { detached: true, stdio: "ignore" }).unref()
-			} catch (err) {
+			// Windows editors are `.cmd` shims only a shell can start — and a shell
+			// re-joins the arguments unquoted, so the one that may contain a space
+			// (the file path) is quoted by hand.
+			const viaShell = process.platform === "win32"
+			const child = spawn(bin, [...baseArgs, viaShell && /\s/.test(target) ? `"${target}"` : target], {
+				detached: true,
+				stdio: "ignore",
+				shell: viaShell,
+			})
+			// A missing editor arrives as an async 'error' event, not a throw — with
+			// no listener it would crash the whole main process.
+			child.once("error", (err) => {
 				Logger.error(`[host] editor command "${command}" failed:`, err)
-				await shell.openPath(filePath)
-			}
+				void shell.openPath(filePath)
+			})
+			child.unref()
 		},
 
 		sendToCanvas(message: DesignOutboundMessage): void {

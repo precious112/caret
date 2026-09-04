@@ -14,8 +14,13 @@
 import * as fs from "fs"
 import * as path from "path"
 
-/** Bumped together with the `opencode-ai` dependency and the pinned protocol. */
-export const PINNED_OPENCODE_VERSION = "1.18.11"
+/**
+ * Bumped together with the `opencode-ai` dependency and the pinned protocol.
+ * A unit test asserts it matches package.json — builds stage the binary from
+ * the dependency, so a drifting constant would document a server that is not
+ * the one shipping.
+ */
+export const PINNED_OPENCODE_VERSION = "1.18.23"
 
 let bundledDirectory: string | null = null
 

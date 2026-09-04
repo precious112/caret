@@ -37,6 +37,11 @@ async function project(pkg: unknown, options: { nodeModules?: string[] } = {}): 
 		for (const dep of options.nodeModules) {
 			await fs.mkdir(path.join(caretDir, "node_modules", dep), { recursive: true })
 		}
+		// A real install carries vite's entry file, which needsInstall checks
+		// directly — a package directory alone is not a working install.
+		const viteBin = path.join(caretDir, "node_modules", "vite", "bin")
+		await fs.mkdir(viteBin, { recursive: true })
+		await fs.writeFile(path.join(viteBin, "vite.js"), "")
 	}
 	return caretDir
 }

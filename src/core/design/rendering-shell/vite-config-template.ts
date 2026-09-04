@@ -10,7 +10,7 @@ export function viteConfigSource(): string {
 	return `import { defineConfig } from "vite"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
-import { resolve, join } from "path"
+import { resolve, join, relative, isAbsolute } from "path"
 import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, utimesSync } from "fs"
 
 // Directory-based routing plugin with page watching
@@ -590,7 +590,11 @@ function caretAssetsPlugin() {
         const name = decodeURIComponent(url.slice(PREFIX.length))
         const root = resolve(__dirname, "assets")
         const file = resolve(root, name)
-        if (file !== root && !file.startsWith(root + "/")) {
+        // relative(), never a string-prefix test: on Windows resolve() returns
+        // backslash paths, so a root + "/" prefix check matched nothing and
+        // every asset 403'd. An escape shows up as ".." or an absolute path.
+        const escape = relative(root, file)
+        if (escape.startsWith("..") || isAbsolute(escape)) {
           res.statusCode = 403
           return res.end("forbidden")
         }

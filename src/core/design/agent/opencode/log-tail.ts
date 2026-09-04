@@ -1,11 +1,11 @@
 /**
  * The bundled server's log, read back as the events it never broadcasts.
  *
- * The pinned server (1.18.11) retries a failed provider stream in silence:
- * its LLM runtime's onError only writes a log line, and its event bus carries
- * nothing (newer servers emit `session.retry.scheduled`; see protocol.ts).
- * But the log line has everything a user was owed — the session, the provider,
- * and the provider's own words:
+ * The pinned server (1.18.23) documents `session.retry.scheduled`, but the
+ * event has never been observed live, and 1.18.11 in the field retried a
+ * failed provider stream in silence: its LLM runtime's onError only wrote a
+ * log line. That log line has everything a user was owed — the session, the
+ * provider, and the provider's own words:
  *
  *   timestamp=… level=ERROR … message="stream error" … session.id=ses_x …
  *   error.error="AI_APICallError: Error from provider (Console Go): Upstream
@@ -21,9 +21,18 @@ import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
 
-/** Shared by every instance the binary runs — the server appends, we follow. */
+/**
+ * Shared by every instance the binary runs — the server appends, we follow.
+ *
+ * Mirrors the pinned binary's own resolution, read from its bundle: a pure XDG
+ * fallback chain with NO platform branch — `XDG_DATA_HOME || ~/.local/share`,
+ * Windows included (homedir there is %USERPROFILE%). Honouring XDG_DATA_HOME
+ * matters because the server inherits our environment and writes wherever it
+ * points; a tail on the unset-default would silently follow nothing.
+ */
 export function opencodeLogPath(): string {
-	return path.join(os.homedir(), ".local", "share", "opencode", "log", "opencode.log")
+	const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share")
+	return path.join(dataHome, "opencode", "log", "opencode.log")
 }
 
 /**

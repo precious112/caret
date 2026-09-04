@@ -318,8 +318,8 @@ async function provisionNodeModules(caretDir: string): Promise<void> {
 	// run then fails with "vite did not start" — two whole suite runs were lost
 	// to exactly that. The binary the suite is about to spawn is the validity
 	// check, so a poisoned cache heals itself instead of failing forever.
-	if (fsSync.existsSync(cachedModules) && !fsSync.existsSync(path.join(cachedModules, ".bin", "vite"))) {
-		log(`cached node_modules has no vite binary — discarding poisoned cache: ${cacheDir}`)
+	if (fsSync.existsSync(cachedModules) && !fsSync.existsSync(path.join(cachedModules, "vite", "bin", "vite.js"))) {
+		log(`cached node_modules has no vite entry — discarding poisoned cache: ${cacheDir}`)
 		await fs.rm(cacheDir, { recursive: true, force: true })
 	}
 
@@ -348,8 +348,10 @@ async function provisionNodeModules(caretDir: string): Promise<void> {
 
 async function bootVite(caretDir: string): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const viteBin = path.join(caretDir, "node_modules", ".bin", "vite")
-		viteProc = child_process.spawn(viteBin, ["--host", "localhost"], { cwd: caretDir, stdio: "pipe", shell: true })
+		// Same shape as RenderingShell.spawnVite: the real entry under node, never
+		// the `.bin` shim — a `.cmd` behind an unquoted shell line on Windows.
+		const viteEntry = path.join(caretDir, "node_modules", "vite", "bin", "vite.js")
+		viteProc = child_process.spawn("node", [viteEntry, "--host", "localhost"], { cwd: caretDir, stdio: "pipe" })
 		const timeout = setTimeout(() => reject(new Error(`vite did not start in 60s.\n${viteOutput}`)), 60000)
 		viteProc.stdout?.on("data", (d: Buffer) => {
 			viteOutput += d.toString()

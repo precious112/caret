@@ -30,6 +30,7 @@ import { promisify } from "util"
 import { fetch } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
 import { runExclusive, writeFileAtomic } from "../file-mutation-queue"
+import { systemSpawnEnv } from "../spawn-env"
 import { readFoundationTokens } from "../tokens"
 import { tokenClassForHex } from "../visual-editing/token-colors"
 import { CATALOG_INSTALL_DIR, type CatalogComponent, type CatalogLibrary, findCatalogComponent } from "./catalog"
@@ -121,9 +122,15 @@ async function installDeps(workspacePath: string, deps: string[]): Promise<void>
 		if (changed) await writeFileAtomic(packagePath, JSON.stringify(pkg, null, 2))
 	})
 
+	// `shell` on Windows only: npm there is `npm.cmd`, which execFile cannot
+	// start without one. The arguments are fixed strings, so the shell's lack of
+	// quoting cannot bite. The augmented PATH is for Finder-launched macOS apps,
+	// which inherit an environment without Homebrew's bin directories.
 	await execFileAsync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
 		cwd: caretDir,
 		timeout: 300_000,
+		shell: process.platform === "win32",
+		env: systemSpawnEnv(),
 	})
 }
 
@@ -404,10 +411,11 @@ async function installCli(
 		// The CLI prompts to install deps; "n" declines — Caret installs deps
 		// itself, with scripts disabled.
 		await new Promise<void>((resolve, reject) => {
+			// Same Windows/`npx.cmd` and macOS/PATH story as installDeps above.
 			const child = execFile(
 				"npx",
 				["-y", "lightswind@latest", "add", component.source],
-				{ cwd: scratch, timeout: 240_000 },
+				{ cwd: scratch, timeout: 240_000, shell: process.platform === "win32", env: systemSpawnEnv() },
 				(error) => (error ? reject(error) : resolve()),
 			)
 			child.stdin?.write("n\n")

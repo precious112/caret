@@ -13,6 +13,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
+import { systemSpawnEnv } from "../spawn-env"
 import { generateEntryFiles } from "./entry-template"
 import { generateViteConfig } from "./vite-config-template"
 
@@ -138,22 +139,38 @@ export class RenderingShell {
 				return true
 			}
 		}
+
+		// A package directory is not a working install: an interrupted install can
+		// leave vite's folder without its entry file. Check the exact file
+		// spawnVite runs, not a marker for it.
+		try {
+			await fs.access(path.join(caretDir, "node_modules", "vite", "bin", "vite.js"))
+		} catch {
+			Logger.info("[design] vite is present but its entry is missing — reinstalling")
+			return true
+		}
 		return false
 	}
 
 	private spawnVite(cwd: string): Promise<number> {
 		return new Promise((resolve, reject) => {
-			const viteBin = path.join(cwd, "node_modules", ".bin", "vite")
+			// Vite's real entry under system node, never the `.bin` shim: on Windows
+			// the shim is a `.cmd` that only a shell can start, and `shell: true`
+			// re-joins the command line unquoted — a project path with a space
+			// (`C:\Users\First Last\…`) splits the command and Vite never boots.
+			// Spawning node directly also means kill() reaches Vite itself rather
+			// than a cmd.exe wrapper that would orphan it.
+			const viteEntry = path.join(cwd, "node_modules", "vite", "bin", "vite.js")
 			const logStream: WriteStream = createWriteStream(path.join(cwd, "vite.log"), { flags: "w" })
 
 			this.stoppingIntentionally = false
 			// No --port: Vite auto-increments from 5173 when the port is taken, which
 			// is what keeps several open projects from colliding. The chosen port is
 			// read back from stdout below rather than assumed.
-			const proc = child_process.spawn(viteBin, ["--host", "localhost"], {
+			const proc = child_process.spawn("node", [viteEntry, "--host", "localhost"], {
 				cwd,
 				stdio: "pipe",
-				shell: true,
+				env: systemSpawnEnv(),
 			})
 			this.viteProcess = proc
 
@@ -213,7 +230,10 @@ export class RenderingShell {
 
 function runNpmInstall(cwd: string): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const proc = child_process.spawn("npm", ["install"], { cwd, stdio: "pipe", shell: true })
+		// `shell: true` is what resolves `npm.cmd` on Windows; the augmented PATH
+		// is what finds npm at all when a Finder-launched app inherits launchd's
+		// minimal environment.
+		const proc = child_process.spawn("npm", ["install"], { cwd, stdio: "pipe", shell: true, env: systemSpawnEnv() })
 
 		let stderr = ""
 		proc.stderr?.on("data", (data) => {

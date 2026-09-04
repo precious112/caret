@@ -1,9 +1,25 @@
-import { exec } from "child_process"
+import { execFile } from "child_process"
 import { promisify } from "util"
 import { Logger } from "@/shared/services/Logger"
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 const GIT_OUTPUT_LINE_LIMIT = 500
+
+/**
+ * Runs git via execFile — argument array, no shell. On Windows a shell would be
+ * cmd.exe, which expands `%…%` pairs inside the `--format="%H%n…"` strings and
+ * applies its own quoting rules to user-supplied query text; execFile hands git
+ * the arguments untouched on every platform.
+ */
+async function execGit(args: string[], options?: { cwd?: string; maxBuffer?: number }): Promise<{ stdout: string }> {
+	const { stdout } = await execFileAsync("git", args, { ...options, encoding: "utf8" })
+	return { stdout }
+}
+
+/** Git output on Windows can carry \r\n; a bare split("\n") leaves \r in every field. */
+function splitLines(text: string): string[] {
+	return text.split(/\r?\n/)
+}
 
 export interface GitCommit {
 	hash: string
@@ -15,7 +31,7 @@ export interface GitCommit {
 
 async function checkGitRepo(cwd: string): Promise<boolean> {
 	try {
-		await execAsync("git rev-parse --git-dir", { cwd })
+		await execGit(["rev-parse", "--git-dir"], { cwd })
 		return true
 	} catch (_error) {
 		return false
@@ -24,7 +40,7 @@ async function checkGitRepo(cwd: string): Promise<boolean> {
 
 async function checkGitInstalled(): Promise<boolean> {
 	try {
-		await execAsync("git --version")
+		await execGit(["--version"])
 		return true
 	} catch (_error) {
 		return false
@@ -33,7 +49,7 @@ async function checkGitInstalled(): Promise<boolean> {
 
 async function checkGitRepoHasCommits(cwd: string): Promise<boolean> {
 	try {
-		await execAsync("git rev-parse HEAD", { cwd })
+		await execGit(["rev-parse", "HEAD"], { cwd })
 		return true
 	} catch (_error) {
 		return false
@@ -61,16 +77,16 @@ export async function searchCommits(query: string, cwd: string): Promise<GitComm
 		}
 
 		// Search commits by hash or message, limiting to 10 results
-		const { stdout } = await execAsync(
-			`git log -n 10 --format="%H%n%h%n%s%n%an%n%ad" --date=short ` + `--grep="${query}" --regexp-ignore-case`,
+		const { stdout } = await execGit(
+			["log", "-n", "10", "--format=%H%n%h%n%s%n%an%n%ad", "--date=short", `--grep=${query}`, "--regexp-ignore-case"],
 			{ cwd },
 		)
 
 		let output = stdout
 		if (!output.trim() && /^[a-f0-9]+$/i.test(query)) {
 			// If no results from grep search and query looks like a hash, try searching by hash
-			const { stdout: hashStdout } = await execAsync(
-				`git log -n 10 --format="%H%n%h%n%s%n%an%n%ad" --date=short ` + `--author-date-order ${query}`,
+			const { stdout: hashStdout } = await execGit(
+				["log", "-n", "10", "--format=%H%n%h%n%s%n%an%n%ad", "--date=short", "--author-date-order", query],
 				{ cwd },
 			).catch(() => ({ stdout: "" }))
 
@@ -82,10 +98,7 @@ export async function searchCommits(query: string, cwd: string): Promise<GitComm
 		}
 
 		const commits: GitCommit[] = []
-		const lines = output
-			.trim()
-			.split("\n")
-			.filter((line) => line !== "--")
+		const lines = splitLines(output.trim()).filter((line) => line !== "--")
 
 		for (let i = 0; i < lines.length; i += 5) {
 			commits.push({
@@ -122,14 +135,14 @@ export async function getCommitInfo(hash: string, cwd: string): Promise<string> 
 		}
 
 		// Get commit info, stats, and diff separately
-		const { stdout: info } = await execAsync(`git show --format="%H%n%h%n%s%n%an%n%ad%n%b" --no-patch ${hash}`, {
+		const { stdout: info } = await execGit(["show", "--format=%H%n%h%n%s%n%an%n%ad%n%b", "--no-patch", hash], {
 			cwd,
 		})
-		const [fullHash, shortHash, subject, author, date, body] = info.trim().split("\n")
+		const [fullHash, shortHash, subject, author, date, body] = splitLines(info.trim())
 
-		const { stdout: stats } = await execAsync(`git show --stat --format="" ${hash}`, { cwd })
+		const { stdout: stats } = await execGit(["show", "--stat", "--format=", hash], { cwd })
 
-		const { stdout: diff } = await execAsync(`git show --format="" ${hash}`, { cwd })
+		const { stdout: diff } = await execGit(["show", "--format=", hash], { cwd })
 
 		const summary = [
 			`Commit: ${shortHash} (${fullHash})`,
@@ -163,7 +176,7 @@ export async function getWorkingState(cwd: string): Promise<string> {
 		}
 
 		// Get status of working directory
-		const { stdout: status } = await execAsync("git status --short", { cwd })
+		const { stdout: status } = await execGit(["status", "--short"], { cwd })
 		if (!status.trim()) {
 			return "No changes in working directory"
 		}
@@ -172,7 +185,7 @@ export async function getWorkingState(cwd: string): Promise<string> {
 		let diff = ""
 		if (await checkGitRepoHasCommits(cwd)) {
 			// Only run git diff if there are commits
-			const { stdout: diffOutput } = await execAsync("git diff HEAD", { cwd })
+			const { stdout: diffOutput } = await execGit(["diff", "HEAD"], { cwd })
 			diff = diffOutput
 		} else {
 			// No commits yet, use status output only
@@ -202,13 +215,13 @@ export async function getGitDiff(cwd: string, stagedOnly = false): Promise<strin
 		let command = "git --no-pager diff --staged --diff-filter=d"
 		if (await checkGitRepoHasCommits(cwd)) {
 			// Only run git diff if there are commits
-			const { stdout: staged } = await execAsync(command, { cwd })
+			const { stdout: staged } = await execGit(["--no-pager", "diff", "--staged", "--diff-filter=d"], { cwd })
 			diff = staged.trim()
 		}
 
 		if (!stagedOnly && !diff) {
 			command = "git --no-pager diff HEAD --diff-filter=d"
-			const { stdout: unstaged } = await execAsync(command, { cwd })
+			const { stdout: unstaged } = await execGit(["--no-pager", "diff", "HEAD", "--diff-filter=d"], { cwd })
 			diff = unstaged.trim()
 		}
 
@@ -234,16 +247,14 @@ export async function getGitRemoteUrls(cwd: string): Promise<string[]> {
 			return []
 		}
 
-		const { stdout } = await execAsync("git remote -v", { cwd })
+		const { stdout } = await execGit(["remote", "-v"], { cwd })
 		if (!stdout.trim()) {
 			return []
 		}
 
 		// Parse output to extract unique URLs
 		// git remote -v output format: "remoteName remoteUrl (fetch|push)"
-		const remotes = stdout
-			.trim()
-			.split("\n")
+		const remotes = splitLines(stdout.trim())
 			.filter((line) => line.includes("(fetch)")) // Only fetch URLs to avoid duplicates
 			.map((line) => {
 				const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)$/)
@@ -270,7 +281,7 @@ export async function getLatestGitCommitHash(cwd: string): Promise<string | null
 			return null
 		}
 
-		const { stdout } = await execAsync("git rev-parse HEAD", { cwd })
+		const { stdout } = await execGit(["rev-parse", "HEAD"], { cwd })
 		return stdout.trim() || null
 	} catch (error) {
 		Logger.error("Error getting latest git commit hash:", error)
@@ -287,7 +298,14 @@ const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 // package*.json, thumbnails/, canvas-layout.json) and internal state
 // (sync-state.json, .sync-pending.json) never pollute the diff / change detection.
 // An allowlist also keeps any future generated file out automatically.
-const DESIGN_CONTENT_PATHSPEC = "-- .caret/pages/ .caret/components/ .caret/layouts/ .caret/tokens/ .caret/flows/ .caret/assets/"
+const DESIGN_CONTENT_DIRS = [
+	".caret/pages/",
+	".caret/components/",
+	".caret/layouts/",
+	".caret/tokens/",
+	".caret/flows/",
+	".caret/assets/",
+]
 
 export type DesignChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "changed"
 
@@ -364,7 +382,7 @@ export async function getDesignLayerChangedFiles(cwd: string, sinceCommit: strin
 	}
 
 	try {
-		const { stdout } = await execAsync(`git --no-pager diff --name-status ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
+		const { stdout } = await execGit(["--no-pager", "diff", "--name-status", base, "HEAD", "--", ...DESIGN_CONTENT_DIRS], {
 			cwd,
 			maxBuffer: 1024 * 1024 * 50,
 		})
@@ -385,7 +403,7 @@ export async function hasDesignChangesSince(cwd: string, sinceCommit: string | n
 		return false
 	}
 	try {
-		await execAsync(`git --no-pager diff --quiet ${base} HEAD ${DESIGN_CONTENT_PATHSPEC}`, { cwd })
+		await execGit(["--no-pager", "diff", "--quiet", base, "HEAD", "--", ...DESIGN_CONTENT_DIRS], { cwd })
 		return false // exit 0 → no differences
 	} catch {
 		return true // non-zero exit → differences exist
@@ -405,9 +423,10 @@ export async function getDesignLayerLog(cwd: string, sinceCommit: string | null)
 		return ""
 	}
 	try {
-		const { stdout } = await execAsync(`git --no-pager log --oneline -n 20 ${sinceCommit}..HEAD ${DESIGN_CONTENT_PATHSPEC}`, {
-			cwd,
-		})
+		const { stdout } = await execGit(
+			["--no-pager", "log", "--oneline", "-n", "20", `${sinceCommit}..HEAD`, "--", ...DESIGN_CONTENT_DIRS],
+			{ cwd },
+		)
 		return stdout.trim()
 	} catch (error) {
 		Logger.error("Error reading design-layer log:", error)
@@ -448,7 +467,7 @@ export async function hasUncommittedDesignChanges(cwd: string): Promise<boolean>
 		return false
 	}
 	try {
-		const { stdout } = await execAsync(`git status --porcelain ${DESIGN_CONTENT_PATHSPEC}`, { cwd })
+		const { stdout } = await execGit(["status", "--porcelain", "--", ...DESIGN_CONTENT_DIRS], { cwd })
 		return stdout.trim().length > 0
 	} catch (error) {
 		Logger.error("Error checking uncommitted design changes:", error)
@@ -459,7 +478,7 @@ export async function hasUncommittedDesignChanges(cwd: string): Promise<boolean>
 /** Whether `ref` resolves to a commit object in this repo. */
 async function commitExists(cwd: string, ref: string): Promise<boolean> {
 	try {
-		await execAsync(`git rev-parse --verify --quiet ${ref}^{commit}`, { cwd })
+		await execGit(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd })
 		return true
 	} catch {
 		return false

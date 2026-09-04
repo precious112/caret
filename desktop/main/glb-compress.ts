@@ -21,6 +21,7 @@ import { createRequire } from "module"
 import * as os from "os"
 import * as path from "path"
 
+import { systemSpawnEnv } from "../../src/core/design/spawn-env"
 import { Logger } from "../../src/shared/services/Logger"
 
 const requireNative = createRequire(import.meta.url)
@@ -54,7 +55,7 @@ export async function compressGlb(input: Buffer): Promise<{ ok: true; bytes: Buf
 					"--simplify",
 					"false",
 				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
+				{ stdio: ["ignore", "pipe", "pipe"], env: systemSpawnEnv() },
 			)
 			let output = ""
 			child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()))

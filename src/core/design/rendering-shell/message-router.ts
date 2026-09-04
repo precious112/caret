@@ -113,20 +113,21 @@ async function requestAgent(workspacePath: string, task: AgentTask): Promise<boo
 async function resolveCaretPath(filePath: string, workspacePath: string): Promise<string> {
 	if (!filePath) return filePath
 	const caretDir = path.join(workspacePath, ".caret")
+	const reported = normalizeFiberPath(filePath)
 
-	if (path.isAbsolute(filePath)) {
-		if (filePath.startsWith(caretDir)) return filePath
+	if (path.isAbsolute(reported)) {
+		if (startsWithPath(reported, caretDir)) return reported
 		// The fiber reports sources through RESOLVED symlinks while the project
 		// may have been opened through an alias (macOS: /var → /private/var, and
 		// /tmp likewise). A prefix test on the raw strings concludes the file is
 		// foreign and mangles the path — compare realpaths before giving up.
 		try {
-			const [realFile, realCaret] = await Promise.all([fs.realpath(filePath), fs.realpath(caretDir)])
-			if (realFile.startsWith(realCaret)) return filePath
+			const [realFile, realCaret] = await Promise.all([fs.realpath(reported), fs.realpath(caretDir)])
+			if (startsWithPath(realFile, realCaret)) return reported
 		} catch {}
 	}
 
-	const relative = filePath.startsWith("/") ? filePath.slice(1) : filePath
+	const relative = reported.startsWith("/") ? reported.slice(1) : reported
 
 	// Direct under .caret/ (handles "pages/home/index.tsx", "components/Button.tsx"),
 	// then bare page names, then shared components.
@@ -143,6 +144,24 @@ async function resolveCaretPath(filePath: string, workspacePath: string): Promis
 
 	Logger.warn(`[design] Could not resolve caret path: "${filePath}" (tried under .caret/, .caret/pages/, .caret/components/)`)
 	return path.join(caretDir, relative)
+}
+
+/**
+ * Vite and React report fiber source paths with forward slashes on every OS,
+ * and on Windows sometimes as "/C:/…". Bring them back to native form before
+ * any comparison — a separator mismatch concludes the file is foreign and
+ * mangles the path.
+ */
+function normalizeFiberPath(reported: string): string {
+	if (process.platform !== "win32") return reported
+	const stripped = /^\/[A-Za-z]:[/\\]/.test(reported) ? reported.slice(1) : reported
+	return path.normalize(stripped)
+}
+
+/** Prefix test that respects Windows' case-insensitive filesystems. */
+function startsWithPath(child: string, parent: string): boolean {
+	if (process.platform !== "win32") return child.startsWith(parent)
+	return child.toLowerCase().startsWith(parent.toLowerCase())
 }
 
 async function handleMessage(message: DesignInboundMessage, deps: MessageRouterDeps): Promise<void> {

@@ -20,6 +20,15 @@ files:
   # The vendored component catalog: MIT/Apache source mirrored at pinned SHAs,
   # licences alongside. Ships in the bundle so catalog installs need no network.
   - assets/catalog/**/*
+  # The dock/window icon read at runtime (desktop/main/index.ts) — the .app/.exe
+  # icon comes from build/icon.png separately.
+  - assets/icons/**/*
+
+# No asar: the cutout model and glb compression deliberately run under SYSTEM
+# node (Electron's allocator shim SIGTRAPs onnxruntime — see
+# desktop/main/matte-infer.ts), and plain node cannot read inside an asar
+# archive, so the paths this app hands its workers must be real files.
+asar: false
 
 # The coding backend Caret drives. Spawned from here and never from `PATH`, so a
 # user upgrading their own OpenCode cannot change what Caret executes.

@@ -27,6 +27,7 @@ import * as path from "path"
 
 import type { KeyableImage, KeyOutResult } from "../../src/core/design"
 import { applyMatte, MATTE_MODEL, matteInputTensor, progressOf } from "../../src/core/design"
+import { systemSpawnEnv } from "../../src/core/design/spawn-env"
 import { Logger } from "../../src/shared/services/Logger"
 import { ensureMatteModel, matteState, modelPath } from "./matte"
 import { MATTE_WORKER_SOURCE } from "./matte-worker-source"
@@ -57,9 +58,11 @@ async function startWorker(): Promise<ChildProcess> {
 
 	// System node from PATH, the same resolution `npm install` already relies
 	// on. Never process.execPath: that is the Electron binary, whose allocator
-	// shim SIGTRAPs on ORT's aligned allocations in every mode.
+	// shim SIGTRAPs on ORT's aligned allocations in every mode. The augmented
+	// PATH covers Finder launches, which lack Homebrew's bin directories.
 	const child = spawn("node", [workerPath], {
 		stdio: ["pipe", "pipe", "pipe"],
+		env: systemSpawnEnv(),
 	})
 	child.on("error", (error) => {
 		// Node missing from PATH — the design shell could not have booted

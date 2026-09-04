@@ -167,9 +167,9 @@ describe("EventMapper", () => {
 		assert.deepEqual(events, [])
 	})
 
-	// Armed for the future: the pinned server (1.18.11) never emits this — its
-	// own /doc has no session.retry — but newer servers do, and the mapping is
-	// what turns seven silent minutes into "the provider errored — retrying".
+	// The pinned server (1.18.23) documents this but it has never been seen
+	// live — this synthetic event is the only exercise it gets, and the mapping
+	// is what turns seven silent minutes into "the provider errored — retrying".
 	it("maps session.retry.scheduled to a retry event with the provider's words", () => {
 		const mapper = new EventMapper(SESSION)
 		const events = collect(mapper, [

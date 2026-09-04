@@ -91,12 +91,12 @@ export type OpencodeEvent =
 	// Ignored: `session.idle` is the turn boundary. Listed so nobody mistakes it
 	// for an undocumented completion signal — the pinned binary emits both.
 	| { type: "session.status"; properties: { sessionID: string; status?: { type?: string } } }
-	// NOT emitted by the pinned server (1.18.11 — absent from its own /doc,
-	// which does list every event measured live). Newer servers broadcast it
-	// when a failed provider stream is scheduled for retry, and the bundled
-	// client half of this very binary already consumes it. Declared and mapped
-	// now so the pin bump lights it up instead of needing to rediscover it;
-	// the shape mirrors that client's reads (attempt, at, error.message).
+	// Documented by the pinned server (1.18.23) but never yet observed live —
+	// a real provider failure cannot be forced on demand. Broadcast when a
+	// failed provider stream is scheduled for retry; the bundled client half
+	// of this very binary consumes it, and the shape mirrors that client's
+	// reads (attempt, at, error.message). The log tailer stays as
+	// belt-and-braces until a live retry note is seen in the field.
 	| {
 			type: "session.retry.scheduled"
 			properties: {
