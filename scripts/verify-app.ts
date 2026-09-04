@@ -5063,20 +5063,24 @@ export default function CatalogDemo() {
 				const wc = canvas.webContents
 
 				try {
-					// Leave any focused view another scenario left open, then enter the
-					// playground from the grid toolbar — the ×3 gesture is gone.
+					// The page door: open About focused and click its Experiment button.
+					// The door you came through IS the page choice — there is no picker.
+					// Always open About fresh, never inherit another scenario's focused
+					// page (it may be a model-broken home showing the error card).
 					await wc.executeJavaScript(
 						`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
 					)
+					const findAbout = `(() => {
+					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
+					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'About') ?? null
+				})()`
 					let deadline = Date.now() + 30000
-					let enterUp = false
-					while (Date.now() < deadline && !enterUp) {
-						enterUp = await wc
-							.executeJavaScript(`!!document.querySelector('[data-testid="explore-enter"]')`)
-							.catch(() => false)
-						if (!enterUp) await new Promise((r) => setTimeout(r, 250))
+					let aboutUp = false
+					while (Date.now() < deadline && !aboutUp) {
+						aboutUp = await wc.executeJavaScript(`!!${findAbout}`).catch(() => false)
+						if (!aboutUp) await new Promise((r) => setTimeout(r, 250))
 					}
-					if (!enterUp) return { error: "the Playground button never appeared on the canvas toolbar" }
+					if (!aboutUp) return { error: "the About card never appeared on the canvas" }
 
 					// Record every explore-status push BEFORE starting: statuses from two
 					// different nodes interleaving is the wire-level proof the takes ran
@@ -5091,25 +5095,33 @@ export default function CatalogDemo() {
 					return true
 				})()`)
 
-					await wc.executeJavaScript(`(document.querySelector('[data-testid="explore-enter"]')).click(), true`)
+					await wc.executeJavaScript(`(${findAbout}).click(), true`)
+					deadline = Date.now() + 30000
+					let doorUp = false
+					while (Date.now() < deadline && !doorUp) {
+						doorUp = await wc
+							.executeJavaScript(`!!document.querySelector('[data-testid="explore-enter-focused"]')`)
+							.catch(() => false)
+						if (!doorUp) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!doorUp) return { error: "the focused view's Experiment button never appeared" }
+					await wc.executeJavaScript(`(document.querySelector('[data-testid="explore-enter-focused"]')).click(), true`)
+
 					deadline = Date.now() + 15000
 					let startUp = false
 					while (Date.now() < deadline && !startUp) {
 						startUp = await wc
-							.executeJavaScript(`!!document.querySelector('[data-testid="explore-start-page"]')`)
+							.executeJavaScript(`!!document.querySelector('[data-testid="explore-instruction"]')`)
 							.catch(() => false)
 						if (!startUp) await new Promise((r) => setTimeout(r, 250))
 					}
-					if (!startUp) return { error: "the playground start screen never appeared" }
+					if (!startUp) return { error: "the page door never showed its instruction box" }
 
 					const started = await wc.executeJavaScript(`(() => {
-					const select = document.querySelector('[data-testid="explore-page-select"]')
-					if (!select) return "no page select"
-					const setSel = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
-					setSel.call(select, 'about')
-					select.dispatchEvent(new Event('change', { bubbles: true }))
+					const card = document.querySelector('[data-testid="explore-start-page"]')
+					if (!card || !(card.textContent || "").includes("About")) return "the page door does not name About"
+					if (document.querySelector('[data-testid="explore-page-select"]')) return "a page picker is showing — the door must be direct"
 					const input = document.querySelector('[data-testid="explore-instruction"]')
-					if (!input) return "no instruction input"
 					const setVal = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
 					setVal.call(input, 'Make this page feel warmer and more welcoming')
 					input.dispatchEvent(new Event('input', { bubbles: true }))

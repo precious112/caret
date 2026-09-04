@@ -417,8 +417,15 @@ function generateExploreView(): string {
 		  )
 		}
 
+		/**
+		 * The door you came through IS the choice — no chooser screen. Entering
+		 * from a focused page (preselect set) experiments on THAT page; entering
+		 * from the canvas flask starts something new. Nothing here asks the user
+		 * to restate where they just clicked.
+		 */
 		function StartScreen({ pages, preselect, onBack }: { pages: PageInfo[]; preselect: string | null; onBack: () => void }) {
-		  const [pageId, setPageId] = useState(preselect || (pages[0] ? pages[0].id : ""))
+		  const pageId = preselect
+		  const page = pageId ? pages.find(p => p.id === pageId) : null
 		  const [pageInstruction, setPageInstruction] = useState("")
 		  const [newName, setNewName] = useState("")
 		  const [newInstruction, setNewInstruction] = useState("")
@@ -469,34 +476,34 @@ function generateExploreView(): string {
 		      <div className="caret-explore-header">
 		        <button className="caret-explore-btn" data-testid="explore-back" onClick={onBack} title="Back to canvas">←</button>
 		        <div style={{ minWidth: 0, flex: 1 }}>
-		          <div style={{ fontSize: 15, fontWeight: 600 }}>Playground</div>
+		          <div style={{ fontSize: 15, fontWeight: 600 }}>{pageId ? "Experiment with " + ((page && page.title) || pageId) : "Something new"}</div>
 		          <div style={{ fontSize: 12.5, color: "#8b93a7" }}>Three independent takes per round — pick one, or branch a direction further.</div>
 		        </div>
 		      </div>
 		      {starting && <div style={{ padding: "10px 24px", fontSize: 13, color: "#8b93a7" }}>Starting the first round…</div>}
 		      {error && <div data-testid="explore-start-error" style={{ padding: "10px 24px", fontSize: 13, color: "#f87171" }}>{error}</div>}
 		      <div style={{ flex: 1, display: "flex", gap: 24, padding: 32, alignItems: "flex-start", flexWrap: "wrap" }}>
+		        {pageId ? (
 		        <div data-testid="explore-start-page" style={cardStyle}>
-		          <div style={{ fontSize: 14, fontWeight: 600 }}>Variants of an existing page</div>
+		          <div style={{ fontSize: 14, fontWeight: 600 }}>Variants of {(page && page.title) || pageId}</div>
 		          <div style={{ fontSize: 12, color: "#8b93a7" }}>The winner replaces the page; the page is untouched until then.</div>
-		          <select data-testid="explore-page-select" style={inputStyle} value={pageId} onChange={e => setPageId(e.target.value)}>
-		            {pages.map(p => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}
-		          </select>
-		          <input data-testid="explore-instruction" style={inputStyle} placeholder="What should the takes explore?"
+		          <input autoFocus data-testid="explore-instruction" style={inputStyle} placeholder="What should the takes explore?"
 		            value={pageInstruction} onChange={e => setPageInstruction(e.target.value)}
 		            onKeyDown={e => { if (e.key === "Enter") startPage() }} />
 		          <button style={goStyle} data-testid="explore-start-page-go" disabled={starting} onClick={startPage}>Generate 3 takes</button>
 		        </div>
+		        ) : (
 		        <div data-testid="explore-start-new" style={cardStyle}>
 		          <div style={{ fontSize: 14, fontWeight: 600 }}>Something new</div>
 		          <div style={{ fontSize: 12, color: "#8b93a7" }}>A page that doesn't exist yet — settling adds it to the canvas.</div>
-		          <input data-testid="explore-new-name" style={inputStyle} placeholder="Page name, e.g. Pricing"
+		          <input autoFocus data-testid="explore-new-name" style={inputStyle} placeholder="Page name, e.g. Pricing"
 		            value={newName} onChange={e => setNewName(e.target.value)} />
 		          <input data-testid="explore-new-instruction" style={inputStyle} placeholder="What should it be?"
 		            value={newInstruction} onChange={e => setNewInstruction(e.target.value)}
 		            onKeyDown={e => { if (e.key === "Enter") startNew() }} />
 		          <button style={goStyle} data-testid="explore-start-new-go" disabled={starting} onClick={startNew}>Generate 3 takes</button>
 		        </div>
+		        )}
 		      </div>
 		    </>
 		  )
@@ -1288,7 +1295,7 @@ function generateCanvasView(): string {
 		        <button onClick={() => { const start = getSimStartPage(); if (start) onSimulate(start) }} className="caret-tb-btn" title="Simulate">
 		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" fill="currentColor"/></svg>
 		        </button>
-		        <button onClick={onExplore} className="caret-tb-btn" data-testid="explore-enter" title="Playground — explore takes side by side">
+		        <button onClick={onExplore} className="caret-tb-btn" data-testid="explore-enter" title="Playground — explore a page that doesn't exist yet">
 		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 2h4M7 2v4.5L3.5 12a2 2 0 0 0 1.8 3h5.4a2 2 0 0 0 1.8-3L9 6.5V2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 11h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
 		        </button>
 		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>

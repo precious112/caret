@@ -1416,21 +1416,38 @@ async function main() {
 				throw new Error(`picked "${picked.payload?.variantId}", expected contact--v3`)
 			}
 
-			// After the optimistic pick the playground start screen is one click
-			// away, and its page list never offers a take.
+			// The doors are direct — the door you came through IS the choice. The
+			// canvas flask goes straight to "something new": no chooser, no page
+			// dropdown restating what you just clicked.
 			await page.waitForSelector('[data-testid="explore-enter"]', { timeout: 10000 })
 			await page.click('[data-testid="explore-enter"]')
-			await page.waitForSelector('[data-testid="explore-start-page"]', { timeout: 10000 })
 			await page.waitForSelector('[data-testid="explore-start-new"]', { timeout: 10000 })
-			const options = (await page.evaluate(() =>
-				Array.from(document.querySelectorAll('[data-testid="explore-page-select"] option')).map(
-					(o) => (o as HTMLOptionElement).value,
-				),
-			)) as string[]
-			if (!options.includes("contact")) throw new Error("the start screen's page list is missing a real page")
-			if (options.some((o) => o.includes("--v"))) throw new Error("the start screen's page list offers a take")
+			const chooserLeftovers = await page.evaluate(
+				() =>
+					!!document.querySelector('[data-testid="explore-start-page"]') ||
+					!!document.querySelector('[data-testid="explore-page-select"]'),
+			)
+			if (chooserLeftovers)
+				throw new Error("the flask door still shows a page chooser — it must go straight to something new")
 
-			return "pill → tree rail → scale-1 expand → branch carried fromId → pick posted contact--v3; grid and page list stayed clean"
+			// The focused page's Experiment button goes straight to variants of
+			// THAT page: just the instruction box, the page already named.
+			await page.click('[data-testid="explore-back"]')
+			await page.click('.caret-canvas-frame:has-text("Contact")')
+			await page.waitForSelector('[data-testid="explore-enter-focused"]', { timeout: 15000 })
+			await page.click('[data-testid="explore-enter-focused"]')
+			await page.waitForSelector('[data-testid="explore-start-page"]', { timeout: 10000 })
+			const pageDoor = await page.evaluate(() => ({
+				named: (document.querySelector('[data-testid="explore-start-page"]')?.textContent || "").includes("Contact"),
+				hasSelect: !!document.querySelector('[data-testid="explore-page-select"]'),
+				hasNewCard: !!document.querySelector('[data-testid="explore-start-new"]'),
+			}))
+			if (!pageDoor.named) throw new Error("the page door does not name the page it came from")
+			if (pageDoor.hasSelect || pageDoor.hasNewCard) {
+				throw new Error("the page door still shows a chooser — it must go straight to that page's instruction box")
+			}
+
+			return "pill → tree rail → scale-1 expand → branch carried fromId → pick posted contact--v3; both doors land direct, no chooser"
 		} finally {
 			await page.close()
 			await fs.rm(path.join(caretDir, ".variants.json"), { force: true })
