@@ -1274,13 +1274,15 @@ async function main() {
 		return "text-brand-500 followed a token edit through one CSS hot update, no reload"
 	})
 
-	await scenario("u. the variant compare surface renders takes and a click picks one", async () => {
-		// The pick half of generate-and-pick, without a model: seed two takes and
-		// the set on disk, the canvas must overlay the compare surface, keep the
-		// takes out of the grid, and post variant-pick on a real click. The apply
-		// half needs the host router and is certified in verify:app.
+	await scenario("u. the playground renders an exploration tree, expands full size, branches, and picks", async () => {
+		// The pick half of the playground, without a model: seed a two-round tree
+		// on disk. The canvas must show the way-in pill (never an overlay), keep
+		// takes out of the grid, walk the tree by rail, expand a take to scale 1,
+		// post variant-request on a branch and variant-pick on a settle. The
+		// apply half needs the host router and is certified in verify:app.
 		const contactDir = path.join(caretDir, "pages", "contact")
-		for (const n of [1, 2]) {
+		const startedAt = new Date().toISOString()
+		for (const n of [1, 2, 3]) {
 			const dir = path.join(caretDir, "pages", `contact--v${n}`)
 			await fs.mkdir(dir, { recursive: true })
 			await fs.copyFile(path.join(contactDir, "index.tsx"), path.join(dir, "index.tsx"))
@@ -1296,57 +1298,145 @@ async function main() {
 				}),
 			)
 		}
+		const node = (id: string, parentId: string, angleLabel: string, status: string, error?: string) => ({
+			id,
+			parentId,
+			instruction: "make it feel warmer",
+			angle: "a",
+			angleLabel,
+			label: `Take ${id.slice(-1)}`,
+			status,
+			...(error ? { error } : {}),
+			startedAt,
+		})
 		await fs.writeFile(
 			path.join(caretDir, ".variants.json"),
 			JSON.stringify({
-				version: 1,
+				version: 2,
+				mode: "page",
 				pageId: "contact",
 				instruction: "make it feel warmer",
-				startedAt: new Date().toISOString(),
+				startedAt,
 				source: "caret",
-				variants: [
-					{ id: "contact--v1", label: "Take 1", angle: "a", status: "ready" },
-					{ id: "contact--v2", label: "Take 2", angle: "b", status: "ready" },
+				nextTake: 5,
+				nodes: [
+					// Round 2 (v3, branched from v2) sits between round-1 nodes so the
+					// "newest round" default focus lands on round 1 (last node's parent).
+					node("contact--v1", "contact", "Restrained", "ready"),
+					node("contact--v2", "contact", "Bolder", "ready"),
+					node("contact--v3", "contact--v2", "Restrained", "ready"),
+					node("contact--v4", "contact", "Structural", "failed", "model refused: too spicy"),
 				],
 			}),
 		)
 
 		const { page } = await openCanvas(ctx)
 		try {
-			await page.waitForSelector('[data-testid="variant-compare"]', { timeout: 20000 })
-			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
-			await page.waitForSelector('[data-testid="variant-use-contact--v2"]', { timeout: 10000 })
-
-			// The takes never reach the grid — they are working copies, not pages.
+			// Non-blocking: canvas mode shows the grid plus a pill, never an overlay.
+			await page.waitForSelector('[data-testid="explore-open-pill"]', { timeout: 20000 })
 			const gridTakes = await page.evaluate(
 				() =>
 					Array.from(document.querySelectorAll(".caret-canvas-frame")).filter((f) =>
 						(f.textContent || "").includes("take"),
 					).length,
 			)
-			if (gridTakes > 0) throw new Error(`${gridTakes} variant take(s) leaked into the canvas grid`)
+			if (gridTakes > 0) throw new Error(`${gridTakes} take(s) leaked into the canvas grid`)
+
+			await page.click('[data-testid="explore-open-pill"]')
+			await page.waitForSelector('[data-testid="explore-view"]', { timeout: 10000 })
+			await page.waitForSelector('[data-testid="variant-card-contact--v1"]', { timeout: 10000 })
+
+			// The failed take's error is readable in the card, not a tooltip.
+			const failedText = await page.evaluate(
+				() => document.querySelector('[data-testid="variant-card-contact--v4"]')?.textContent || "",
+			)
+			if (!failedText.includes("model refused: too spicy")) {
+				throw new Error(`failed card shows "${failedText.slice(0, 80)}" — the error message is not readable`)
+			}
+			// The angle is finally shown.
+			const v2Text = await page.evaluate(
+				() => document.querySelector('[data-testid="variant-card-contact--v2"]')?.textContent || "",
+			)
+			if (!v2Text.includes("Bolder")) throw new Error("the take's angle label is not on its card")
+
+			// Expand: a scale-1, full-width frame, and Escape comes back.
+			await page.click('[data-testid="explore-expand-contact--v1"]')
+			await page.waitForSelector('[data-testid="explore-expanded"]', { timeout: 10000 })
+			const frameWidth = await page.evaluate(() => {
+				const frame = document.querySelector('[data-testid="explore-expanded"] iframe') as HTMLIFrameElement | null
+				return frame ? frame.getBoundingClientRect().width : 0
+			})
+			if (Math.round(frameWidth) !== 1440)
+				throw new Error(`expanded frame is ${frameWidth}px wide, expected 1440 (scale 1)`)
+			await page.keyboard.press("Escape")
+			await page.waitForSelector('[data-testid="explore-rail"]', { timeout: 10000 })
+
+			// The rail walks the tree: focusing v2 shows its child v3.
+			await page.click('[data-testid="explore-rail-contact--v2"]')
+			await page.waitForSelector('[data-testid="variant-card-contact--v3"]', { timeout: 10000 })
 
 			await page.evaluate(() => {
-				;(window as any).__PICKED__ = []
+				;(window as any).__POSTED__ = []
 				window.addEventListener("message", (e) => {
-					if (e.data?.type === "variant-pick") (window as any).__PICKED__.push(e.data.payload?.variantId)
+					if (e.data?.type === "variant-pick" || e.data?.type === "variant-request") {
+						;(window as any).__POSTED__.push({ type: e.data.type, payload: e.data.payload })
+					}
 				})
 			})
-			await page.click('[data-testid="variant-use-contact--v2"]')
+
+			// Branch from the deep take: the request must carry fromId.
+			await page.click('[data-testid="explore-branch-contact--v3"]')
+			await page.type('[data-testid="explore-branch-input-contact--v3"]', "even warmer")
+			await page.keyboard.press("Enter")
 			await waitFor(
-				async () => ((await page.evaluate(() => (window as any).__PICKED__)) as string[]).length > 0,
+				async () =>
+					((await page.evaluate(() => (window as any).__POSTED__)) as any[]).some((m) => m.type === "variant-request"),
+				10000,
+				"the branch variant-request message",
+			)
+			const branch = ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).find(
+				(m) => m.type === "variant-request",
+			)
+			if (branch.payload?.fromId !== "contact--v3" || branch.payload?.instruction !== "even warmer") {
+				throw new Error(`branch posted ${JSON.stringify(branch.payload)} — expected fromId contact--v3`)
+			}
+
+			// Settle on the deep leaf.
+			await page.click('[data-testid="variant-use-contact--v3"]')
+			await waitFor(
+				async () =>
+					((await page.evaluate(() => (window as any).__POSTED__)) as any[]).some((m) => m.type === "variant-pick"),
 				10000,
 				"the variant-pick message",
 			)
-			const picked = (await page.evaluate(() => (window as any).__PICKED__)) as string[]
-			if (picked[0] !== "contact--v2") throw new Error(`picked "${picked[0]}", expected contact--v2`)
+			const picked = ((await page.evaluate(() => (window as any).__POSTED__)) as any[]).find(
+				(m) => m.type === "variant-pick",
+			)
+			if (picked.payload?.variantId !== "contact--v3") {
+				throw new Error(`picked "${picked.payload?.variantId}", expected contact--v3`)
+			}
 
-			return `compare overlay rendered 2 takes + original, grid stayed clean, click posted variant-pick contact--v2`
+			// After the optimistic pick the playground start screen is one click
+			// away, and its page list never offers a take.
+			await page.waitForSelector('[data-testid="explore-enter"]', { timeout: 10000 })
+			await page.click('[data-testid="explore-enter"]')
+			await page.waitForSelector('[data-testid="explore-start-page"]', { timeout: 10000 })
+			await page.waitForSelector('[data-testid="explore-start-new"]', { timeout: 10000 })
+			const options = (await page.evaluate(() =>
+				Array.from(document.querySelectorAll('[data-testid="explore-page-select"] option')).map(
+					(o) => (o as HTMLOptionElement).value,
+				),
+			)) as string[]
+			if (!options.includes("contact")) throw new Error("the start screen's page list is missing a real page")
+			if (options.some((o) => o.includes("--v"))) throw new Error("the start screen's page list offers a take")
+
+			return "pill → tree rail → scale-1 expand → branch carried fromId → pick posted contact--v3; grid and page list stayed clean"
 		} finally {
 			await page.close()
 			await fs.rm(path.join(caretDir, ".variants.json"), { force: true })
-			await fs.rm(path.join(caretDir, "pages", "contact--v1"), { recursive: true, force: true })
-			await fs.rm(path.join(caretDir, "pages", "contact--v2"), { recursive: true, force: true })
+			for (const n of [1, 2, 3]) {
+				await fs.rm(path.join(caretDir, "pages", `contact--v${n}`), { recursive: true, force: true })
+			}
 		}
 	})
 
@@ -2306,7 +2396,10 @@ async function main() {
 					const el = document.querySelector('[data-testid="frag-title"]')!.getBoundingClientRect()
 					const p = document.querySelector("#caret-param-panel")!.getBoundingClientRect()
 					const overlap = el.left < p.right && el.right > p.left && el.top < p.bottom && el.bottom > p.top
-					return { overlap, panel: `${Math.round(p.left)},${Math.round(p.top)} ${Math.round(p.width)}×${Math.round(p.height)}` }
+					return {
+						overlap,
+						panel: `${Math.round(p.left)},${Math.round(p.top)} ${Math.round(p.width)}×${Math.round(p.height)}`,
+					}
 				})
 			}
 

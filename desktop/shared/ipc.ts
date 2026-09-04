@@ -1015,6 +1015,8 @@ export interface IpcEvents {
 	"wizard:progress": (progress: { projectPath: string; attempt: number; max: number }) => void
 	/** The asset index changed — by the UI, an agent, or a file dropped in Finder. */
 	"assets:changed": (projectPath: string) => void
+	/** An exploration opened or resolved — the Canvas button badges while one is open. */
+	"explore:open-changed": (projectPath: string, open: boolean) => void
 	/** The chat moved on: a token streamed, a permission was raised, a turn ended. */
 	"agent:state": (projectPath: string, state: AgentStateWire) => void
 	/** A long-running generation job (mark loop, 3D pipeline) moved a step. */

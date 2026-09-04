@@ -345,8 +345,8 @@ and edit it like any other file).
 - Prefer the most editable thing that does the job: [full] components are plain source the
   visual editor can restyle; [props] components have a sealed canvas/WebGL interior — every
   one you use is a place the user cannot correct with the editor, so it needs a reason.
-- Unsure whether a signature piece helps? Offer it as ONE take in a variant pick (the ×3
-  path), never as the default.
+- Unsure whether a signature piece helps? Offer it as ONE take in a playground round
+  (\`propose_variants\`), never as the default.
 
 Import shape: \`import X from "../../components/catalog/<library>/<component>"\` (from a page).
 
@@ -375,8 +375,8 @@ user every finding, so a defect you skip is a defect the user is shown with your
 cannot be said precisely in words wants a pick, not one attempt. Write two or three variant
 pages (ids like \`<pageId>--v1\`, \`meta.variantOf\` set to the original page id), each a
 genuinely different reading of the request, then call \`propose_variants\`. Caret shows them
-side by side; the user points at one; the chosen take replaces the page and the variant
-directories are cleaned up.
+side by side in its playground, where the user can also branch further rounds from any take;
+the chosen take replaces the page and every take directory is cleaned up.
 
 `
 		: ""

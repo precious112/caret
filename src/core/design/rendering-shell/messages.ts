@@ -113,16 +113,31 @@ export interface EditResultPayload {
 	editTarget?: { filePath: string; lineNumber: number; caretId?: string }
 }
 
+/**
+ * Starts a round of takes. Exactly one of the three origins:
+ * `pageId` opens an exploration on an existing page; `fromId` branches from a
+ * ready take of the open exploration; `newPage` opens an exploration of a page
+ * that doesn't exist yet.
+ */
 export interface VariantRequestPayload {
-	/** The page to explore takes of. */
-	pageId: string
 	/** The user's instruction, verbatim. */
 	instruction: string
+	/** An existing page to explore takes of. */
+	pageId?: string
+	/** A ready node of the open exploration to branch deeper from. */
+	fromId?: string
+	/** A new page to explore into existence — settling adds it to the canvas. */
+	newPage?: { name: string }
 }
 
 export interface VariantPickPayload {
-	/** The chosen variant's page id, or "" to keep the original and discard the set. */
+	/** The chosen take's page id, or "" to discard the whole exploration. */
 	variantId: string
+}
+
+export interface VariantCancelPayload {
+	/** One take to cancel; absent cancels every working take. */
+	nodeId?: string
 }
 
 export interface PromoteTokenPayload {
@@ -208,6 +223,8 @@ export interface FlowEdgeUpdatePayload {
 
 const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
+const isNewPage = (v: unknown): v is { name: string } =>
+	!!v && typeof v === "object" && isStr((v as Record<string, unknown>).name)
 
 const isRect = (v: unknown): boolean => {
 	if (!v || typeof v !== "object") return false
@@ -260,7 +277,11 @@ const PAYLOAD_VALIDATORS: Record<string, (p: Record<string, unknown>) => boolean
 	"design-undo": () => true,
 	"design-redo": () => true,
 	"promote-token": (p) => isStr(p.token) && isStr(p.hex) && isStr(p.filePath) && isNum(p.lineNumber),
-	"variant-request": (p) => isStr(p.pageId) && isStr(p.instruction),
+	"variant-request": (p) => {
+		const origins = [isStr(p.pageId), isStr(p.fromId), isNewPage(p.newPage)].filter(Boolean).length
+		return isStr(p.instruction) && origins === 1
+	},
+	"variant-cancel": (p) => p.nodeId === undefined || isStr(p.nodeId),
 	"param-resolve": (p) => isStr(p.filePath) && isStr(p.caretId) && isNum(p.viewportWidth),
 	"resize-commit": (p) =>
 		isStr(p.filePath) && isStr(p.caretId) && (p.axis === "width" || p.axis === "height") && isNum(p.px) && isStr(p.kind),
@@ -298,6 +319,7 @@ export type DesignInboundMessage =
 	| { source: "caret-vite"; type: "param-resolve"; payload: ParamResolvePayload }
 	| { source: "caret-vite"; type: "resize-commit"; payload: ResizeCommitPayload }
 	| { source: "caret-vite"; type: "variant-pick"; payload: VariantPickPayload }
+	| { source: "caret-vite"; type: "variant-cancel"; payload: VariantCancelPayload }
 	// The edit pill's controls: cancel the in-flight edit, answer its permission.
 	| { source: "caret-vite"; type: "edit-cancel"; payload: Record<string, never> }
 	| {
@@ -330,11 +352,20 @@ export interface ParamResolveResultPayload {
 	params: Array<Record<string, unknown>>
 }
 
+/** Live narration of one take's generation, rendered by its playground card. */
+export interface ExploreStatusPayload {
+	nodeId: string
+	phase: "working" | "done" | "failed" | "cancelled"
+	detail?: string
+	error?: string
+}
+
 export type DesignOutboundMessage =
 	| { source: "caret-host"; type: "edit-result"; payload: EditResultPayload }
 	| { source: "caret-host"; type: "param-resolve-result"; payload: ParamResolveResultPayload }
 	| { source: "caret-host"; type: "undo-result"; payload: UndoResultPayload }
 	| { source: "caret-host"; type: "edit-status"; payload: EditStatusPayload }
+	| { source: "caret-host"; type: "explore-status"; payload: ExploreStatusPayload }
 	| { source: "caret-host"; type: "precompute-result"; payload: PrecomputeResultPayload }
 
 export type DesignMessage = DesignInboundMessage | DesignOutboundMessage

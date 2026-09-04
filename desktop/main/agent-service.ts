@@ -19,6 +19,8 @@ import {
 	discardSyncPlan,
 	EditLaneBridge,
 	type EditStatus,
+	ExploreLane,
+	type ExploreTakeStatus,
 	getBackend,
 	type RunOutcome,
 	type RunRequest,
@@ -26,6 +28,7 @@ import {
 	setProjectBridge,
 	setProjectConversation,
 	setProjectEditLane,
+	setProjectExploreLane,
 } from "../../src/core/design"
 import { Logger } from "../../src/shared/services/Logger"
 import { getPrefs, setPref } from "./prefs"
@@ -37,6 +40,8 @@ export interface AgentServiceOptions {
 	onState(state: ConversationState): void
 	/** Narrates canvas-initiated edits to the canvas pill. */
 	onEditStatus(status: EditStatus): void
+	/** Narrates each playground take's generation to its card. */
+	onExploreStatus(status: ExploreTakeStatus): void
 	/**
 	 * Fired when any lane's turn settles — the acceptance checker's hook. The
 	 * conversation is passed so the checker can feed findings back into the very
@@ -58,6 +63,12 @@ export class AgentService {
 	 */
 	private readonly editConversation: AgentConversation
 	readonly editLane: EditLaneBridge
+	/**
+	 * Playground takes, each on its own throwaway conversation so a round runs
+	 * in parallel. Takes are unattended and skip the acceptance checker — the
+	 * settled page is checked by the normal flows that write it.
+	 */
+	readonly exploreLane: ExploreLane
 
 	constructor(private readonly options: AgentServiceOptions) {
 		this.conversation = new AgentConversation({
@@ -89,12 +100,29 @@ export class AgentService {
 			onTurnComplete: (outcome, request) => options.onTurnComplete?.(this.editConversation, outcome, request),
 		})
 
+		this.exploreLane = new ExploreLane(
+			(onChange) =>
+				new AgentConversation({
+					projectPath: options.projectPath,
+					resolveBackend: () => this.resolveBackend(),
+					model: () => getPrefs().backendModel || undefined,
+					effort: () => getPrefs().backendEffort || undefined,
+					appWrites: () => this.appWrites(),
+					setAppWrites: (policy) => this.setAppWrites(policy),
+					systemPrompt: () => this.systemPrompt(),
+					onChange,
+				}),
+			() => this.conversation.getState().ready,
+			(status) => options.onExploreStatus(status),
+		)
+
 		// The bridge is what every outbound feature already calls. Swapping the
 		// implementation here is the whole of "route AgentBridge through the
 		// backend" — no call site changes.
 		setProjectBridge(options.projectPath, new BackendBridge(this.conversation, () => this.conversation.getState().ready))
 		setProjectConversation(options.projectPath, this.conversation)
 		setProjectEditLane(options.projectPath, this.editLane)
+		setProjectExploreLane(options.projectPath, this.exploreLane)
 	}
 
 	async start(): Promise<void> {
@@ -141,6 +169,9 @@ export class AgentService {
 	}
 
 	async close(): Promise<void> {
+		// Take conversations close themselves as each run settles; cancelAll
+		// waits for that, so nothing leaks past the window.
+		await this.exploreLane.cancelAll()
 		await this.conversation.close()
 		await this.editConversation.close()
 	}

@@ -7,7 +7,7 @@
  * work below it.
  */
 
-import { Blocks, ChevronDown, Images, MessageSquare, Palette, RefreshCw } from "lucide-react"
+import { Blocks, ChevronDown, FlaskConical, Images, MessageSquare, Palette, RefreshCw } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useRef, useState } from "react"
 
 import type { ProjectState, ProjectSummary } from "../../../shared/ipc"
@@ -20,12 +20,14 @@ interface TopBarProps {
 	project: ProjectState
 	surface: Surface
 	chatOpen: boolean
+	/** A playground exploration is open — takes generating or waiting for a pick. */
+	exploreOpen: boolean
 	onSurfaceChange(surface: Surface): void
 	onToggleChat(): void
 }
 
 export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar(
-	{ project, surface, chatOpen, onSurfaceChange, onToggleChat },
+	{ project, surface, chatOpen, exploreOpen, onSurfaceChange, onToggleChat },
 	ref,
 ) {
 	return (
@@ -46,6 +48,18 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar(
 			<div className="flex-1" />
 
 			<div className="titlebar-nodrag flex items-center gap-1">
+				{/* Only while an exploration is open: the playground lives in the
+				    canvas, which other surfaces hide entirely — this is the way back. */}
+				{exploreOpen && (
+					<TopBarButton
+						active={false}
+						icon={<FlaskConical size={14} />}
+						label="Exploring"
+						onClick={() => onSurfaceChange("canvas")}
+						tone="warn"
+					/>
+				)}
+
 				<TopBarButton
 					active={surface === "foundation"}
 					icon={<Palette size={14} />}

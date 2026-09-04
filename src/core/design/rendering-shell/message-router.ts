@@ -12,6 +12,7 @@ import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { getLatestGitCommitHash } from "@/utils/git"
 import type { AgentTask } from "../agent/bridge"
+import { ExploreCancelledError } from "../agent/explore-lane"
 import { markSignal, pendingSignals, signalKey } from "../corrections"
 import { runExclusive } from "../file-mutation-queue"
 import { mutateFlowDefinition } from "../flow-meta"
@@ -21,17 +22,19 @@ import { PANEL_PROPERTIES } from "../param/params"
 import { getIndex } from "../param/source-index"
 import { addPromotedRule } from "../promoted-rules"
 import { readProvenance, recordEdit } from "../provenance"
-import { bridgeFor, editLaneFor, hostFor } from "../services"
+import { bridgeFor, editLaneFor, exploreLaneFor, hostFor } from "../services"
 import { recordMappings } from "../sync/mapping-manifest"
 import { readFoundationTokens, writeFoundationTokens } from "../tokens"
 import { captureUndoStep, redoStep, undoLastStep } from "../undo/design-undo"
 import {
-	applyVariantChoice,
-	createVariantSet,
-	discardVariantSet,
-	readVariantSet,
-	updateVariantStatus,
-	type VariantSet,
+	applyLeaf,
+	createExploration,
+	discardExploration,
+	type Exploration,
+	type ExploreNode,
+	readExploration,
+	spawnRound,
+	updateNodeStatus,
 } from "../variants"
 import { editJSXColor, editJSXImageSrc, editJSXText } from "../visual-editing/ast-editor"
 import { buildVisualEditPrompt } from "../visual-editing/context-builder"
@@ -237,6 +240,10 @@ async function handleMessage(message: DesignInboundMessage, deps: MessageRouterD
 			await handleVariantPick(message.payload, workspacePath)
 			break
 
+		case "variant-cancel":
+			await handleVariantCancel(message.payload, workspacePath)
+			break
+
 		case "design-undo": {
 			const undo = await undoLastStep(workspacePath)
 			hostFor(workspacePath).sendToCanvas({
@@ -358,17 +365,30 @@ async function handleOverlayEdit(payload: OverlayEditPayload, workspacePath: str
 	}
 }
 
-function buildVariantPrompt(set: VariantSet, variant: VariantSet["variants"][number]): string {
-	return `You are producing ${variant.label} of ${set.variants.length} INDEPENDENT takes on one instruction,
-for a side-by-side pick. The page to change is .caret/pages/${variant.id}/index.tsx — a working
-copy of "${set.pageId}" made for this take. Read its current source, then apply the instruction.
+function buildTakePrompt(exploration: Exploration, node: ExploreNode, roundSize: number): string {
+	const deepening = node.parentId !== exploration.pageId
+	const buildingNew = exploration.mode === "new" && !deepening
+	const opening = buildingNew
+		? `You are producing ${node.label} of ${roundSize} INDEPENDENT takes on a NEW page, for a
+side-by-side pick. The page to build is .caret/pages/${node.id}/index.tsx — a stub created for
+this take; the page "${exploration.pageId}" does not exist yet. Replace the stub with a real
+"${exploration.title ?? exploration.pageId}" page, built on the project's foundation.`
+		: `You are producing ${node.label} of ${roundSize} INDEPENDENT takes on one instruction,
+for a side-by-side pick. The page to change is .caret/pages/${node.id}/index.tsx — a working
+copy of "${node.parentId}" made for this take. Read its current source, then apply the instruction.`
+	const lineage = deepening
+		? `\nThis page is itself a chosen direction from an earlier round — keep its direction, and
+push it further as the instruction asks rather than starting over.\n`
+		: ""
 
-${variant.angle}
+	return `${opening}
+${lineage}
+${node.angle}
 
-INSTRUCTION: ${set.instruction}
+INSTRUCTION: ${node.instruction}
 
 Rules for this take:
-- Edit ONLY .caret/pages/${variant.id}/index.tsx. Never touch .caret/pages/${set.pageId}/ or any other page.
+- Edit ONLY .caret/pages/${node.id}/index.tsx. Never touch .caret/pages/${exploration.pageId}/ or any other page.
 - Shared components are read-only here: if the change wants a component edit, inline the changed
   markup into this page's own source instead.
 - This take runs unattended: shell commands and anything else that needs permission will be
@@ -378,91 +398,138 @@ Rules for this take:
 }
 
 /**
- * Generate-and-pick, Caret-orchestrated: the page is copied N times and each
- * copy gets one independent edit-lane turn under a different reading of the
- * instruction. Sequential on purpose — the edit lane is one-at-a-time, its
- * pill narrates each take, and every write goes through the same permission
- * boundary as any other edit. The compare surface updates as takes land.
+ * A playground round, Caret-orchestrated: the branch point is copied N times
+ * and each copy gets one independent UNATTENDED turn under a different reading
+ * of the instruction. On hosts with an explore lane the takes run in parallel,
+ * each on its own conversation; hosts without one fall back to the sequential
+ * single-conversation bridge. The playground updates as takes land.
  */
 async function handleVariantRequest(payload: import("./messages").VariantRequestPayload, workspacePath: string): Promise<void> {
-	const bridge = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
-	if (!bridge.connected()) {
-		sendEditResult(workspacePath, { kind: "agent",
+	const lane = exploreLaneFor(workspacePath)
+	const fallback = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
+	if (!(lane ? lane.connected() : fallback.connected())) {
+		sendEditResult(workspacePath, {
+			kind: "agent",
 			success: false,
 			error: "Generating takes needs a coding backend — open Settings → Backend to connect one.",
 		})
 		return
 	}
 
-	let set: VariantSet
+	let exploration: Exploration | null
+	let round: ExploreNode[]
 	try {
-		set = await createVariantSet(workspacePath, payload.pageId, payload.instruction)
+		if (payload.fromId) {
+			round = await spawnRound(workspacePath, payload.fromId, payload.instruction)
+			exploration = await readExploration(workspacePath)
+		} else if (payload.newPage) {
+			exploration = await createExploration(workspacePath, {
+				mode: "new",
+				name: payload.newPage.name,
+				instruction: payload.instruction,
+			})
+			round = exploration.nodes
+		} else {
+			exploration = await createExploration(workspacePath, {
+				pageId: payload.pageId ?? "",
+				instruction: payload.instruction,
+			})
+			round = exploration.nodes
+		}
+		if (!exploration) throw new Error("The exploration disappeared while spawning the round.")
 	} catch (err) {
 		sendEditResult(workspacePath, { kind: "agent", success: false, error: err instanceof Error ? err.message : String(err) })
 		return
 	}
 
+	const settled = exploration
 	void recordEdit(workspacePath, {
 		actor: "inline",
 		action: "write",
-		file: `.caret/pages/${payload.pageId}/index.tsx`,
-		note: "variant request",
+		file: `.caret/pages/${settled.pageId}/index.tsx`,
+		note: payload.fromId ? "explore round" : "explore request",
 		detail: { kind: "instruction", text: payload.instruction },
 	})
 	sendEditResult(workspacePath, { success: true })
 
-	// Fire and forget: the takes stream in behind the compare surface.
-	void (async () => {
-		for (const variant of set.variants) {
-			try {
-				await bridge.request({
-					kind: "visual-edit",
-					prompt: buildVariantPrompt(set, variant),
-					displayPrompt: `${variant.label}: ${set.instruction}`,
-					context: { filePath: `.caret/pages/${variant.id}/index.tsx` },
-					unattended: true,
-				})
-				await updateVariantStatus(workspacePath, variant.id, "ready")
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err)
-				Logger.warn(`[design] variant ${variant.id} failed: ${message}`)
-				await updateVariantStatus(workspacePath, variant.id, "failed", message)
-			}
+	const runTake = async (node: ExploreNode) => {
+		const task: AgentTask = {
+			kind: "visual-edit",
+			prompt: buildTakePrompt(settled, node, round.length),
+			displayPrompt: `${node.label}: ${payload.instruction}`,
+			context: { filePath: `.caret/pages/${node.id}/index.tsx` },
+			unattended: true,
 		}
+		try {
+			if (lane) await lane.run(node.id, task)
+			else await fallback.request(task)
+			await updateNodeStatus(workspacePath, node.id, "ready")
+		} catch (err) {
+			if (err instanceof ExploreCancelledError) {
+				await updateNodeStatus(workspacePath, node.id, "cancelled")
+				return
+			}
+			const message = err instanceof Error ? err.message : String(err)
+			Logger.warn(`[design] take ${node.id} failed: ${message}`)
+			await updateNodeStatus(workspacePath, node.id, "failed", message)
+		}
+	}
+
+	// Fire and forget: the takes stream into the playground as they land.
+	void (async () => {
+		if (lane) await Promise.allSettled(round.map(runTake))
+		else for (const node of round) await runTake(node)
 	})()
+}
+
+async function handleVariantCancel(payload: import("./messages").VariantCancelPayload, workspacePath: string): Promise<void> {
+	const lane = exploreLaneFor(workspacePath)
+	if (lane) {
+		if (payload.nodeId) await lane.cancel(payload.nodeId)
+		else await lane.cancelAll()
+		return
+	}
+	// Fallback hosts run takes through the edit lane one at a time; cancelling
+	// the current one is the best that lane can offer.
+	await editLaneFor(workspacePath)?.cancel()
 }
 
 async function handleVariantPick(payload: import("./messages").VariantPickPayload, workspacePath: string): Promise<void> {
 	try {
+		// Outstanding takes are fully stopped BEFORE anything is deleted — a turn
+		// left running would keep editing directories that no longer exist.
+		await exploreLaneFor(workspacePath)?.cancelAll()
+
 		if (payload.variantId) {
-			// The apply rewrites the original page's files — Caret's own write, not
+			// The apply rewrites the root page's files — Caret's own write, not
 			// an external hand-edit.
-			const set = await readVariantSet(workspacePath)
-			if (set) {
-				const originalDir = path.join(workspacePath, ".caret", "pages", set.pageId)
+			const exploration = await readExploration(workspacePath)
+			if (exploration) {
+				const rootDir = path.join(workspacePath, ".caret", "pages", exploration.pageId)
 				for (const file of ["index.tsx", "meta.json"]) {
-					hostFor(workspacePath).noteSelfWrite(path.join(originalDir, file))
+					hostFor(workspacePath).noteSelfWrite(path.join(rootDir, file))
 				}
 			}
-			await applyVariantChoice(workspacePath, payload.variantId)
-			Logger.info(`[design] variant pick: ${payload.variantId} applied over ${set?.pageId}`)
+			await captureUndoStep(workspacePath, `apply ${payload.variantId} over ${exploration?.pageId ?? "the page"}`, "agent")
+			await applyLeaf(workspacePath, payload.variantId)
+			Logger.info(`[design] variant pick: ${payload.variantId} applied over ${exploration?.pageId}`)
 
 			// A drift proposal accepted IS the reverse sync: the design now
 			// reflects the app, so the mapping's hashes are re-recorded and the
 			// entry reads clean (Phase 9.4). A normal explore pick changes the
 			// design and must NOT refresh — that movement is forward-sync work.
-			if (set?.kind === "drift-proposal" && set.proposalAppPaths?.length) {
+			if (exploration?.kind === "drift-proposal" && exploration.proposalAppPaths?.length) {
 				const head = await getLatestGitCommitHash(workspacePath)
 				const refreshed = await recordMappings(
 					workspacePath,
-					[{ designPath: `.caret/pages/${set.pageId}/index.tsx`, appPaths: set.proposalAppPaths }],
+					[{ designPath: `.caret/pages/${exploration.pageId}/index.tsx`, appPaths: exploration.proposalAppPaths }],
 					head,
 				)
-				Logger.info(`[design] reverse sync accepted for ${set.pageId}: mapping refreshed (${refreshed.recorded})`)
+				Logger.info(`[design] reverse sync accepted for ${exploration.pageId}: mapping refreshed (${refreshed.recorded})`)
 			}
 		} else {
-			await discardVariantSet(workspacePath)
-			Logger.info(`[design] variant pick: kept the original, takes discarded`)
+			await discardExploration(workspacePath)
+			Logger.info(`[design] variant pick: exploration discarded, original untouched`)
 		}
 		sendEditResult(workspacePath, { success: true })
 	} catch (err) {
@@ -741,7 +808,8 @@ async function handleInlineEdit(payload: InlineEditPayload, workspacePath: strin
 			})
 			sendEditResult(workspacePath, { kind: "inline", success: true })
 		} else {
-			sendEditResult(workspacePath, { kind: "inline",
+			sendEditResult(workspacePath, {
+				kind: "inline",
 				success: false,
 				error:
 					refusal ??
@@ -782,7 +850,8 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 				)
 
 		if (!result.ok) {
-			sendEditResult(workspacePath, { kind: "inline",
+			sendEditResult(workspacePath, {
+				kind: "inline",
 				success: false,
 				error: "This content can't be edited inline — it may use dynamic expressions. Use AI Edit to describe the change you want.",
 				suggestAiEdit: true,
@@ -818,7 +887,13 @@ async function handleColorEdit(payload: InlineEditPayload, workspacePath: string
 			// +1: the scan runs after the detach, so the element in hand no longer
 			// counts itself — but promoting re-binds it, so it is part of the reach.
 			const uses = await countTokenUses(path.join(workspacePath, ".caret"), detachedFrom)
-			sendEditResult(workspacePath, { kind: "inline", success: true, detachedFrom, tokenUses: uses.occurrences + 1, editTarget })
+			sendEditResult(workspacePath, {
+				kind: "inline",
+				success: true,
+				detachedFrom,
+				tokenUses: uses.occurrences + 1,
+				editTarget,
+			})
 			void maybeOfferCorrections(workspacePath)
 			return
 		}
@@ -923,7 +998,8 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 		await captureUndoStep(workspacePath, `promote ${payload.token} to ${payload.hex}`)
 		const tokens = await readFoundationTokens(workspacePath)
 		if (!tokens || !setFoundationTokenValue(tokens, payload.token, payload.hex)) {
-			sendEditResult(workspacePath, { kind: "inline",
+			sendEditResult(workspacePath, {
+				kind: "inline",
 				success: false,
 				error: `Couldn't change ${payload.token} — the foundation no longer defines that token.`,
 			})
@@ -945,7 +1021,8 @@ async function handlePromoteToken(payload: PromoteTokenPayload, workspacePath: s
 			Logger.warn(`[design] promote-token: token updated but re-bind of ${payload.filePath}:${payload.lineNumber} failed`)
 		}
 
-		sendEditResult(workspacePath, { kind: "inline",
+		sendEditResult(workspacePath, {
+			kind: "inline",
 			success: true,
 			boundTo: payload.token,
 			editTarget: { filePath: payload.filePath, lineNumber: payload.lineNumber, caretId: payload.caretId },

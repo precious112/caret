@@ -814,17 +814,23 @@ and e2e-certified autonomously, with their involvement reserved for 7.5's curati
       whoever writes it (Caret's promote, a hand edit, a git pull), and the guide injects the
       standing corrections into every embedded session's system prompt. The check list
       (`.caret/checks.json`) is versioned on the same grounds.
-- [x] **Generate-and-pick.** The ×3 button beside every instruction box (overlay editor and
-      the fallback card): Caret copies the page into three real variant pages, runs one
-      independent **unattended** edit-lane turn per take — each pushed toward a different
-      reading (restrained / bolder / structural) — and the compare surface renders original +
-      takes as live iframes over whatever mode is up. The user points; the winner's source
-      replaces the page; every take is cleaned up. Variant pages are gitignored
-      (`pages/*--v<n>`) and excluded from the grid, the rules context and the sync inventory.
-      `propose_variants` + a rules-file instruction carry the same pick surface for external
-      agents. **Unattended turns auto-deny promptable permissions with the reason on record** —
-      found live: a take deadlocked on `git status` behind the compare overlay, a question
-      nobody could see.
+- [x] **Generate-and-pick — reworked 2026-09 into the Playground.** Exploration is its own
+      canvas mode, entered deliberately (a Playground button on the canvas toolbar, an
+      Experiment button on the focused view), never a modal overlay and never an overlay-editor
+      modifier — the ×3 buttons are gone. One instruction spawns three real variant pages and
+      three **parallel unattended** conversations (the explore lane, one per take, capped at
+      3 concurrent) — each pushed toward a different reading (restrained / bolder / structural,
+      the angle now shown on the card). Cards are live iframes with per-take narration,
+      elapsed time and cancel; a ready take expands to scale 1, applies (with an undo step,
+      after aborting outstanding turns), or **branches a deeper round** — a tree walked until
+      something is settled. A second door explores a page that doesn't exist yet ("something
+      new"): stub takes, settling adds the page to the canvas. One exploration per project;
+      leaving the canvas keeps it visible via a pill + an "Exploring" chip in the chrome.
+      Variant pages are gitignored (`pages/*--v<n>`) and excluded from the grid, the rules
+      context and the sync inventory. `propose_variants` + a rules-file instruction register
+      external takes into round 1 of the same surface. **Unattended turns auto-deny promptable
+      permissions with the reason on record** — found live: a take deadlocked on `git status`
+      behind the old compare overlay, a question nobody could see.
 - [x] **A deterministic acceptance checker Caret runs.** Contrast (axe-core, injected into an
       isolated render), identical card rows, border-on-everything, missing `alt`, images
       stretched past their pixels, grey placeholder boxes (the 6.6 asset checks), and

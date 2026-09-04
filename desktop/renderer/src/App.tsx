@@ -33,6 +33,12 @@ export function App() {
 	 */
 	const [viewerTag, setViewerTag] = useState<string | null>(null)
 	/**
+	 * True while a playground exploration is open. The playground lives in the
+	 * canvas view, which other surfaces hide entirely — without this the chrome
+	 * gives no sign that takes are generating or waiting for a pick.
+	 */
+	const [exploreOpen, setExploreOpen] = useState(false)
+	/**
 	 * True while an agent is blocked on a question. Nothing may navigate away
 	 * from the foundation surface until it is answered — the token editor closes
 	 * itself on a timer after saving, and that timer landing mid-interview would
@@ -54,6 +60,14 @@ export function App() {
 	// Main pushes project state whenever Vite comes up, an agent connects, or
 	// tokens change — the renderer never polls for it.
 	useEffect(() => on("project:stateChanged", (next) => setProject(next)), [])
+
+	useEffect(
+		() =>
+			on("explore:open-changed", (projectPath, open) => {
+				if (projectPath === project?.path) setExploreOpen(open)
+			}),
+		[project?.path],
+	)
 
 	// The canvas view is positioned by main, which cannot measure the top bar.
 	// Report its height whenever it changes, including on window resize.
@@ -184,6 +198,7 @@ export function App() {
 		<div className="flex h-full flex-col" data-surface={surface} data-testid="app-shell">
 			<TopBar
 				chatOpen={chatOpen}
+				exploreOpen={exploreOpen}
 				onSurfaceChange={requestSurface}
 				onToggleChat={() => setChatOpen((open) => !open)}
 				project={project}

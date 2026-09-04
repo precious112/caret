@@ -5,16 +5,17 @@
  * the design layer is lying about that page. The fix is agent-mediated and its
  * quality varies, so it NEVER writes the design silently: the agent translates
  * the app's current truth back into a proposal page, and the user reviews it
- * on the same compare surface every variant pick uses — the current design and
- * the proposal rendered side by side, chosen by pointing. Accepting applies
+ * on the same playground surface every exploration uses — the current design
+ * and the proposal rendered side by side, chosen by pointing. Accepting applies
  * the proposal through the normal variant-apply path and refreshes the sync
  * mapping (both hashes re-recorded, so the entry reads clean); discarding
  * leaves the drift standing and honestly reported.
  */
 import { Logger } from "@/shared/services/Logger"
 
-import { bridgeFor, editLaneFor } from "../services"
-import { createVariantSet, updateVariantStatus } from "../variants"
+import { ExploreCancelledError } from "../agent/explore-lane"
+import { bridgeFor, editLaneFor, exploreLaneFor } from "../services"
+import { createExploration, updateNodeStatus } from "../variants"
 import { computeDrift } from "./drift"
 import { readManifest } from "./mapping-manifest"
 
@@ -76,38 +77,47 @@ export async function startReverseSyncProposal(workspacePath: string, designPath
 		return { ok: false, reason: `${designPath} shows no app-side drift — nothing to propose` }
 	}
 
-	const bridge = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
-	if (!bridge.connected()) {
+	const lane = exploreLaneFor(workspacePath)
+	const fallback = editLaneFor(workspacePath) ?? bridgeFor(workspacePath)
+	if (!(lane ? lane.connected() : fallback.connected())) {
 		return { ok: false, reason: "Reverse sync needs a coding backend — open Settings → Backend to connect one." }
 	}
 
 	let proposalId: string
 	try {
-		const set = await createVariantSet(workspacePath, pageId, `app drift: ${classified.changedAppPaths.join(", ")}`, {
+		const exploration = await createExploration(workspacePath, {
+			pageId,
+			instruction: `app drift: ${classified.changedAppPaths.join(", ")}`,
 			count: 1,
 			kind: "drift-proposal",
 			proposalAppPaths: entry.appPaths,
 			label: "App's version",
 		})
-		proposalId = set.variants[0].id
+		proposalId = exploration.nodes[0].id
 	} catch (err) {
 		return { ok: false, reason: err instanceof Error ? err.message : String(err) }
 	}
 
 	void (async () => {
+		const task = {
+			kind: "visual-edit" as const,
+			prompt: buildProposalPrompt(pageId, proposalId, entry.appPaths),
+			displayPrompt: `Reverse sync: bring "${pageId}" in line with the app`,
+			context: { filePath: `.caret/pages/${proposalId}/index.tsx` },
+			unattended: true,
+		}
 		try {
-			await bridge.request({
-				kind: "visual-edit",
-				prompt: buildProposalPrompt(pageId, proposalId, entry.appPaths),
-				displayPrompt: `Reverse sync: bring "${pageId}" in line with the app`,
-				context: { filePath: `.caret/pages/${proposalId}/index.tsx` },
-				unattended: true,
-			})
-			await updateVariantStatus(workspacePath, proposalId, "ready")
+			if (lane) await lane.run(proposalId, task)
+			else await fallback.request(task)
+			await updateNodeStatus(workspacePath, proposalId, "ready")
 		} catch (err) {
+			if (err instanceof ExploreCancelledError) {
+				await updateNodeStatus(workspacePath, proposalId, "cancelled")
+				return
+			}
 			const message = err instanceof Error ? err.message : String(err)
 			Logger.warn(`[reverse-sync] proposal turn failed for ${pageId}: ${message}`)
-			await updateVariantStatus(workspacePath, proposalId, "failed", message)
+			await updateNodeStatus(workspacePath, proposalId, "failed", message)
 		}
 	})()
 

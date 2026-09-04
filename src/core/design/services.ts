@@ -14,6 +14,7 @@
 import { type AgentBridge, NullBridge } from "./agent/bridge"
 import type { AgentConversation } from "./agent/conversation"
 import type { EditLaneBridge } from "./agent/edit-lane"
+import type { ExploreLane } from "./agent/explore-lane"
 import { type DesignHost, nullDesignHost } from "./host"
 
 export interface ProjectServices {
@@ -34,10 +35,22 @@ export interface ProjectServices {
 	 * haven't wired one — `visual-edit` tasks then fall back to the chat bridge.
 	 */
 	editLane: EditLaneBridge | null
+	/**
+	 * The playground's take generation — parallel unattended conversations, one
+	 * per take. Null on hosts that haven't wired one; the router then refuses
+	 * with the backend-needed message.
+	 */
+	exploreLane: ExploreLane | null
 }
 
 const registry = new Map<string, ProjectServices>()
-const fallback: ProjectServices = { host: nullDesignHost, bridge: new NullBridge(), conversation: null, editLane: null }
+const fallback: ProjectServices = {
+	host: nullDesignHost,
+	bridge: new NullBridge(),
+	conversation: null,
+	editLane: null,
+	exploreLane: null,
+}
 
 /** Installs the services for an open project. Called when its window opens. */
 export function registerProjectServices(workspacePath: string, services: Partial<ProjectServices>): void {
@@ -76,4 +89,12 @@ export function editLaneFor(workspacePath: string): EditLaneBridge | null {
 
 export function setProjectEditLane(workspacePath: string, editLane: EditLaneBridge | null): void {
 	registerProjectServices(workspacePath, { editLane })
+}
+
+export function exploreLaneFor(workspacePath: string): ExploreLane | null {
+	return registry.get(workspacePath)?.exploreLane ?? null
+}
+
+export function setProjectExploreLane(workspacePath: string, exploreLane: ExploreLane | null): void {
+	registerProjectServices(workspacePath, { exploreLane })
 }

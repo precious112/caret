@@ -33,6 +33,7 @@ export {
 	type SettledPlan,
 } from "./agent/conversation"
 export { EditLaneBridge, type EditStatus } from "./agent/edit-lane"
+export { EXPLORE_CONCURRENCY, ExploreCancelledError, ExploreLane, type ExploreTakeStatus } from "./agent/explore-lane"
 export { setBundledBackendDirectory } from "./agent/opencode/binary"
 export { type AppWritePolicy, classify, type PermissionRuling, rulePermission } from "./agent/permissions"
 export { BACKEND_IDS, disposeBackends, getBackend, probeBackends } from "./agent/registry"
@@ -313,12 +314,14 @@ export {
 	bridgeFor,
 	conversationFor,
 	editLaneFor,
+	exploreLaneFor,
 	hostFor,
 	type ProjectServices,
 	registerProjectServices,
 	setProjectBridge,
 	setProjectConversation,
 	setProjectEditLane,
+	setProjectExploreLane,
 	unregisterProjectServices,
 } from "./services"
 export { DesignSession, type DesignSessionOptions } from "./session"
@@ -362,17 +365,19 @@ export type {
 	VibeDescriptor,
 } from "./types"
 export {
-	applyVariantChoice,
-	createVariantSet,
-	discardVariantSet,
-	readVariantSet,
-	registerExternalVariants,
-	updateVariantStatus,
+	applyLeaf,
+	type CreateExplorationOptions,
+	createExploration,
+	discardExploration,
+	type Exploration,
+	type ExploreNode,
+	type ExploreNodeStatus,
+	readExploration,
+	registerExternalRound,
+	spawnRound,
+	updateNodeStatus,
 	VARIANT_COUNT,
 	VARIANT_SCRATCH_FILE,
-	type VariantEntry,
-	type VariantSet,
-	type VariantStatus,
 	variantPageId,
 } from "./variants"
 export {

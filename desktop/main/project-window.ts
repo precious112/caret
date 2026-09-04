@@ -17,6 +17,7 @@
  * keeps layout authority in the renderer, where that height is actually known.
  */
 import { BrowserWindow, Notification, WebContentsView } from "electron"
+import * as fs from "fs"
 import * as path from "path"
 
 import {
@@ -90,6 +91,9 @@ export class ProjectWindow {
 	private chromeInsets: ChromeInsets = { top: DEFAULT_CHROME_INSET, right: 0 }
 	private canvasVisible = false
 	private closed = false
+	/** Watches `.caret/.variants.json` existence so the chrome can badge an open exploration. */
+	private exploreWatcher: fs.FSWatcher | null = null
+	private exploreOpen: boolean | null = null
 	/** Asks already notified about — one native notification per ask, ever. */
 	private notifiedAsks = new Set<string>()
 
@@ -155,6 +159,8 @@ export class ProjectWindow {
 			// The pill lives where the intent was expressed: in the canvas, not the
 			// chat. This is the entire live surface a canvas edit gets.
 			onEditStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "edit-status", payload: status }),
+			// Each playground take narrates to its own card on the explore surface.
+			onExploreStatus: (status) => this.sendToCanvas({ source: "caret-host", type: "explore-status", payload: status }),
 			// The owned loop is what makes the checker ENFORCED rather than
 			// requested: every turn that wrote pages gets checked, and errors go
 			// straight back into the session that made them. The overlay verifier
@@ -240,6 +246,8 @@ export class ProjectWindow {
 		if (this.closed) return
 		Logger.info(`[window] close() invoked for ${this.projectPath}`)
 		this.closed = true
+		this.exploreWatcher?.close()
+		this.exploreWatcher = null
 		this.checks.close()
 		this.overlayVerify.close()
 		await Promise.allSettled([this.session.stop(), this.mcp.stop(), this.healer.stop(), this.agent.close()])
@@ -390,8 +398,38 @@ export class ProjectWindow {
 			this.destroyCanvas()
 		} else {
 			this.mountCanvas(url)
+			// `.caret/` exists by the time Vite is up, so the watch can start.
+			this.startExploreWatch()
 		}
 		void this.pushState()
+	}
+
+	/**
+	 * The playground lives in the canvas, which is hidden entirely on other
+	 * surfaces (`canvas:setVisible`) — an open exploration would vanish without
+	 * a trace. The chrome badges the Canvas button instead, off the scratch
+	 * file's existence: it is the exploration's single source of truth, however
+	 * the exploration was opened (a click, MCP, a restart).
+	 */
+	private startExploreWatch(): void {
+		if (this.exploreWatcher) return
+		const caretDir = path.join(this.projectPath, ".caret")
+		const scratch = path.join(caretDir, ".variants.json")
+		const report = () => {
+			const open = fs.existsSync(scratch)
+			if (open === this.exploreOpen) return
+			this.exploreOpen = open
+			this.sendToChrome("explore:open-changed", this.projectPath, open)
+		}
+		try {
+			this.exploreWatcher = fs.watch(caretDir, (_event, filename) => {
+				if (filename === ".variants.json") report()
+			})
+		} catch (err) {
+			Logger.warn(`[window] explore watch failed to start: ${err}`)
+			return
+		}
+		report()
 	}
 
 	private mountCanvas(url: string): void {

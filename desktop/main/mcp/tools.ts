@@ -41,7 +41,7 @@ import {
 	readPageMeta,
 	readSyncState,
 	recordMappings,
-	registerExternalVariants,
+	registerExternalRound,
 	runSync,
 	startReverseSyncProposal,
 	validateFoundationTokens,
@@ -609,10 +609,11 @@ export const TOOLS: ToolDefinition[] = [
 		name: "propose_variants",
 		title: "Offer variant takes for the user to pick from",
 		description:
-			"Registers N variant pages you already wrote as takes on one page, so Caret shows the user a side-by-side pick. " +
-			"Write each take first as its own page (id like '<pageId>--v1', meta.variantOf set to the original page id, " +
-			"same content shape as the original), then call this. The user picks one in Caret; the chosen take replaces the " +
-			"original page and every take directory is cleaned up — the takes belong to the pick once proposed.",
+			"Registers N variant pages you already wrote as takes on one page, so Caret shows them in the playground for a " +
+			"side-by-side pick. Write each take first as its own page (id like '<pageId>--v1', meta.variantOf set to the " +
+			"original page id, same content shape as the original), then call this. The user picks one in Caret — and can " +
+			"branch further rounds from any take there; the chosen take replaces the original page and every take directory " +
+			"is cleaned up — the takes belong to the exploration once proposed.",
 		inputSchema: {
 			pageId: z.string().describe("The original page the takes are variants of"),
 			variantIds: z.array(z.string()).min(2).describe("The variant page ids you wrote"),
@@ -620,8 +621,8 @@ export const TOOLS: ToolDefinition[] = [
 		},
 		async handler(ctx, args: { pageId: string; variantIds: string[]; instruction: string }) {
 			try {
-				const set = await registerExternalVariants(ctx.projectPath, args.pageId, args.variantIds, args.instruction)
-				return reply(ctx, { ok: true, pageId: set.pageId, takes: set.variants.length })
+				const exploration = await registerExternalRound(ctx.projectPath, args.pageId, args.variantIds, args.instruction)
+				return reply(ctx, { ok: true, pageId: exploration.pageId, takes: exploration.nodes.length })
 			} catch (err) {
 				return fail(err instanceof Error ? err.message : String(err))
 			}

@@ -21,7 +21,7 @@ export async function generateCanvasFiles(caretDir: string): Promise<void> {
 		fs.writeFile(path.join(canvasDir, "CaretStateContext.tsx"), generateCaretStateContext()),
 		fs.writeFile(path.join(canvasDir, "CaretNavigator.tsx"), generateCaretNavigator()),
 		fs.writeFile(path.join(canvasDir, "SimulationView.tsx"), generateSimulationView()),
-		fs.writeFile(path.join(canvasDir, "VariantCompareView.tsx"), generateVariantCompareView()),
+		fs.writeFile(path.join(canvasDir, "ExploreView.tsx"), generateExploreView()),
 		fs.writeFile(path.join(canvasDir, "canvas.css"), generateCanvasCSS()),
 		fs.writeFile(path.join(libDir, "bridge.ts"), generateBridge()),
 		fs.writeFile(path.join(libDir, "edit-pill.ts"), generateEditPill()),
@@ -49,22 +49,29 @@ function generateTypes(): string {
 		  tags: string[]
 		  /** Set when the page dir has no importable index.tsx (bad AI output). */
 		  broken?: boolean
-		  /** Set on a generate-and-pick take — hidden from the grid, shown only by the compare surface. */
+		  /** Set on an exploration take — hidden from the grid, shown only by the playground. */
 		  variantOf?: string
 		}
 
-		export interface VariantEntry {
+		export interface ExploreNode {
 		  id: string
+		  parentId: string
+		  instruction: string
+		  angleLabel: string
 		  label: string
-		  status: "working" | "ready" | "failed"
+		  status: "working" | "ready" | "failed" | "cancelled"
 		  error?: string
+		  startedAt: string
 		}
 
-		export interface VariantSet {
-		  version: 1
+		export interface Exploration {
+		  version: 2
+		  mode: "page" | "new"
 		  pageId: string
+		  title?: string
 		  instruction: string
-		  variants: VariantEntry[]
+		  kind?: "explore" | "drift-proposal"
+		  nodes: ExploreNode[]
 		}
 
 		export interface CanvasTransform {
@@ -117,12 +124,12 @@ function generateCanvasApp(): string {
 		import { FocusedPageView } from "./FocusedPageView"
 		import { ErrorBoundary } from "./ErrorBoundary"
 		import { SimulationView } from "./SimulationView"
-		import { VariantCompareView } from "./VariantCompareView"
-		import type { PageInfo, ViewportPreset, FlowDefinition, VariantSet } from "./types"
+		import { ExploreView } from "./ExploreView"
+		import type { PageInfo, ViewportPreset, FlowDefinition, Exploration } from "./types"
 		import "./canvas.css"
 
 		export function CanvasApp() {
-		  const [mode, setMode] = useState<"canvas" | "focused" | "simulation">("canvas")
+		  const [mode, setMode] = useState<"canvas" | "focused" | "simulation" | "explore">("canvas")
 		  const [focusedPageId, setFocusedPageId] = useState<string | null>(null)
 		  const [pages, setPages] = useState<PageInfo[]>(pageMetas || [])
 
@@ -143,7 +150,10 @@ function generateCanvasApp(): string {
 		  }, [])
 		  const [viewport, setViewport] = useState<ViewportPreset>("desktop-1440")
 		  const [flows, setFlows] = useState<FlowDefinition[]>([])
-		  const [variantSet, setVariantSet] = useState<VariantSet | null>(null)
+		  const [exploration, setExploration] = useState<Exploration | null>(null)
+		  // The page the playground's start screen preselects — set by the focused
+		  // view's Experiment button so "riff on the page I'm looking at" is one click.
+		  const [explorePreselect, setExplorePreselect] = useState<string | null>(null)
 
 		  const log = (msg: string) => window.parent.postMessage({ source: "caret-vite", type: "log", payload: { message: msg } }, "*")
 
@@ -154,11 +164,11 @@ function generateCanvasApp(): string {
 		      .then(f => { log("flows loaded: " + f.length + " " + JSON.stringify(f.map((x: any) => x.id))); setFlows(f) })
 		      .catch(e => { log("flows-meta fetch FAILED: " + String(e)) })
 
-		    // A pick left open (an app restart mid-generation) must come back up.
+		    // An exploration left open (an app restart mid-generation) must come back up.
 		    const refetchVariants = () => {
 		      fetch("/__caret/variants")
 		        .then(r => r.ok ? r.json() : null)
-		        .then(set => setVariantSet(set && set.variants ? set : null))
+		        .then(raw => setExploration(raw && raw.version === 2 && Array.isArray(raw.nodes) ? raw : null))
 		        .catch(() => {})
 		    }
 		    refetchVariants()
@@ -181,16 +191,31 @@ function generateCanvasApp(): string {
 		    }
 		  }, [])
 
-		  // Variant takes are working copies for the compare surface, not pages in
+		  // Exploration takes are working copies for the playground, not pages in
 		  // their own right — the grid must never show them.
 		  const gridPages = pages.filter(p => !p.variantOf)
 
+		  // Where the playground was entered from, so its back arrow returns there.
+		  const exploreOrigin = useRef<"canvas" | "focused">("canvas")
+
+		  const handleExplore = useCallback((pageId?: string) => {
+		    exploreOrigin.current = mode === "focused" ? "focused" : "canvas"
+		    setExplorePreselect(pageId ?? null)
+		    setMode("explore")
+		  }, [mode])
+
+		  const handleExploreBack = useCallback(() => {
+		    if (exploreOrigin.current === "focused" && focusedPageId) setMode("focused")
+		    else { setMode("canvas"); setFocusedPageId(null) }
+		  }, [focusedPageId])
+
 		  const handleVariantPick = useCallback((variantId: string) => {
 		    window.parent.postMessage({ source: "caret-vite", type: "variant-pick", payload: { variantId } }, "*")
-		    // Optimistic: the host resolves the set and deletes the scratch, which
-		    // pushes caret:variants-changed; hiding now keeps the click responsive.
-		    setVariantSet(null)
-		  }, [])
+		    // Optimistic: the host resolves the exploration and deletes the scratch,
+		    // which pushes caret:variants-changed; hiding now keeps the click responsive.
+		    setExploration(null)
+		    handleExploreBack()
+		  }, [handleExploreBack])
 
 		  const handleFocus = useCallback((pageId: string) => {
 		    setFocusedPageId(pageId)
@@ -225,10 +250,28 @@ function generateCanvasApp(): string {
 		    }
 		  }, [])
 
-		  // The compare surface overlays whichever mode is up: the takes are
-		  // usually requested from the focused view, and a pick that only appears
-		  // after finding the back button is a pick nobody discovers.
-		  const compareOverlay = variantSet ? <VariantCompareView set={variantSet} onPick={handleVariantPick} /> : null
+		  // The playground never hijacks the surface. While an exploration is open
+		  // in any other mode, this pill is the standing way back to it.
+		  const workingCount = exploration ? exploration.nodes.filter(n => n.status === "working").length : 0
+		  const explorePill = exploration ? (
+		    <button className="caret-explore-pill" data-testid="explore-open-pill" onClick={() => handleExplore()}>
+		      ⚗ Exploration open — {exploration.nodes.length} take{exploration.nodes.length === 1 ? "" : "s"}{workingCount > 0 ? " · " + workingCount + " working" : ""}
+		    </button>
+		  ) : null
+
+		  if (mode === "explore") {
+		    return (
+		      <ErrorBoundary fallback={<CanvasErrorFallback />}>
+		        <ExploreView
+		          exploration={exploration}
+		          pages={gridPages}
+		          preselect={explorePreselect}
+		          onPick={handleVariantPick}
+		          onBack={handleExploreBack}
+		        />
+		      </ErrorBoundary>
+		    )
+		  }
 
 		  if (mode === "simulation" && focusedPageId) {
 		    return (
@@ -240,7 +283,7 @@ function generateCanvasApp(): string {
 		          onSetViewport={setViewport}
 		          onExit={handleExitSimulation}
 		        />
-		        {compareOverlay}
+		        {explorePill}
 		      </ErrorBoundary>
 		    )
 		  }
@@ -256,10 +299,11 @@ function generateCanvasApp(): string {
 		          states={page?.states || []}
 		          onBack={handleBack}
 		          onSimulate={handleSimulate}
+		          onExplore={() => handleExplore(focusedPageId)}
 		          viewport={viewport}
 		          onSetViewport={setViewport}
 		        />
-		        {compareOverlay}
+		        {explorePill}
 		      </ErrorBoundary>
 		    )
 		  }
@@ -271,11 +315,12 @@ function generateCanvasApp(): string {
 		        routes={liveRoutes}
 		        onFocus={handleFocus}
 		        onSimulate={handleSimulateFromCanvas}
+		        onExplore={() => handleExplore()}
 		        flows={flows}
 		        viewport={viewport}
 		        onSetViewport={setViewport}
 		      />
-		      {compareOverlay}
+		      {explorePill}
 		    </ErrorBoundary>
 		  )
 		}
@@ -305,79 +350,382 @@ function generateCanvasApp(): string {
 	`
 }
 
-function generateVariantCompareView(): string {
+function generateExploreView(): string {
 	return dedent`
-		import React from "react"
-		import type { VariantSet } from "./types"
+		import React, { useEffect, useRef, useState } from "react"
+		import type { Exploration, ExploreNode, PageInfo } from "./types"
 
 		/**
-		 * The pick half of generate-and-pick. The original and every take render
-		 * as LIVE iframes — the same pages the grid would show — and the user
-		 * points at one. "" as the pick means keep the original.
+		 * The playground: exploration on its own canvas mode, never an overlay.
+		 * With nothing open it is the start screen — variants of an existing page,
+		 * or a page that doesn't exist yet. With an exploration open every take is
+		 * a LIVE iframe card with its own narration, elapsed time and cancel; a
+		 * ready take expands to full size, applies, or branches the next round —
+		 * a tree walked until something is worth settling on.
 		 */
-		export function VariantCompareView({ set, onPick }: { set: VariantSet; onPick: (variantId: string) => void }) {
-		  const cards = [
-		    { id: set.pageId, label: "Original", status: "ready" as const, isOriginal: true },
-		    ...set.variants.map(v => ({ id: v.id, label: v.label, status: v.status, isOriginal: false, error: v.error })),
-		  ]
-		  const stillWorking = set.variants.some(v => v.status === "working")
+
+		const PUSH_FURTHER = "Push this direction noticeably further."
+
+		function send(type: string, payload: any) {
+		  window.parent.postMessage({ source: "caret-vite", type, payload }, "*")
+		}
+
+		interface TakeStatus { phase: string; detail?: string; error?: string }
+
+		/** A live page iframe scaled to exactly fill its card — no dead space at any column width. */
+		function ScaledFrame({ pageId, border }: { pageId: string; border?: string }) {
+		  const box = useRef<HTMLDivElement>(null)
+		  const [scale, setScale] = useState(0.24)
+		  useEffect(() => {
+		    const el = box.current
+		    if (!el) return
+		    const measure = () => { if (el.clientWidth > 0) setScale(el.clientWidth / 1440) }
+		    measure()
+		    const ro = new ResizeObserver(measure)
+		    ro.observe(el)
+		    return () => ro.disconnect()
+		  }, [])
+		  return (
+		    <div ref={box} style={{ position: "relative", borderRadius: 10, overflow: "hidden",
+		      border: border || "1px solid #2a2a3a", background: "#fff", aspectRatio: "16 / 10" }}>
+		      {/* Stable key: a finished take updates live over HMR — no remount flash. */}
+		      <iframe key={pageId} src={"/?page=" + pageId} title={pageId}
+		        style={{ width: 1440, height: 900, border: "none",
+		          transform: "scale(" + scale + ")", transformOrigin: "top left", pointerEvents: "none" }} />
+		    </div>
+		  )
+		}
+
+		function elapsedLabel(startedAt: string): string {
+		  const s = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000))
+		  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0")
+		}
+
+		export function ExploreView({ exploration, pages, preselect, onPick, onBack }: {
+		  exploration: Exploration | null
+		  pages: PageInfo[]
+		  preselect: string | null
+		  onPick: (variantId: string) => void
+		  onBack: () => void
+		}) {
+		  return (
+		    <div className="caret-explore" data-testid="explore-view">
+		      {exploration
+		        ? <OpenExploration exploration={exploration} onPick={onPick} onBack={onBack} />
+		        : <StartScreen pages={pages} preselect={preselect} onBack={onBack} />}
+		    </div>
+		  )
+		}
+
+		function StartScreen({ pages, preselect, onBack }: { pages: PageInfo[]; preselect: string | null; onBack: () => void }) {
+		  const [pageId, setPageId] = useState(preselect || (pages[0] ? pages[0].id : ""))
+		  const [pageInstruction, setPageInstruction] = useState("")
+		  const [newName, setNewName] = useState("")
+		  const [newInstruction, setNewInstruction] = useState("")
+		  const [starting, setStarting] = useState(false)
+		  const [error, setError] = useState<string | null>(null)
+
+		  // A refused start (no backend, an exploration already open elsewhere)
+		  // arrives as a failed edit-result — it must be readable, not a lost toast.
+		  useEffect(() => {
+		    const onMsg = (e: MessageEvent) => {
+		      const d = e.data
+		      if (!d || d.source !== "caret-host" || d.type !== "edit-result") return
+		      if (d.payload && d.payload.success === false && d.payload.error) {
+		        setError(String(d.payload.error))
+		        setStarting(false)
+		      }
+		    }
+		    window.addEventListener("message", onMsg)
+		    return () => window.removeEventListener("message", onMsg)
+		  }, [])
+
+		  useEffect(() => {
+		    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onBack() }
+		    window.addEventListener("keydown", onKey)
+		    return () => window.removeEventListener("keydown", onKey)
+		  }, [onBack])
+
+		  const startPage = () => {
+		    if (!pageId || !pageInstruction.trim() || starting) return
+		    setError(null); setStarting(true)
+		    send("variant-request", { pageId, instruction: pageInstruction.trim() })
+		  }
+		  const startNew = () => {
+		    if (!newName.trim() || !newInstruction.trim() || starting) return
+		    setError(null); setStarting(true)
+		    send("variant-request", { newPage: { name: newName.trim() }, instruction: newInstruction.trim() })
+		  }
+
+		  const cardStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 10, padding: 20,
+		    borderRadius: 12, border: "1px solid #2a2a3a", background: "#15151f", width: 360 }
+		  const inputStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 6, border: "1px solid #3a3a4a",
+		    background: "#1e1e2a", color: "#e5e7eb", fontSize: 13, outline: "none" }
+		  const goStyle: React.CSSProperties = { background: "#0b7aff", border: "none", color: "#fff", borderRadius: 7,
+		    padding: "8px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", alignSelf: "flex-start" }
 
 		  return (
-		    <div data-testid="variant-compare" style={{
-		      position: "fixed", inset: 0, zIndex: 9000, background: "rgba(10,10,16,0.92)",
-		      display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif", color: "#e5e7eb",
-		    }}>
-		      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 24px", borderBottom: "1px solid #2a2a3a" }}>
+		    <>
+		      <div className="caret-explore-header">
+		        <button className="caret-explore-btn" data-testid="explore-back" onClick={onBack} title="Back to canvas">←</button>
 		        <div style={{ minWidth: 0, flex: 1 }}>
-		          <div style={{ fontSize: 15, fontWeight: 600 }}>Pick a direction</div>
-		          <div style={{ fontSize: 12.5, color: "#8b93a7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-		            “{set.instruction}”{stillWorking ? " — takes are still coming in" : ""}
+		          <div style={{ fontSize: 15, fontWeight: 600 }}>Playground</div>
+		          <div style={{ fontSize: 12.5, color: "#8b93a7" }}>Three independent takes per round — pick one, or branch a direction further.</div>
+		        </div>
+		      </div>
+		      {starting && <div style={{ padding: "10px 24px", fontSize: 13, color: "#8b93a7" }}>Starting the first round…</div>}
+		      {error && <div data-testid="explore-start-error" style={{ padding: "10px 24px", fontSize: 13, color: "#f87171" }}>{error}</div>}
+		      <div style={{ flex: 1, display: "flex", gap: 24, padding: 32, alignItems: "flex-start", flexWrap: "wrap" }}>
+		        <div data-testid="explore-start-page" style={cardStyle}>
+		          <div style={{ fontSize: 14, fontWeight: 600 }}>Variants of an existing page</div>
+		          <div style={{ fontSize: 12, color: "#8b93a7" }}>The winner replaces the page; the page is untouched until then.</div>
+		          <select data-testid="explore-page-select" style={inputStyle} value={pageId} onChange={e => setPageId(e.target.value)}>
+		            {pages.map(p => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}
+		          </select>
+		          <input data-testid="explore-instruction" style={inputStyle} placeholder="What should the takes explore?"
+		            value={pageInstruction} onChange={e => setPageInstruction(e.target.value)}
+		            onKeyDown={e => { if (e.key === "Enter") startPage() }} />
+		          <button style={goStyle} data-testid="explore-start-page-go" disabled={starting} onClick={startPage}>Generate 3 takes</button>
+		        </div>
+		        <div data-testid="explore-start-new" style={cardStyle}>
+		          <div style={{ fontSize: 14, fontWeight: 600 }}>Something new</div>
+		          <div style={{ fontSize: 12, color: "#8b93a7" }}>A page that doesn't exist yet — settling adds it to the canvas.</div>
+		          <input data-testid="explore-new-name" style={inputStyle} placeholder="Page name, e.g. Pricing"
+		            value={newName} onChange={e => setNewName(e.target.value)} />
+		          <input data-testid="explore-new-instruction" style={inputStyle} placeholder="What should it be?"
+		            value={newInstruction} onChange={e => setNewInstruction(e.target.value)}
+		            onKeyDown={e => { if (e.key === "Enter") startNew() }} />
+		          <button style={goStyle} data-testid="explore-start-new-go" disabled={starting} onClick={startNew}>Generate 3 takes</button>
+		        </div>
+		      </div>
+		    </>
+		  )
+		}
+
+		function OpenExploration({ exploration, onPick, onBack }: {
+		  exploration: Exploration
+		  onPick: (variantId: string) => void
+		  onBack: () => void
+		}) {
+		  const nodes = exploration.nodes
+		  const isNew = exploration.mode === "new"
+		  const isProposal = exploration.kind === "drift-proposal"
+		  const [statuses, setStatuses] = useState<Record<string, TakeStatus>>({})
+		  const [focusId, setFocusId] = useState<string | null>(null)
+		  const [expandedId, setExpandedId] = useState<string | null>(null)
+		  const [branchingId, setBranchingId] = useState<string | null>(null)
+		  const [branchText, setBranchText] = useState("")
+
+		  // Each take's live narration, keyed by node — pushed by the host as the
+		  // take's own conversation works.
+		  useEffect(() => {
+		    const onMsg = (e: MessageEvent) => {
+		      const d = e.data
+		      if (!d || d.source !== "caret-host" || d.type !== "explore-status" || !d.payload) return
+		      const p = d.payload
+		      setStatuses(prev => ({ ...prev, [p.nodeId]: { phase: p.phase, detail: p.detail, error: p.error } }))
+		    }
+		    window.addEventListener("message", onMsg)
+		    return () => window.removeEventListener("message", onMsg)
+		  }, [])
+
+		  // Re-render each second while anything generates, for the elapsed tickers.
+		  const workingCount = nodes.filter(n => n.status === "working").length
+		  const [, setTick] = useState(0)
+		  useEffect(() => {
+		    if (workingCount === 0) return
+		    const t = setInterval(() => setTick(x => x + 1), 1000)
+		    return () => clearInterval(t)
+		  }, [workingCount])
+
+		  const byId: Record<string, ExploreNode> = {}
+		  nodes.forEach(n => { byId[n.id] = n })
+		  const depthOf = (n: ExploreNode) => { let d = 1; let p = n.parentId; while (byId[p]) { d++; p = byId[p].parentId } return d }
+
+		  // Default focus: the branch point of the newest round, so fresh takes are
+		  // what greets you. The rail overrides it.
+		  const defaultFocus = nodes.length ? nodes[nodes.length - 1].parentId : exploration.pageId
+		  const focus = focusId ?? defaultFocus
+		  const children = nodes.filter(n => n.parentId === focus)
+		  const focusNode = byId[focus] || null
+		  const readyIds = (isNew ? [] : [exploration.pageId]).concat(nodes.filter(n => n.status === "ready").map(n => n.id))
+
+		  useEffect(() => {
+		    const onKey = (e: KeyboardEvent) => {
+		      if (e.key === "Escape") {
+		        if (expandedId) setExpandedId(null)
+		        else if (branchingId) setBranchingId(null)
+		        else onBack()
+		      }
+		      if (expandedId && (e.key === "ArrowLeft" || e.key === "ArrowRight") && readyIds.length > 1) {
+		        const i = readyIds.indexOf(expandedId)
+		        if (i >= 0) setExpandedId(readyIds[(i + (e.key === "ArrowRight" ? 1 : readyIds.length - 1)) % readyIds.length])
+		      }
+		    }
+		    window.addEventListener("keydown", onKey)
+		    return () => window.removeEventListener("keydown", onKey)
+		  }, [expandedId, branchingId, readyIds.join(","), onBack])
+
+		  const discard = () => {
+		    if (workingCount > 0 && !window.confirm("Takes are still generating — discard the whole exploration?")) return
+		    onPick("")
+		  }
+		  const settle = (id: string) => {
+		    if (workingCount > 0 && !window.confirm("Takes are still generating — settle on this one and drop the rest?")) return
+		    onPick(id)
+		  }
+		  const branchFrom = (fromId: string, instruction: string) => {
+		    if (!instruction.trim()) return
+		    send("variant-request", { fromId, instruction: instruction.trim() })
+		    setBranchingId(null); setBranchText("")
+		    setFocusId(fromId)
+		  }
+
+		  const useLabel = isProposal ? "Use the app's version" : isNew ? "Add to canvas" : "Use this one"
+		  const keepLabel = isProposal ? "Keep the design" : isNew ? "Discard" : "Keep the original"
+		  const title = isNew
+		    ? "New page: " + (exploration.title || exploration.pageId)
+		    : isProposal ? "Review: " + exploration.pageId + " vs the app" : "Exploring " + exploration.pageId
+
+		  if (expandedId) {
+		    const node = byId[expandedId]
+		    return (
+		      <div data-testid="explore-expanded" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+		        <div className="caret-explore-header">
+		          <button className="caret-explore-btn" data-testid="explore-collapse" onClick={() => setExpandedId(null)} title="Back to the cards (Esc)">←</button>
+		          <div style={{ minWidth: 0, flex: 1 }}>
+		            <div style={{ fontSize: 14, fontWeight: 600 }}>{node ? node.label : "Original"}{node ? " · " + node.angleLabel : ""}</div>
+		            <div style={{ fontSize: 12, color: "#8b93a7" }}>full size — ←/→ compares, Esc goes back</div>
+		          </div>
+		          {node && node.status === "ready" && (
+		            <button className="caret-explore-go" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
+		          )}
+		        </div>
+		        <div style={{ flex: 1, overflow: "auto", background: "#0d0d14", display: "flex", justifyContent: "center" }}>
+		          <iframe key={expandedId} src={"/?page=" + expandedId} title={expandedId}
+		            style={{ width: 1440, height: "100%", border: "none", background: "#fff", flexShrink: 0 }} />
+		        </div>
+		      </div>
+		    )
+		  }
+
+		  return (
+		    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+		      <div className="caret-explore-header">
+		        <button className="caret-explore-btn" data-testid="explore-back" onClick={onBack} title="Back to canvas — the exploration stays open">←</button>
+		        <div style={{ minWidth: 0, flex: 1 }}>
+		          <div style={{ fontSize: 15, fontWeight: 600 }}>{title}</div>
+		          <div style={{ fontSize: 12.5, color: "#8b93a7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+		            title={exploration.instruction}>
+		            “{exploration.instruction}”{workingCount > 0 ? " — " + workingCount + " take" + (workingCount === 1 ? "" : "s") + " generating" : ""}
 		          </div>
 		        </div>
-		        <button
-		          data-testid="variant-keep-original"
-		          onClick={() => onPick("")}
-		          style={{ background: "none", border: "1px solid #3a3a4a", color: "#c7cad3", borderRadius: 8, padding: "7px 14px", fontSize: 13, cursor: "pointer" }}>
-		          Keep the original
-		        </button>
+		        {workingCount > 0 && (
+		          <button className="caret-explore-btn" data-testid="explore-stop-all" onClick={() => send("variant-cancel", {})}>Stop generating</button>
+		        )}
+		        <button className="caret-explore-btn" data-testid="variant-keep-original" onClick={discard}>{keepLabel}</button>
 		      </div>
 
-		      <div style={{ flex: 1, overflow: "auto", display: "grid", gap: 20, padding: 24,
-		        gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", alignContent: "start" }}>
-		        {cards.map(card => (
-		          <div key={card.id} data-testid={"variant-card-" + card.id}
-		            style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-		            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-		              <span style={{ fontSize: 13, fontWeight: 600 }}>{card.label}</span>
-		              {!card.isOriginal && card.status === "ready" && (
-		                <button
-		                  data-testid={"variant-use-" + card.id}
-		                  onClick={() => onPick(card.id)}
-		                  style={{ background: "#0b7aff", border: "none", color: "#fff", borderRadius: 7, padding: "5px 12px", fontSize: 12.5, fontWeight: 500, cursor: "pointer" }}>
-		                  Use this one
-		                </button>
-		              )}
-		              {card.status === "working" && <span style={{ fontSize: 12, color: "#8b93a7" }}>working…</span>}
-		              {card.status === "failed" && <span style={{ fontSize: 12, color: "#f87171" }} title={card.error}>failed</span>}
+		      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+		        {/* The tree rail: every round at a glance, any branch point one click away. */}
+		        {!isProposal && (
+		          <div style={{ width: 230, flexShrink: 0, overflow: "auto", borderRight: "1px solid #2a2a3a", padding: "12px 8px" }} data-testid="explore-rail">
+		            <div
+		              className={"caret-explore-rail-row" + (focus === exploration.pageId ? " active" : "")}
+		              data-testid="explore-rail-root"
+		              onClick={() => setFocusId(exploration.pageId)}>
+		              {isNew ? (exploration.title || exploration.pageId) : "Original: " + exploration.pageId}
 		            </div>
-		            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden",
-		              border: card.isOriginal ? "1px solid #3a3a4a" : "1px solid #2a2a3a",
-		              background: "#fff", aspectRatio: "16 / 10" }}>
-		              {card.status !== "failed" ? (
-		                // key includes status so a take that just finished reloads its frame.
-		                <iframe key={card.id + card.status} src={"/?page=" + card.id} title={card.label}
-		                  style={{ width: 1440, height: 900, border: "none",
-		                    transform: "scale(" + (1 / 4.8) + ")", transformOrigin: "top left",
-		                    pointerEvents: "none" }} />
-		              ) : (
-		                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center",
-		                  justifyContent: "center", color: "#b91c1c", fontSize: 13, background: "#fff5f5", padding: 16, textAlign: "center" }}>
-		                  {card.error || "This take failed — the other cards are unaffected."}
-		                </div>
-		              )}
-		            </div>
+		            {nodes.map(n => (
+		              <div key={n.id}
+		                className={"caret-explore-rail-row" + (focus === n.id ? " active" : "")}
+		                data-testid={"explore-rail-" + n.id}
+		                style={{ paddingLeft: 10 + depthOf(n) * 14 }}
+		                onClick={() => setFocusId(n.id)}>
+		                <span>{n.label}</span>
+		                <span style={{ color: "#666e82", marginLeft: 6, fontSize: 11 }}>{n.angleLabel}</span>
+		                <span style={{ marginLeft: "auto", fontSize: 11,
+		                  color: n.status === "ready" ? "#34d399" : n.status === "working" ? "#8b93a7" : "#f87171" }}>
+		                  {n.status === "working" ? "…" : n.status === "ready" ? "●" : "×"}
+		                </span>
+		              </div>
+		            ))}
 		          </div>
-		        ))}
+		        )}
+
+		        <div style={{ flex: 1, overflow: "auto", display: "grid", gap: 20, padding: 24,
+		          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", alignContent: "start" }}>
+		          {/* The branch point itself, so every child is judged against it. */}
+		          {(focus === exploration.pageId && isNew) ? null : (
+		            <div data-testid={"variant-card-" + focus} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+		              <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 26 }}>
+		                <span style={{ fontSize: 13, fontWeight: 600 }}>{focusNode ? focusNode.label : "Original"}</span>
+		                <span style={{ fontSize: 11, color: "#8b93a7" }}>{focusNode ? focusNode.angleLabel : "the page as it is"}</span>
+		                <span style={{ marginLeft: "auto" }} />
+		                <button className="caret-explore-mini" data-testid={"explore-expand-" + focus} onClick={() => setExpandedId(focus)}>Expand</button>
+		                {/* A ready take you walked to is still a candidate — the pick
+		                    must not depend on which card happens to be the focus. */}
+		                {focusNode && focusNode.status === "ready" && (
+		                  <button className="caret-explore-go" data-testid={"variant-use-" + focus} onClick={() => settle(focus)}>{useLabel}</button>
+		                )}
+		              </div>
+		              <ScaledFrame pageId={focus} border="1px solid #3a3a4a" />
+		            </div>
+		          )}
+
+		          {children.map(node => {
+		            const live = statuses[node.id]
+		            return (
+		              <div key={node.id} data-testid={"variant-card-" + node.id} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+		                <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 26 }}>
+		                  <span style={{ fontSize: 13, fontWeight: 600 }}>{node.label}</span>
+		                  <span style={{ fontSize: 11, color: "#a5b4fc" }}>{node.angleLabel}</span>
+		                  <span style={{ marginLeft: "auto" }} />
+		                  {node.status === "working" && (
+		                    <>
+		                      <span style={{ fontSize: 12, color: "#8b93a7" }}>{elapsedLabel(node.startedAt)}</span>
+		                      <button className="caret-explore-mini" data-testid={"explore-cancel-" + node.id}
+		                        title="Cancel this take" onClick={() => send("variant-cancel", { nodeId: node.id })}>×</button>
+		                    </>
+		                  )}
+		                  {node.status === "ready" && (
+		                    <>
+		                      <button className="caret-explore-mini" data-testid={"explore-expand-" + node.id} onClick={() => setExpandedId(node.id)}>Expand</button>
+		                      {!isProposal && (
+		                        <button className="caret-explore-mini" data-testid={"explore-branch-" + node.id}
+		                          onClick={() => { setBranchingId(branchingId === node.id ? null : node.id); setBranchText("") }}>Branch</button>
+		                      )}
+		                      <button className="caret-explore-go" data-testid={"variant-use-" + node.id} onClick={() => settle(node.id)}>{useLabel}</button>
+		                    </>
+		                  )}
+		                </div>
+		                {node.status === "working" && live && live.detail && (
+		                  <div style={{ fontSize: 11.5, color: "#8b93a7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{live.detail}</div>
+		                )}
+		                {branchingId === node.id && (
+		                  <div style={{ display: "flex", gap: 6 }}>
+		                    <input autoFocus data-testid={"explore-branch-input-" + node.id}
+		                      style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a4a", background: "#1e1e2a", color: "#e5e7eb", fontSize: 12.5, outline: "none" }}
+		                      placeholder="How should the next round push this?"
+		                      value={branchText} onChange={e => setBranchText(e.target.value)}
+		                      onKeyDown={e => { if (e.key === "Enter") branchFrom(node.id, branchText) }} />
+		                    <button className="caret-explore-mini" onClick={() => branchFrom(node.id, PUSH_FURTHER)} title={PUSH_FURTHER}>Push further</button>
+		                  </div>
+		                )}
+		                {node.status === "working" || node.status === "ready" ? (
+		                  <ScaledFrame pageId={node.id} />
+		                ) : (
+		                  <div style={{ borderRadius: 10, border: "1px solid #4a2a2a", background: "#1c1216", padding: 16,
+		                    fontSize: 12.5, color: "#f0a8a8", lineHeight: 1.5, minHeight: 80 }}>
+		                    {node.status === "cancelled"
+		                      ? "Cancelled." + (node.error ? " " + node.error : "")
+		                      : (node.error || (live && live.error) || "This take failed — the other cards are unaffected.")}
+		                  </div>
+		                )}
+		              </div>
+		            )
+		          })}
+		        </div>
 		      </div>
 		    </div>
 		  )
@@ -414,6 +762,7 @@ function generateCanvasView(): string {
 		  routes: Array<{ path: string; name: string; loader: () => Promise<{ default: React.ComponentType }> }>
 		  onFocus: (pageId: string) => void
 		  onSimulate: (pageId: string) => void
+		  onExplore: () => void
 		  flows: FlowDefinition[]
 		  viewport: ViewportPreset
 		  onSetViewport: (v: ViewportPreset) => void
@@ -467,7 +816,7 @@ function generateCanvasView(): string {
 		  }, 500)
 		}
 
-		export function CanvasView({ pages, routes, onFocus, onSimulate, flows, viewport, onSetViewport }: Props) {
+		export function CanvasView({ pages, routes, onFocus, onSimulate, onExplore, flows, viewport, onSetViewport }: Props) {
 		  const [transform, setTransform] = useState<CanvasTransform>({ x: 40, y: 40, scale: 1 })
 		  const [showFlows, setShowFlows] = useState(false)
 		  const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
@@ -939,6 +1288,9 @@ function generateCanvasView(): string {
 		        <button onClick={() => { const start = getSimStartPage(); if (start) onSimulate(start) }} className="caret-tb-btn" title="Simulate">
 		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" fill="currentColor"/></svg>
 		        </button>
+		        <button onClick={onExplore} className="caret-tb-btn" data-testid="explore-enter" title="Playground — explore takes side by side">
+		          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 2h4M7 2v4.5L3.5 12a2 2 0 0 0 1.8 3h5.4a2 2 0 0 0 1.8-3L9 6.5V2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 11h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+		        </button>
 		        <span className="caret-canvas-zoom-label">{Math.round(transform.scale * 100)}%</span>
 		      </div>
 		      {(invalidFlows.length > 0 || missingEdgeCount > 0) && (
@@ -1190,11 +1542,12 @@ function generateFocusedPageView(): string {
 		  states: string[]
 		  onBack: () => void
 		  onSimulate: () => void
+		  onExplore: () => void
 		  viewport: ViewportPreset
 		  onSetViewport: (v: ViewportPreset) => void
 		}
 
-		export function FocusedPageView({ pageId, title, states, onBack, onSimulate, viewport, onSetViewport }: Props) {
+		export function FocusedPageView({ pageId, title, states, onBack, onSimulate, onExplore, viewport, onSetViewport }: Props) {
 		  const iframeRef = useRef<HTMLIFrameElement>(null)
 		  const preset = VIEWPORT_PRESETS[viewport]
 
@@ -1271,6 +1624,7 @@ function generateFocusedPageView(): string {
 		            </button>
 		          ))}
 		        </div>
+		        <button onClick={onExplore} className="caret-focused-toolbar-btn" data-testid="explore-enter-focused" title="Experiment with this page in the playground">⚗ Experiment</button>
 		      </div>
 		      <div className="caret-focused-iframe-container">
 		        <iframe
@@ -1600,19 +1954,6 @@ function generateOverlayPainter(): string {
 		    }
 		  }, [rect, instruction, onClose])
 
-		  // Generate-and-pick: the same instruction read three ways, rendered, and
-		  // chosen by pointing. For anything that can't be said precisely in words,
-		  // this beats one attempt iterated. The compare surface takes over as the
-		  // feedback — it appears over the canvas the moment the takes start.
-		  const handleVariants = useCallback(() => {
-		    const pageId = (window as any).__CARET_FOCUSED_PAGE__?.pageId
-		    if (!pageId || !instruction.trim()) return
-		    bridge.send({ type: "variant-request", payload: { pageId, instruction: instruction.trim() } })
-		    setRect(null)
-		    setInstruction("")
-		    onClose()
-		  }, [instruction, onClose])
-
 		  return (
 		    <div
 		      className="caret-overlay"
@@ -1636,13 +1977,6 @@ function generateOverlayPainter(): string {
 		              />
 		              <button onClick={handleSubmit} disabled={sending || !instruction.trim()}>
 		                {sending ? "..." : "→"}
-		              </button>
-		              <button
-		                data-caret-variants-btn
-		                title="Generate three takes and pick one"
-		                onClick={handleVariants}
-		                disabled={sending || !instruction.trim()}>
-		                ×3
 		              </button>
 		            </div>
 		          )}
@@ -2058,6 +2392,86 @@ function generateCanvasCSS(): string {
 		  display: flex;
 		  gap: 4px;
 		}
+
+		/* ---- The playground (explore mode) ---- */
+		.caret-explore {
+		  position: fixed;
+		  inset: 0;
+		  display: flex;
+		  flex-direction: column;
+		  background: #10101a;
+		  color: #e5e7eb;
+		  font-family: system-ui, sans-serif;
+		}
+		.caret-explore > * { min-height: 0; }
+		.caret-explore-header {
+		  display: flex;
+		  align-items: center;
+		  gap: 12px;
+		  padding: 12px 20px;
+		  border-bottom: 1px solid #2a2a3a;
+		  flex-shrink: 0;
+		}
+		.caret-explore-btn {
+		  background: none;
+		  border: 1px solid #3a3a4a;
+		  color: #c7cad3;
+		  border-radius: 8px;
+		  padding: 6px 12px;
+		  font-size: 13px;
+		  cursor: pointer;
+		}
+		.caret-explore-btn:hover { background: #ffffff10; }
+		.caret-explore-go {
+		  background: #0b7aff;
+		  border: none;
+		  color: #fff;
+		  border-radius: 7px;
+		  padding: 5px 12px;
+		  font-size: 12.5px;
+		  font-weight: 500;
+		  cursor: pointer;
+		}
+		.caret-explore-go:hover { background: #2b8aff; }
+		.caret-explore-mini {
+		  background: #1e1e2a;
+		  border: 1px solid #3a3a4a;
+		  color: #c7cad3;
+		  border-radius: 6px;
+		  padding: 4px 9px;
+		  font-size: 12px;
+		  cursor: pointer;
+		}
+		.caret-explore-mini:hover { background: #2a2a3a; }
+		.caret-explore-rail-row {
+		  display: flex;
+		  align-items: center;
+		  padding: 6px 10px;
+		  border-radius: 6px;
+		  font-size: 12.5px;
+		  cursor: pointer;
+		  white-space: nowrap;
+		  overflow: hidden;
+		}
+		.caret-explore-rail-row:hover { background: #ffffff08; }
+		.caret-explore-rail-row.active { background: #0b7aff22; color: #cfe5ff; }
+		/* The way back to an open exploration from any other canvas mode. Sits
+		   below the focused view's toolbar so it never covers its controls. */
+		.caret-explore-pill {
+		  position: fixed;
+		  top: 56px;
+		  right: 16px;
+		  z-index: 5000;
+		  background: #15151f;
+		  border: 1px solid #0b7aff88;
+		  color: #cfe5ff;
+		  border-radius: 999px;
+		  padding: 7px 14px;
+		  font-size: 12.5px;
+		  cursor: pointer;
+		  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+		}
+		.caret-explore-pill:hover { border-color: #0b7aff; background: #1a1a28; }
 
 		.caret-focused-iframe-container {
 		  flex: 1;
@@ -4457,23 +4871,6 @@ function generateCaretGrabPlugin(): string {
 		  btn.textContent = "Send"
 		  btn.style.cssText = "padding:8px 16px;border-radius:6px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer;font-weight:500;"
 		  row.appendChild(btn)
-
-		  // Generate-and-pick from the fallback card too — the imprecise-wording
-		  // case this card exists for is exactly where three takes beat one.
-		  const variantsBtn = document.createElement("button")
-		  variantsBtn.textContent = "×3"
-		  variantsBtn.title = "Generate three takes and pick one"
-		  variantsBtn.setAttribute("data-caret-variants-btn", "")
-		  variantsBtn.style.cssText = "padding:8px 12px;border-radius:6px;border:1px solid #555;background:#2a2a3e;color:#c7cad3;font-size:13px;cursor:pointer;"
-		  variantsBtn.addEventListener("click", () => {
-		    const text = input.value.trim()
-		    const pageId = (window as any).__CARET_FOCUSED_PAGE__?.pageId
-		    if (!text || !pageId) return
-		    bridge.send({ type: "variant-request", payload: { pageId, instruction: text } })
-		    detachPicker()
-		    card.remove()
-		  })
-		  row.appendChild(variantsBtn)
 
 		  card.appendChild(row)
 		  document.body.appendChild(card)

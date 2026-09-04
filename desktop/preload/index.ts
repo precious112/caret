@@ -119,6 +119,7 @@ const EVENT_CHANNELS: Record<IpcEventChannel, boolean> = {
 	"interview:prompt": true,
 	"wizard:progress": true,
 	"assets:changed": true,
+	"explore:open-changed": true,
 	"agent:state": true,
 	"generate:progress": true,
 	log: true,

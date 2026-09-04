@@ -5017,32 +5017,365 @@ export default function CatalogDemo() {
 		return `asked "${questionText.slice(0, 50)}…", finished → ${tokens.typography.displayFamily ?? tokens.typography.fontFamily}, ${tokens.color.brand.seed}`
 	})
 
-	await inference("bq. three takes generate from one instruction and a click applies the winner", async () => {
-		// Generate-and-pick end to end on the real backend: the ×3 button in the
-		// overlay editor starts three independent edit-lane turns, the compare
-		// surface fills in as takes land, and a real click on "Use this one"
-		// replaces the page and cleans the takes up.
-		const caretDir = path.join(fixture, ".caret")
-		// About, not home: the chat/sync scenarios have a model rewrite home, and
-		// a runtime-broken rewrite leaves the focused view honestly showing its
-		// error card — no FABs, nothing to drive. About is never model-touched.
-		const pagePath = path.join(caretDir, "pages", "about", "index.tsx")
-		const scratchPath = path.join(caretDir, ".variants.json")
+	await inference(
+		"bq. a playground round runs three parallel takes; one cancels, the winner applies with an undo step",
+		async () => {
+			// The playground end to end on the real backend: the Playground button on
+			// the canvas toolbar opens the start screen, one instruction spawns three
+			// UNATTENDED conversations at once (the status stream proves the overlap),
+			// a per-take × cancels one without touching its siblings, a ready take
+			// expands to full size, and "Use this one" replaces the page, captures an
+			// undo step, and cleans the whole tree up.
+			const caretDir = path.join(fixture, ".caret")
+			// About, not home: the chat/sync scenarios have a model rewrite home, and
+			// a runtime-broken rewrite leaves the focused view honestly showing its
+			// error card. About is never model-touched.
+			const pagePath = path.join(caretDir, "pages", "about", "index.tsx")
+			const scratchPath = path.join(caretDir, ".variants.json")
+			const undoJournalPath = path.join(caretDir, ".undo-journal.json")
+			const journalBefore = await fs.readFile(undoJournalPath, "utf-8").catch(() => null)
+			const stepsBefore = journalBefore ? ((JSON.parse(journalBefore).steps?.length as number) ?? 0) : 0
 
-		// The canvas must be the visible surface — other scenarios leave the
-		// chrome wherever they ended.
-		const surface = await chrome.getByTestId("app-shell").getAttribute("data-surface")
-		if (surface && surface !== "canvas") {
-			const label = surface === "agent" ? "Backend" : surface[0].toUpperCase() + surface.slice(1)
-			await chrome
-				.getByTestId("top-bar")
-				.getByRole("button", { name: label })
-				.click()
-				.catch(() => {})
-		}
+			// The canvas must be the visible surface — other scenarios leave the
+			// chrome wherever they ended.
+			const surface = await chrome.getByTestId("app-shell").getAttribute("data-surface")
+			if (surface && surface !== "canvas") {
+				const label = surface === "agent" ? "Backend" : surface[0].toUpperCase() + surface.slice(1)
+				await chrome
+					.getByTestId("top-bar")
+					.getByRole("button", { name: label })
+					.click()
+					.catch(() => {})
+			}
+
+			const driven = await app!.evaluate(async ({ BrowserWindow }) => {
+				// Same serialization constraints as be/bn: no function-valued consts.
+				let canvas: any = null
+				const viewDeadline = Date.now() + 60000
+				while (Date.now() < viewDeadline && !canvas) {
+					const win = BrowserWindow.getAllWindows()[0]
+					const views = (win?.contentView?.children ?? []) as any[]
+					const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
+					if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+					if (!canvas) await new Promise((r) => setTimeout(r, 500))
+				}
+				if (!canvas) return { error: "the canvas view never mounted" }
+				const wc = canvas.webContents
+
+				try {
+					// Leave any focused view another scenario left open, then enter the
+					// playground from the grid toolbar — the ×3 gesture is gone.
+					await wc.executeJavaScript(
+						`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
+					)
+					let deadline = Date.now() + 30000
+					let enterUp = false
+					while (Date.now() < deadline && !enterUp) {
+						enterUp = await wc
+							.executeJavaScript(`!!document.querySelector('[data-testid="explore-enter"]')`)
+							.catch(() => false)
+						if (!enterUp) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!enterUp) return { error: "the Playground button never appeared on the canvas toolbar" }
+
+					// Record every explore-status push BEFORE starting: statuses from two
+					// different nodes interleaving is the wire-level proof the takes ran
+					// in PARALLEL conversations rather than queued one behind another.
+					await wc.executeJavaScript(`(() => {
+					window.__EXPLORE_STATUSES__ = []
+					window.addEventListener("message", (e) => {
+						if (e.data && e.data.source === "caret-host" && e.data.type === "explore-status" && e.data.payload) {
+							window.__EXPLORE_STATUSES__.push({ n: e.data.payload.nodeId, p: e.data.payload.phase })
+						}
+					})
+					return true
+				})()`)
+
+					await wc.executeJavaScript(`(document.querySelector('[data-testid="explore-enter"]')).click(), true`)
+					deadline = Date.now() + 15000
+					let startUp = false
+					while (Date.now() < deadline && !startUp) {
+						startUp = await wc
+							.executeJavaScript(`!!document.querySelector('[data-testid="explore-start-page"]')`)
+							.catch(() => false)
+						if (!startUp) await new Promise((r) => setTimeout(r, 250))
+					}
+					if (!startUp) return { error: "the playground start screen never appeared" }
+
+					const started = await wc.executeJavaScript(`(() => {
+					const select = document.querySelector('[data-testid="explore-page-select"]')
+					if (!select) return "no page select"
+					const setSel = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+					setSel.call(select, 'about')
+					select.dispatchEvent(new Event('change', { bubbles: true }))
+					const input = document.querySelector('[data-testid="explore-instruction"]')
+					if (!input) return "no instruction input"
+					const setVal = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+					setVal.call(input, 'Make this page feel warmer and more welcoming')
+					input.dispatchEvent(new Event('input', { bubbles: true }))
+					const go = document.querySelector('[data-testid="explore-start-page-go"]')
+					if (!go || go.disabled) return "the go button is missing or disabled"
+					go.click()
+					return true
+				})()`)
+					if (started !== true) return { error: "starting the round failed: " + started }
+					return { ok: true }
+				} catch (err) {
+					return { error: err instanceof Error ? err.message : String(err) }
+				}
+			})
+			assert(!("error" in driven) || !driven.error, `driving the playground request failed: ${(driven as any).error}`)
+
+			// The exploration registers immediately, all three nodes working at once.
+			const nodeIds = await waitFor(
+				"the exploration to register",
+				async () => {
+					try {
+						const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
+						return raw?.nodes?.length === 3 ? (raw.nodes.map((n: { id: string }) => n.id) as string[]) : null
+					} catch {
+						return null
+					}
+				},
+				20_000,
+			)
+
+			// Cancel the first take while the round runs: its × must settle it as
+			// "cancelled" without touching the siblings' turns.
+			// Searched across EVERY window's views, not `getAllWindows()[0]` — that
+			// index is a race. cb's second project window stays open for the rest of
+			// the run, and the overlay-verify loop opens hidden screenshot windows
+			// whenever an edit turn lands, so whichever window sits at [0] when this
+			// happens to run decided a whole scenario.
+			const cancelTarget = nodeIds[0]
+			const cancelClicked = await app!.evaluate(async ({ BrowserWindow }, target: string) => {
+				const deadline = Date.now() + 30000
+				while (Date.now() < deadline) {
+					for (const win of BrowserWindow.getAllWindows()) {
+						for (const view of (win?.contentView?.children ?? []) as any[]) {
+							const wc = view?.webContents
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							const clicked = await wc
+								.executeJavaScript(
+									`(() => { const b = document.querySelector('[data-testid="explore-cancel-${target}"]'); if (!b) return false; b.click(); return true })()`,
+								)
+								.catch(() => false)
+							if (clicked) return true
+						}
+					}
+					await new Promise((r) => setTimeout(r, 300))
+				}
+				return false
+			}, cancelTarget)
+			assert(cancelClicked, `the per-take cancel for ${cancelTarget} never appeared on the playground`)
+
+			await waitFor(
+				"the cancelled take to settle as cancelled",
+				async () => {
+					try {
+						const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
+						const node = raw?.nodes?.find((n: { id: string }) => n.id === cancelTarget)
+						if (node?.status === "ready" || node?.status === "failed") {
+							throw new Error(`the cancelled take settled as "${node.status}" instead of cancelled`)
+						}
+						return node?.status === "cancelled" ? true : null
+					} catch (err) {
+						if (err instanceof Error && err.message.includes("settled as")) throw err
+						return null
+					}
+				},
+				120_000,
+			)
+
+			// The two surviving turns run in PARALLEL conversations — same patience
+			// as ff/gg for the model work itself.
+			const settled = await waitFor(
+				"the remaining takes to settle",
+				async () => {
+					try {
+						const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
+						const nodes = raw?.nodes ?? []
+						return nodes.length === 3 && nodes.every((n: { status: string }) => n.status !== "working")
+							? (nodes as Array<{ id: string; status: string; error?: string }>)
+							: null
+					} catch {
+						return null
+					}
+				},
+				900_000,
+			)
+			const ready = settled.filter((n) => n.status === "ready")
+			if (ready.length === 0) {
+				throw new Inconclusive(
+					`no take succeeded: ${settled.map((n) => `${n.id}=${n.status}${n.error ? ` (${n.error.slice(0, 60)})` : ""}`).join(", ")}`,
+				)
+			}
+
+			// The parallelism proof: a status for one node arriving BETWEEN two
+			// statuses of another means both conversations were live at once. The old
+			// sequential loop could never produce that ordering.
+			const statuses = await app!.evaluate(async ({ BrowserWindow }) => {
+				for (const win of BrowserWindow.getAllWindows()) {
+					for (const view of (win?.contentView?.children ?? []) as any[]) {
+						const wc = view?.webContents
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						const list = await wc.executeJavaScript(`window.__EXPLORE_STATUSES__ ?? null`).catch(() => null)
+						if (list) return list as Array<{ n: string; p: string }>
+					}
+				}
+				return null
+			})
+			assert(statuses && statuses.length > 0, "no explore-status ever reached the canvas — the status stream is dead")
+			const interleaved = (statuses as Array<{ n: string; p: string }>).some((status, index, list) => {
+				const later = list.slice(index + 1)
+				const other = later.findIndex((s) => s.n !== status.n)
+				return other >= 0 && later.slice(other + 1).some((s) => s.n === status.n)
+			})
+			assert(
+				interleaved,
+				`take statuses never interleaved — generation looks sequential again. Stream: ${(
+					statuses as Array<{ n: string; p: string }>
+				)
+					.map((s) => `${s.n.slice(-4)}:${s.p}`)
+					.join(" ")
+					.slice(0, 300)}`,
+			)
+
+			const chosen = ready[0]
+			const chosenSource = await fs.readFile(path.join(caretDir, "pages", chosen.id, "index.tsx"), "utf-8")
+
+			// A ready take expands to a full-size frame before the pick.
+			const expanded = await app!.evaluate(async ({ BrowserWindow }, target: string) => {
+				const deadline = Date.now() + 30000
+				while (Date.now() < deadline) {
+					for (const win of BrowserWindow.getAllWindows()) {
+						for (const view of (win?.contentView?.children ?? []) as any[]) {
+							const wc = view?.webContents
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							const result = await wc
+								.executeJavaScript(
+									`(async () => {
+									const b = document.querySelector('[data-testid="explore-expand-${target}"]')
+									if (!b) return null
+									b.click()
+									await new Promise((r) => setTimeout(r, 400))
+									const frame = document.querySelector('[data-testid="explore-expanded"] iframe')
+									if (!frame) return { error: "expand clicked but no full-size frame appeared" }
+									const width = frame.getBoundingClientRect().width
+									const back = document.querySelector('[data-testid="explore-collapse"]')
+									if (back) back.click()
+									return { width }
+								})()`,
+								)
+								.catch(() => null)
+							if (result) return result as { width?: number; error?: string }
+						}
+					}
+					await new Promise((r) => setTimeout(r, 300))
+				}
+				return { error: "no view ever offered the expand button" }
+			}, chosen.id)
+			assert(!expanded.error, `expanding ${chosen.id} failed: ${expanded.error}`)
+			assert(
+				Math.round(expanded.width ?? 0) === 1440,
+				`the expanded frame is ${expanded.width}px wide — expected 1440 (scale 1)`,
+			)
+
+			// On failure this reports what the compare surface actually shows. The
+			// scratch file saying "ready" and the button never rendering are two
+			// different faults — the take failing, or the canvas never hearing that it
+			// landed — and "never became clickable" cannot tell them apart. Two runs
+			// were spent learning nothing because of that.
+			// Same all-windows search as overlayShown, and for the same reason: the
+			// one-shot `getAllWindows()[0]` grab this used to make was the whole
+			// failure — "no canvas view" while the canvas sat healthy in another
+			// window. The click is attempted per live view; the first view that has
+			// the button wins, which also self-selects the right project window.
+			const picked = await app!.evaluate(async ({ BrowserWindow }, useTestId: string) => {
+				const deadline = Date.now() + 30000
+				let lastDiag = "no live canvas view in any window"
+				while (Date.now() < deadline) {
+					for (const win of BrowserWindow.getAllWindows()) {
+						for (const view of (win?.contentView?.children ?? []) as any[]) {
+							const wc = view?.webContents
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							const clicked = await wc
+								.executeJavaScript(
+									`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
+								)
+								.catch(() => false)
+							if (clicked) return { ok: true, diag: "" }
+							const diag = await wc
+								.executeJavaScript(
+									`(() => {
+									const view = document.querySelector('[data-testid="explore-view"]')
+									if (!view) return null
+									const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
+										id: c.getAttribute('data-testid'),
+										hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
+										label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
+									}))
+									return JSON.stringify({ playgroundUp: true, cards })
+								})()`,
+								)
+								.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
+							if (diag) lastDiag = String(diag)
+						}
+					}
+					await new Promise((r) => setTimeout(r, 300))
+				}
+				return { ok: false, diag: lastDiag }
+			}, `variant-use-${chosen.id}`)
+			if (!picked.ok) {
+				const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
+				assert(
+					false,
+					`the "Use this one" button for ${chosen.id} never became clickable.\n` +
+						`      playground: ${picked.diag}\n` +
+						`      .variants.json: ${onDisk.replace(/\s+/g, " ").slice(0, 400)}`,
+				)
+			}
+
+			await waitFor(
+				"the winner to replace the page and the takes to clean up",
+				async () => {
+					const page = await fs.readFile(pagePath, "utf-8").catch(() => "")
+					const scratchGone = await fs
+						.access(scratchPath)
+						.then(() => false)
+						.catch(() => true)
+					const dirsGone = await fs
+						.access(path.join(caretDir, "pages", chosen.id))
+						.then(() => false)
+						.catch(() => true)
+					return page === chosenSource && scratchGone && dirsGone ? true : null
+				},
+				30_000,
+			)
+
+			// The apply is undoable now — the journal must have grown by a step.
+			const journalAfter = JSON.parse(await fs.readFile(undoJournalPath, "utf-8").catch(() => '{"steps":[]}'))
+			assert(
+				(journalAfter.steps?.length ?? 0) > stepsBefore,
+				`the undo journal did not grow (${stepsBefore} → ${journalAfter.steps?.length ?? 0}) — the apply is not undoable`,
+			)
+
+			await shot(chrome, "24-variant-pick")
+			return `3 parallel takes (statuses interleaved), ${cancelTarget} cancelled alone, ${chosen.id} expanded at scale 1 and chosen; page replaced, undo step captured, tree cleaned`
+		},
+	)
+
+	await inference("bq2. a page that doesn't exist is explored into existence and added to the canvas", async () => {
+		// The playground's second door: no source page, only a name and an
+		// instruction. Three takes build the page from a stub in parallel;
+		// settling on one ADDS it to the canvas as a real page — the exploration
+		// never shows a page dir until the pick.
+		const caretDir = path.join(fixture, ".caret")
+		const scratchPath = path.join(caretDir, ".variants.json")
+		const newPageDir = path.join(caretDir, "pages", "team")
+		await fs.rm(newPageDir, { recursive: true, force: true })
 
 		const driven = await app!.evaluate(async ({ BrowserWindow }) => {
-			// Same serialization constraints as be/bn: no function-valued consts.
 			let canvas: any = null
 			const viewDeadline = Date.now() + 60000
 			while (Date.now() < viewDeadline && !canvas) {
@@ -5054,175 +5387,78 @@ export default function CatalogDemo() {
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
 			const wc = canvas.webContents
-
 			try {
-				// Always open About fresh — never inherit another scenario's focused
-				// page (it may be a model-broken home showing the error card).
 				await wc.executeJavaScript(
 					`((document.querySelector('button[title="Back to canvas"]')) || {click(){}}).click(), true`,
 				)
-				const findAbout = `(() => {
-					const frames = Array.from(document.querySelectorAll('.caret-canvas-frame'))
-					return frames.find((f) => f.querySelector('.caret-canvas-frame-title')?.textContent?.trim() === 'About') ?? null
-				})()`
-				let pageFrame: any = null
-				{
-					let deadline0 = Date.now() + 30000
-					let ready = false
-					while (Date.now() < deadline0 && !ready) {
-						ready = await wc.executeJavaScript(`!!${findAbout}`).catch(() => false)
-						if (!ready) await new Promise((r) => setTimeout(r, 250))
-					}
-					if (!ready) return { error: "the About card never appeared on the canvas" }
-					await wc.executeJavaScript(`(${findAbout}).click(), true`)
-					deadline0 = Date.now() + 30000
-					while (Date.now() < deadline0 && !pageFrame) {
-						pageFrame =
-							wc.mainFrame.frames.find(
-								(f: any) => f.url.includes("mode=focused") && f.url.includes("page=about"),
-							) ?? null
-						if (!pageFrame) await new Promise((r) => setTimeout(r, 250))
-					}
-					if (!pageFrame) return { error: "the focused About page never became a frame of the canvas" }
-				}
-
 				let deadline = Date.now() + 30000
-				let painter = false
-				while (Date.now() < deadline && !painter) {
-					pageFrame = wc.mainFrame.frames.find((f: any) => f.url.includes("mode=focused")) ?? pageFrame
-					painter = await pageFrame
-						.executeJavaScript(`!!document.querySelector('.caret-focused-paint-btn')`)
+				let enterUp = false
+				while (Date.now() < deadline && !enterUp) {
+					enterUp = await wc
+						.executeJavaScript(`!!document.querySelector('[data-testid="explore-enter"]')`)
 						.catch(() => false)
-					if (!painter) await new Promise((r) => setTimeout(r, 250))
+					if (!enterUp) await new Promise((r) => setTimeout(r, 250))
 				}
-				if (!painter) {
-					const diag = await pageFrame
-						.executeJavaScript(
-							`(() => ({
-								url: location.href,
-								fabs: document.querySelectorAll('.caret-focused-fab').length,
-								rootChildren: document.getElementById('root')?.children.length ?? -1,
-								bodyHead: document.body?.innerHTML?.slice(0, 200) ?? 'no body',
-								viteOverlay: !!document.querySelector('vite-error-overlay'),
-							}))()`,
-						)
-						.catch((e: any) => `frame probe failed: ${String(e).slice(0, 120)}`)
-					return { error: "the paint control never appeared — diag: " + JSON.stringify(diag) }
-				}
-
-				let overlayUp = false
-				for (let attempt = 0; attempt < 5 && !overlayUp; attempt++) {
-					await pageFrame
-						.executeJavaScript(
-							`(() => { const b = document.querySelector('.caret-focused-paint-btn'); if (b) b.click(); return !!b })()`,
-						)
+				if (!enterUp) return { error: "the Playground button never appeared on the canvas toolbar" }
+				await wc.executeJavaScript(`(document.querySelector('[data-testid="explore-enter"]')).click(), true`)
+				deadline = Date.now() + 15000
+				let startUp = false
+				while (Date.now() < deadline && !startUp) {
+					startUp = await wc
+						.executeJavaScript(`!!document.querySelector('[data-testid="explore-start-new"]')`)
 						.catch(() => false)
-					const attemptDeadline = Date.now() + 4000
-					while (Date.now() < attemptDeadline && !overlayUp) {
-						overlayUp = await pageFrame
-							.executeJavaScript(`!!document.querySelector('.caret-overlay')`)
-							.catch(() => false)
-						if (!overlayUp) await new Promise((r) => setTimeout(r, 250))
-					}
+					if (!startUp) await new Promise((r) => setTimeout(r, 250))
 				}
-				if (!overlayUp) return { error: "paint mode never engaged" }
-
-				const offset = await wc.executeJavaScript(
-					`(() => { const r = document.querySelector('.caret-focused-iframe').getBoundingClientRect(); return { x: r.x, y: r.y } })()`,
-				)
-				const from = { x: Math.round(offset.x) + 120, y: Math.round(offset.y) + 120 }
-				const to = { x: from.x + 340, y: from.y + 200 }
-				wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y })
-				wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 })
-				for (let step = 1; step <= 6; step++) {
-					wc.sendInputEvent({
-						type: "mouseMove",
-						x: Math.round(from.x + ((to.x - from.x) * step) / 6),
-						y: Math.round(from.y + ((to.y - from.y) * step) / 6),
-						button: "left",
-						buttons: 1,
-					})
-					await new Promise((r) => setTimeout(r, 40))
-				}
-				wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 })
-
-				deadline = Date.now() + 20000
-				let box = false
-				while (Date.now() < deadline && !box) {
-					box = await pageFrame
-						.executeJavaScript(`!!document.querySelector('.caret-overlay-prompt input')`)
-						.catch(() => false)
-					if (!box) await new Promise((r) => setTimeout(r, 250))
-				}
-				if (!box) return { error: "painting a region did not open the instruction box" }
-
-				await pageFrame.executeJavaScript(`(() => {
-					const input = document.querySelector('.caret-overlay-prompt input')
-					input.focus()
-					const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-					setter.call(input, 'Make this section feel warmer and more welcoming')
-					input.dispatchEvent(new Event('input', { bubbles: true }))
+				if (!startUp) return { error: "the playground start screen never appeared" }
+				const started = await wc.executeJavaScript(`(() => {
+					const name = document.querySelector('[data-testid="explore-new-name"]')
+					const brief = document.querySelector('[data-testid="explore-new-instruction"]')
+					if (!name || !brief) return "the something-new card is incomplete"
+					const setVal = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+					setVal.call(name, 'Team')
+					name.dispatchEvent(new Event('input', { bubbles: true }))
+					setVal.call(brief, 'A small team page: three people, name, role, one warm line each')
+					brief.dispatchEvent(new Event('input', { bubbles: true }))
+					const go = document.querySelector('[data-testid="explore-start-new-go"]')
+					if (!go || go.disabled) return "the go button is missing or disabled"
+					go.click()
 					return true
 				})()`)
-				await new Promise((r) => setTimeout(r, 200))
-				const clicked = await pageFrame.executeJavaScript(
-					`(() => { const b = document.querySelector('[data-caret-variants-btn]'); if (!b || b.disabled) return false; b.click(); return true })()`,
-				)
-				if (!clicked) return { error: "the ×3 button was missing or disabled" }
+				if (started !== true) return { error: "starting the new-page round failed: " + started }
 				return { ok: true }
 			} catch (err) {
 				return { error: err instanceof Error ? err.message : String(err) }
 			}
 		})
-		assert(!("error" in driven) || !driven.error, `driving the ×3 request failed: ${(driven as any).error}`)
+		assert(!("error" in driven) || !driven.error, `driving the new-page request failed: ${(driven as any).error}`)
 
-		// The set registers immediately; the compare surface follows.
+		// Registered with stub takes; pages/team itself must NOT exist yet.
 		await waitFor(
-			"the variant set to register",
+			"the new-page exploration to register",
 			async () => {
 				try {
 					const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
-					return raw?.variants?.length === 3 ? true : null
+					return raw?.mode === "new" && raw?.pageId === "team" && raw?.nodes?.length === 3 ? true : null
 				} catch {
 					return null
 				}
 			},
 			20_000,
 		)
-		// Searched across EVERY window's views, not `getAllWindows()[0]` — that
-		// index is a race. cb's second project window stays open for the rest of
-		// the run, and the overlay-verify loop opens hidden screenshot windows
-		// whenever an edit turn lands, so whichever window sits at [0] when this
-		// happens to run decided a whole scenario. One run failed as "no canvas
-		// view" while the canvas was fine in a window one index over.
-		const overlayShown = await app!.evaluate(async ({ BrowserWindow }) => {
-			const deadline = Date.now() + 30000
-			while (Date.now() < deadline) {
-				for (const win of BrowserWindow.getAllWindows()) {
-					for (const view of (win?.contentView?.children ?? []) as any[]) {
-						const wc = view?.webContents
-						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
-						const up = await wc
-							.executeJavaScript(`!!document.querySelector('[data-testid="variant-compare"]')`)
-							.catch(() => false)
-						if (up) return true
-					}
-				}
-				await new Promise((r) => setTimeout(r, 300))
-			}
-			return false
-		})
-		assert(overlayShown, "the compare surface never appeared over the canvas")
+		const rootExistsEarly = await fs.access(newPageDir).then(
+			() => true,
+			() => false,
+		)
+		assert(!rootExistsEarly, "pages/team appeared during the exploration — the page must not exist until the pick")
 
-		// Three model turns, sequential — give them the same patience as ff/gg.
 		const settled = await waitFor(
-			"all three takes to settle",
+			"the takes to settle",
 			async () => {
 				try {
 					const raw = JSON.parse(await fs.readFile(scratchPath, "utf-8"))
-					const variants = raw?.variants ?? []
-					return variants.length === 3 && variants.every((v: { status: string }) => v.status !== "working")
-						? (variants as Array<{ id: string; status: string; error?: string }>)
+					const nodes = raw?.nodes ?? []
+					return nodes.length === 3 && nodes.every((n: { status: string }) => n.status !== "working")
+						? (nodes as Array<{ id: string; status: string; error?: string }>)
 						: null
 				} catch {
 					return null
@@ -5230,29 +5466,19 @@ export default function CatalogDemo() {
 			},
 			900_000,
 		)
-		const ready = settled.filter((v) => v.status === "ready")
+		const ready = settled.filter((n) => n.status === "ready")
 		if (ready.length === 0) {
 			throw new Inconclusive(
-				`no take succeeded: ${settled.map((v) => `${v.id}=${v.status}${v.error ? ` (${v.error.slice(0, 60)})` : ""}`).join(", ")}`,
+				`no take succeeded: ${settled.map((n) => `${n.id}=${n.status}${n.error ? ` (${n.error.slice(0, 60)})` : ""}`).join(", ")}`,
 			)
 		}
-
 		const chosen = ready[0]
 		const chosenSource = await fs.readFile(path.join(caretDir, "pages", chosen.id, "index.tsx"), "utf-8")
+		assert(!chosenSource.includes("generating…"), `${chosen.id} still holds the stub — the model never built the page`)
 
-		// On failure this reports what the compare surface actually shows. The
-		// scratch file saying "ready" and the button never rendering are two
-		// different faults — the take failing, or the canvas never hearing that it
-		// landed — and "never became clickable" cannot tell them apart. Two runs
-		// were spent learning nothing because of that.
-		// Same all-windows search as overlayShown, and for the same reason: the
-		// one-shot `getAllWindows()[0]` grab this used to make was the whole
-		// failure — "no canvas view" while the canvas sat healthy in another
-		// window. The click is attempted per live view; the first view that has
-		// the button wins, which also self-selects the right project window.
+		// Settle: "Add to canvas" on any live view that offers it.
 		const picked = await app!.evaluate(async ({ BrowserWindow }, useTestId: string) => {
 			const deadline = Date.now() + 30000
-			let lastDiag = "no live canvas view in any window"
 			while (Date.now() < deadline) {
 				for (const win of BrowserWindow.getAllWindows()) {
 					for (const view of (win?.contentView?.children ?? []) as any[]) {
@@ -5263,64 +5489,39 @@ export default function CatalogDemo() {
 								`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
 							)
 							.catch(() => false)
-						if (clicked) return { ok: true, diag: "" }
-						const diag = await wc
-							.executeJavaScript(
-								`(() => {
-									const compare = document.querySelector('[data-testid="variant-compare"]')
-									if (!compare) return null
-									const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
-										id: c.getAttribute('data-testid'),
-										hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
-										label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
-									}))
-									return JSON.stringify({ compareUp: true, cards })
-								})()`,
-							)
-							.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
-						if (diag) lastDiag = String(diag)
+						if (clicked) return true
 					}
 				}
 				await new Promise((r) => setTimeout(r, 300))
 			}
-			return { ok: false, diag: lastDiag }
+			return false
 		}, `variant-use-${chosen.id}`)
-		if (!picked.ok) {
-			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
-			assert(
-				false,
-				`the "Use this one" button for ${chosen.id} never became clickable.\n` +
-					`      compare surface: ${picked.diag}\n` +
-					`      .variants.json: ${onDisk.replace(/\s+/g, " ").slice(0, 400)}`,
-			)
-		}
+		assert(picked, `the "Add to canvas" button for ${chosen.id} never became clickable`)
 
 		await waitFor(
-			"the winner to replace the page and the takes to clean up",
+			"the new page to join the canvas and the tree to clean up",
 			async () => {
-				const page = await fs.readFile(pagePath, "utf-8").catch(() => "")
+				const page = await fs.readFile(path.join(newPageDir, "index.tsx"), "utf-8").catch(() => "")
 				const scratchGone = await fs
 					.access(scratchPath)
 					.then(() => false)
 					.catch(() => true)
-				const dirsGone = await fs
-					.access(path.join(caretDir, "pages", chosen.id))
-					.then(() => false)
-					.catch(() => true)
-				return page === chosenSource && scratchGone && dirsGone ? true : null
+				if (page !== chosenSource || !scratchGone) return null
+				const meta = JSON.parse(await fs.readFile(path.join(newPageDir, "meta.json"), "utf-8").catch(() => "{}"))
+				return meta.id === "team" && meta.title === "Team" && !meta.variantOf ? true : null
 			},
 			30_000,
 		)
 
-		await shot(chrome, "24-variant-pick")
-		return `3 takes ran (${ready.length} ready), ${chosen.id} chosen by click, page replaced, takes cleaned up`
+		await shot(chrome, "24b-explore-new-page")
+		return `"Team" explored from nothing: 3 stub takes built in parallel, ${chosen.id} added to the canvas as pages/team with a real identity`
 	})
 
 	await inference("by. app drift becomes a reviewed proposal, and accepting it makes the design true again", async () => {
 		// Phase 9 end to end: home mapped to src/checkout-view.tsx and CLEAN,
 		// then drifted, then propose_design_update runs a real model turn that
-		// writes the App's-version take; the compare surface offers it against
-		// the current design; a real click accepts it; the mapping refreshes and
+		// writes the App's-version take; the playground offers it against the
+		// current design; a real click accepts it; the mapping refreshes and
 		// get_drift reads clean — the design tells the truth again.
 		//
 		// The mapping is re-recorded HERE, not inherited from bx. This scenario
@@ -5373,7 +5574,7 @@ export default function CatalogDemo() {
 			`the proposal did not start: ${mcpSaid(startText)}`,
 		)
 
-		// The take streams in behind the compare surface; wait for it to be ready.
+		// The take streams into the playground; wait for it to be ready.
 		// A model that produces NOTHING in six minutes is the model's failure,
 		// not Caret's — same five-minute rule gg and ii draw (observed on the
 		// free tier: an assistant turn with zero parts, no tools, no text).
@@ -5386,7 +5587,7 @@ export default function CatalogDemo() {
 					if (!raw) return null
 					const set = JSON.parse(raw)
 					if (set.kind !== "drift-proposal") return null
-					const take = set.variants?.[0]
+					const take = set.nodes?.[0]
 					if (take?.status === "failed") throw new Error(`the proposal turn failed: ${take.error}`)
 					return take?.status === "ready" ? true : null
 				},
@@ -5399,7 +5600,8 @@ export default function CatalogDemo() {
 			throw err
 		}
 
-		// The compare overlay is on the canvas; accept the App's version by click.
+		// A review never hijacks the canvas: the pill is the way in. Click it if
+		// the playground isn't up yet, then accept the App's version by click.
 		// Same diagnosis as bq: the scratch reading "ready" while no button renders
 		// is the canvas not hearing about it, which is a different fault from the
 		// take failing, and the bare boolean could name neither.
@@ -5418,24 +5620,25 @@ export default function CatalogDemo() {
 							.executeJavaScript(
 								`(() => {
 									const b = document.querySelector('[data-testid="variant-use-home--v1"]')
-									if (!b) return false
-									b.click()
-									return true
+									if (b) { b.click(); return "accepted" }
+									const pill = document.querySelector('[data-testid="explore-open-pill"]')
+									if (pill) { pill.click(); return "entered" }
+									return false
 								})()`,
 							)
 							.catch(() => false)
-						if (clicked) return { ok: true, diag: "" }
+						if (clicked === "accepted") return { ok: true, diag: "" }
 						const diag = await wc
 							.executeJavaScript(
 								`(() => {
-									const compare = document.querySelector('[data-testid="variant-compare"]')
-									if (!compare) return null
+									const view = document.querySelector('[data-testid="explore-view"]')
+									if (!view) return null
 									const cards = Array.from(document.querySelectorAll('[data-testid^="variant-card-"]')).map((c) => ({
 										id: c.getAttribute('data-testid'),
 										hasUseButton: !!c.querySelector('[data-testid^="variant-use-"]'),
 										label: c.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 60),
 									}))
-									return JSON.stringify({ compareUp: true, cards })
+									return JSON.stringify({ playgroundUp: true, cards })
 								})()`,
 							)
 							.catch((e: unknown) => `canvas probe failed: ${String(e).slice(0, 120)}`)
@@ -5450,8 +5653,8 @@ export default function CatalogDemo() {
 			const onDisk = await fs.readFile(scratchPath, "utf-8").catch(() => "the scratch is gone")
 			assert(
 				false,
-				`the App's-version take never became acceptable on the compare surface.\n` +
-					`      compare surface: ${picked.diag}\n` +
+				`the App's-version take never became acceptable on the playground.\n` +
+					`      playground: ${picked.diag}\n` +
 					`      .variants.json: ${onDisk.replace(/\s+/g, " ").slice(0, 400)}`,
 			)
 		}
