@@ -15,7 +15,7 @@ All deferred until a Caret domain exists. Replace these strings once the domain 
 - Google Cloud Storage image URLs (`storage.googleapis.com/cline_public_images/...`) in walkthrough markdown — host owned by Cline; replace once Caret has its own asset host.
 
 ## Telemetry
-- DONE — Cline's telemetry stack was deleted with the extension host; Caret has its own PostHog-based analytics (`desktop/main/analytics.ts`, contract in `docs/telemetry.md`). The one open item: paste the PostHog EU project key into `POSTHOG_KEY` in `desktop/main/analytics.ts` before release.
+- DONE — Cline's telemetry stack was deleted with the extension host; Caret has its own PostHog-based analytics (`desktop/main/analytics.ts`, keyed to Caret's own EU project, contract in `docs/telemetry.md`).
 
 ## Brand assets that still show Cline visuals
 - `assets/icons/cline-bot.woff` / `.ttf` / `.svg` — custom icon font used as `$(caret-icon)` in `package.json`. The icon registration key was renamed but the underlying font glyph is still the Cline robot. Regenerate the font from the Caret SVG (icomoon/fontello) when convenient.

@@ -25,10 +25,9 @@ import { getPref, setPref } from "./prefs"
 /**
  * A PUBLIC, write-only PostHog project key. Anyone can read it in this repo and
  * anyone can send events with it — it grants no read access to the data, so
- * secrecy would buy nothing. Empty disables telemetry entirely (pre-release
- * state); paste the EU project key here to arm it.
+ * secrecy would buy nothing. Emptying it disables telemetry entirely.
  */
-const POSTHOG_KEY = ""
+const POSTHOG_KEY = "phc_khJVFefAzcYWk72Q99kZRjfLGVAGDfzsuh4KkJAF9fE2"
 const POSTHOG_HOST = "https://eu.i.posthog.com"
 
 /** Caps chosen against PostHog's free error-tracking allowance; a crash loop stops mattering after this. */
