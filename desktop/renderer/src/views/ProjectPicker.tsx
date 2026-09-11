@@ -29,7 +29,10 @@ export function ProjectPicker({ onOpen }: { onOpen(projectPath: string): void })
 	return (
 		<div className="titlebar-drag flex h-full flex-col items-center justify-center gap-8 px-8" data-testid="project-picker">
 			<div className="flex flex-col items-center text-center">
-				<img alt="" className="mb-4 size-16" draggable={false} src={caretIcon} />
+				{/* White rounded tile behind the mark, as on the landing page. */}
+				<span className="mb-4 flex size-16 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-black/10">
+					<img alt="" className="size-11" draggable={false} src={caretIcon} />
+				</span>
 				<h1 className="text-2xl font-medium tracking-tight">Caret</h1>
 				<p className="mt-1 text-shell-muted">A design layer that lives in your repo.</p>
 			</div>

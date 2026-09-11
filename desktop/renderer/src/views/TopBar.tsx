@@ -40,7 +40,11 @@ export const TopBar = forwardRef<HTMLDivElement, TopBarProps>(function TopBar(
 			)}
 			data-testid="top-bar"
 			ref={ref}>
-			<img alt="Caret" className="size-[18px] shrink-0" draggable={false} src={caretIcon} />
+			{/* The mark rides a white rounded tile, matching the landing page — on the
+			    dark shell the bare dark-on-transparent PNG had no contrast. */}
+			<span className="flex size-[22px] shrink-0 items-center justify-center rounded-md bg-white">
+				<img alt="Caret" className="size-4" draggable={false} src={caretIcon} />
+			</span>
 			<ProjectSwitcher project={project} />
 
 			<StatusDot label={project.canvasUrl ? "Preview running" : "Starting preview…"} ok={project.canvasUrl !== null} />
