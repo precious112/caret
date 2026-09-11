@@ -1,13 +1,12 @@
 {
 	"compilerOptions": {
 		"esModuleInterop": true,
-		"experimentalDecorators": true,
 		"forceConsistentCasingInFileNames": true,
 		"isolatedModules": true,
-		"jsx": "react",
 		"lib": [
 			"es2022",
-			"DOM"
+			"DOM",
+			"DOM.Iterable"
 		],
 		"module": "esnext",
 		"moduleResolution": "Bundler",
@@ -23,30 +22,15 @@
 		"target": "es2022",
 		"useDefineForClassFields": true,
 		"useUnknownInCatchVariables": false,
+		"types": [
+			"node"
+		],
 		"paths": {
 			"@/*": [
 				"./src/*"
 			],
-			"@api/*": [
-				"./src/core/api/*"
-			],
 			"@core/*": [
 				"./src/core/*"
-			],
-			"@generated/*": [
-				"./src/generated/*"
-			],
-			"@hosts/*": [
-				"./src/hosts/*"
-			],
-			"@integrations/*": [
-				"./src/integrations/*"
-			],
-			"@packages/*": [
-				"./src/packages/*"
-			],
-			"@services/*": [
-				"./src/services/*"
 			],
 			"@shared/*": [
 				"./src/shared/*"
@@ -58,13 +42,15 @@
 	},
 	"include": [
 		"src/**/*",
-		"cli/src/**/*"
+		"desktop/main/**/*",
+		"desktop/preload/**/*",
+		"desktop/shared/**/*",
+		"scripts/**/*"
 	],
 	"exclude": [
 		"node_modules",
-		".vscode-test",
-		"webview-ui",
-		"src/test/e2e/**/*",
-		"src/test/scenarios/**/*"
+		"out",
+		"dist",
+		"desktop/renderer"
 	]
 }
