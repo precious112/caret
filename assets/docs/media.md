@@ -8,23 +8,23 @@ plays video from `user-attachments` URLs, so they live there and are referenced
 below. GIFs are the opposite: they render fine from a relative path, so those are
 committed alongside this file.
 
-**GitHub refuses a GIF whose decoded frames are too large, and file size has
-nothing to do with it.** Measured: of five committed GIFs, only the one under
-~36 megapixels of total pixel volume (width x height x frames) rendered on
-github.com; the other four returned 503 on every reload. The smallest *file*
-(1.3MB, 51MP) failed while the second-largest (2.6MB, 36MP) worked. Keep
-`width x height x frames` under about 30MP. At 800x500 that is 75 frames, so
-10fps buys 7 seconds. Check a new GIF before committing it:
+**If an image will not render on github.com, check the response headers before
+theorising about the file.** Four of five GIFs failed here and the cause looked
+like a size ceiling, because the only one that worked was also the smallest by
+frame count. It was not. The 503 bodies were Varnish error pages
+(`Backend.max_conn reached`) from the Fastly POP nearest the viewer, and three
+requests to three different cache nodes at that POP gave 200, 503, 503 for the
+same kind of object. Nothing was wrong with the files.
 
 ```bash
-python3 -c "
-from PIL import Image
-im = Image.open('assets/docs/x.gif'); n = 0
-try:
-    while True: im.seek(n); n += 1
-except EOFError: pass
-print(im.size, n, 'frames', im.size[0]*im.size[1]*n/1e6, 'MP')"
+curl -s -D - -o /dev/null \
+  https://raw.githubusercontent.com/<owner>/<repo>/main/assets/docs/<file>
+# x-served-by names the cache node; a 503 body from Varnish is the CDN, not you.
 ```
+
+Keeping assets small is still worth doing, since a smaller object is likelier to
+be cached and less likely to be dropped by a struggling edge. It is not a
+correctness requirement.
 
 ## Hosted videos
 
