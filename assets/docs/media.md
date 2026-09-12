@@ -8,6 +8,24 @@ plays video from `user-attachments` URLs, so they live there and are referenced
 below. GIFs are the opposite: they render fine from a relative path, so those are
 committed alongside this file.
 
+**GitHub refuses a GIF whose decoded frames are too large, and file size has
+nothing to do with it.** Measured: of five committed GIFs, only the one under
+~36 megapixels of total pixel volume (width x height x frames) rendered on
+github.com; the other four returned 503 on every reload. The smallest *file*
+(1.3MB, 51MP) failed while the second-largest (2.6MB, 36MP) worked. Keep
+`width x height x frames` under about 30MP. At 800x500 that is 75 frames, so
+10fps buys 7 seconds. Check a new GIF before committing it:
+
+```bash
+python3 -c "
+from PIL import Image
+im = Image.open('assets/docs/x.gif'); n = 0
+try:
+    while True: im.seek(n); n += 1
+except EOFError: pass
+print(im.size, n, 'frames', im.size[0]*im.size[1]*n/1e6, 'MP')"
+```
+
 ## Hosted videos
 
 Uploaded via drag-and-drop into a GitHub comment box (there is no API or `gh`
@@ -20,6 +38,11 @@ can be verified against the file it came from.
 | Visual editing — text, colour, image, resize, overlay | 1:11 | 5.5MB | `27b6746a` | https://github.com/user-attachments/assets/2fb6a9f4-f000-423c-8b9c-d70a81422bc6 |
 | Asset generation — mark, shader, photograph | 2:00 | 8.85MB | `d8e9a7fe` | https://github.com/user-attachments/assets/99115f37-797a-454c-978a-421c6dace536 |
 | **Launch demo — the README hero** (`caret_launch_v2`) | 1:43 | 9.00MB | `662e1118` | https://github.com/user-attachments/assets/93e273d4-aed3-45cd-bb5e-c5b587691017 |
+
+Only the launch demo is embedded in `README.md`. The other two are hosted and
+kept here for reuse (a docs page, a release note, a social post) rather than
+stacked at the bottom of the README, where a list of long videos reads as a
+dumping ground instead of a feature.
 
 To embed one, put the bare URL on its own line in Markdown. GitHub turns it into
 a player. Do not wrap it in `![]()` — that renders a broken image.

@@ -76,14 +76,32 @@ chmod +x Caret-Linux-x64.AppImage && ./Caret-Linux-x64.AppImage   # portable
 
 ---
 
+## Your first project
+
+1. **Open a folder.** Caret creates a `.caret/` folder inside it. Nothing else
+   in your project is touched.
+2. **Say what you are building**, in a sentence or two. "A booking site for a
+   small climbing gym" is plenty.
+3. **Choose how much you want to decide yourself.** Caret can interview you
+   about colour, type and spacing, which needs a model connected. Or you can set
+   them by hand, which needs nothing at all.
+4. **You end up with a foundation**: a brand colour and a full scale built from
+   it, a typeface, a spacing step, a corner radius. Saved in
+   `.caret/tokens/foundation.json`, and used by everything you make afterwards.
+5. **Now make pages.** Ask for one in the chat, or write the file yourself. It
+   appears on the canvas either way.
+
 ## How it works
 
 Caret splits the front end of your project into two layers that live in the same
 repo.
 
-**The design layer** sits in a folder called `.caret/`. It holds real React
-pages, shared components, and your design tokens, which are your colours, your
-type sizes and your spacing. This is your workshop, where you work things out.
+**The design layer** sits in a folder called `.caret/`. Pages go in
+`.caret/pages/`, reusable pieces in `.caret/components/`, the journeys between
+pages in `.caret/flows/`, and your design tokens in `.caret/tokens/`. Tokens are
+just your colours, type sizes and spacing, written down once. It is all real
+React, so it is all reviewable in a pull request. This is your workshop, where
+you work things out.
 
 **Your app layer** is what you actually ship, in any framework: Next.js, Svelte,
 Vue, plain HTML. Caret has no opinion about it.
@@ -111,6 +129,10 @@ there. No properties panel to hunt through. You edit the thing you were already
 looking at, Caret writes it into the real source file, and the page reloads on
 its own.
 
+Edits land on the element you actually clicked, not one the model guessed at.
+Caret gives every element a stable id and edits the source tree directly, so
+clicking the third card in a list changes the third card.
+
 <p align="center">
   <img src="assets/docs/edit-text.gif" width="100%" alt="Editing a headline directly on the page, and Caret confirming the edit landed in the file" />
 </p>
@@ -136,6 +158,17 @@ were talking about.
 
 <p align="center">
   <img src="assets/docs/describe-a-change.gif" width="100%" alt="Painting over a section of a page and describing a change in words, then the rebuilt section" />
+</p>
+
+### Try three versions at once
+
+When you do not know what you want yet, ask for a few. Caret builds three
+versions of the page side by side, live, and you pick the one you like. The
+others are thrown away and the winner becomes the page. Picking leaves an undo
+step, so changing your mind costs one keystroke.
+
+<p align="center">
+  <img src="assets/docs/explore-takes.gif" width="100%" alt="Three versions of a page generating side by side on the canvas, then one is picked and becomes the live page" />
 </p>
 
 ### Make the pictures too
@@ -167,6 +200,15 @@ pages nothing leads to.
 <p align="center">
   <img src="assets/docs/flows.png" width="100%" alt="Two user journeys drawn over the pages on the canvas, each in its own colour, with an error path as a dashed line" />
 </p>
+
+### Caret checks its own work
+
+AI-written pages go wrong in boring, repeatable ways: a colour that is nearly
+but not quite your brand colour, text too faint to read, a heading scale that
+skips a step. Caret runs a set of checks over your design pages and shows what
+it finds on the canvas without being asked, so you notice before it ships rather
+than after. The checks are plain rules, not another model's opinion, and you can
+turn any of them off in `.caret/checks.json`.
 
 ### Keeping your app in step
 
@@ -222,20 +264,6 @@ See [docs/connect-an-agent.md](docs/connect-an-agent.md).
 
 This direction is optional. Nothing in the app needs it, and work you start
 inside Caret runs on Caret's own backend instead.
-
-## Longer walkthroughs
-
-**Visual editing**, in full: text, colours, images, resizing by hand, and
-describing a change in words.
-
-https://github.com/user-attachments/assets/2fb6a9f4-f000-423c-8b9c-d70a81422bc6
-
-**Making assets**, in full: a logo, an animated background and a photograph, each
-from a sentence.
-
-https://github.com/user-attachments/assets/99115f37-797a-454c-978a-421c6dace536
-
----
 
 ## Building from source
 
