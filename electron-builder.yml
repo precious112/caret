@@ -43,6 +43,10 @@ npmRebuild: false
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.png
+  # Version-free on purpose: the README's download table links to
+  # releases/latest/download/<name>, so a version in the filename would break
+  # every link in both repos on the next release.
+  artifactName: Caret-macOS-${arch}.${ext}
   target:
     - target: zip
       arch: [arm64, x64]
@@ -73,10 +77,15 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  artifactName: Caret-Windows-Setup-${arch}.${ext}
+
+portable:
+  artifactName: Caret-Windows-Portable-${arch}.${ext}
 
 linux:
   icon: build/icon.png
   category: Development
+  artifactName: Caret-Linux-${arch}.${ext}
   target:
     - AppImage
     - deb
