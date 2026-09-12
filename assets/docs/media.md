@@ -19,11 +19,18 @@ can be verified against the file it came from.
 |---|---|---|---|---|
 | Visual editing — text, colour, image, resize, overlay | 1:11 | 5.5MB | `27b6746a` | https://github.com/user-attachments/assets/2fb6a9f4-f000-423c-8b9c-d70a81422bc6 |
 | Asset generation — mark, shader, photograph | 2:00 | 8.85MB | `d8e9a7fe` | https://github.com/user-attachments/assets/99115f37-797a-454c-978a-421c6dace536 |
-| Launch demo v2 | 1:43 | 9.00MB | `662e1118` | https://github.com/user-attachments/assets/93e273d4-aed3-45cd-bb5e-c5b587691017 |
-| **Launch demo v1 — the README hero** | 1:43 | 7.25MB | `0bb9c7ad` | _not uploaded yet_ |
+| **Launch demo — the README hero** (`caret_launch_v2`) | 1:43 | 9.00MB | `662e1118` | https://github.com/user-attachments/assets/93e273d4-aed3-45cd-bb5e-c5b587691017 |
 
 To embed one, put the bare URL on its own line in Markdown. GitHub turns it into
 a player. Do not wrap it in `![]()` — that renders a broken image.
+
+**Do not use `caret_launch_v1`.** It is superseded, not an alternative cut: its
+tenon cold open shipped with the WALNUT wheel blipping between arrangements
+instead of travelling, because under CDP paused virtual time a CSS transition
+does not tick and the tweens queued instead of playing. `record-mock-scroll.mjs`
+now drives the wheel frame by frame on the clip's own timeline and produces a
+frame per advance, and `caret_launch_v2` is that re-record. v1 is kept only as
+history.
 
 ## Encoding
 
