@@ -29,6 +29,7 @@ import {
 	registerProjectServices,
 	unregisterProjectServices,
 } from "../../src/core/design"
+import { emitDesignEvent } from "../../src/core/design/telemetry-hooks"
 import { Logger } from "../../src/shared/services/Logger"
 import { AgentService } from "./agent-service"
 import { CatalogService } from "./catalog-service"
@@ -449,6 +450,17 @@ export class ProjectWindow {
 				if (channel === "canvas:toHost") {
 					void this.handleCanvasMessage(payload as DesignInboundMessage)
 				}
+			})
+			// The gap that made the Windows canvas failure invisible: the main
+			// process watched Vite (healthy) but nothing watched whether the
+			// renderer actually REACHED it. This is the user's side of the story.
+			this.canvas.webContents.on("did-fail-load", (_e, code, description, validatedUrl) => {
+				Logger.error(`[canvas] failed to load ${validatedUrl}: ${description} (${code})`)
+				emitDesignEvent("canvas_blocked", { reason: "renderer_load_failed", code })
+			})
+			this.canvas.webContents.on("render-process-gone", (_e, details) => {
+				Logger.error(`[canvas] renderer gone: ${details.reason} (exit ${details.exitCode})`)
+				emitDesignEvent("canvas_blocked", { reason: "renderer_gone" })
 			})
 			this.window.contentView.addChildView(this.canvas)
 		}

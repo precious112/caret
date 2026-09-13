@@ -218,10 +218,16 @@ export class RenderingShell {
 			// No --port: Vite auto-increments from 5173 when the port is taken, which
 			// is what keeps several open projects from colliding. The chosen port is
 			// read back from stdout below rather than assumed.
+			// NO_COLOR: Vite's colour lib enables ANSI codes on win32 even into a
+			// pipe (macOS only colours a TTY), and the codes land BETWEEN
+			// "127.0.0.1:" and the port digits — so the readback below never
+			// matched on Windows, the 30s timeout fired, and the canvas reported
+			// "failed to load" while Vite ran healthy. The escape codes are
+			// visible verbatim in any Windows main.log from before this fix.
 			const proc = child_process.spawn("node", [viteEntry, "--host", "127.0.0.1"], {
 				cwd,
 				stdio: "pipe",
-				env: systemSpawnEnv(),
+				env: { ...systemSpawnEnv(), NO_COLOR: "1" },
 			})
 			this.viteProcess = proc
 
@@ -234,12 +240,18 @@ export class RenderingShell {
 				}
 			}, VITE_BOOT_TIMEOUT_MS)
 
+			let bootOutput = ""
 			proc.stdout?.on("data", (data: Buffer) => {
 				const output = data.toString()
 				Logger.info(`[vite] ${output.trim()}`)
 				logStream.write(output)
 
-				const match = output.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)/)
+				// Belt to NO_COLOR's braces: tolerate colour codes and a "Local:"
+				// line split across two data events.
+				if (!resolved) bootOutput += output
+				// eslint-disable-next-line no-control-regex
+				const clean = bootOutput.replace(/\x1b\[[0-9;]*m/g, "")
+				const match = clean.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)/)
 				if (match && !resolved) {
 					resolved = true
 					clearTimeout(timeout)
