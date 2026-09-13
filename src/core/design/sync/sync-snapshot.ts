@@ -1,7 +1,7 @@
 /**
  * Pre-sync snapshots on plain git.
  *
- * V1 captured the rollback point with Cline's checkpoint shadow-git, which dies
+ * V1 captured the rollback point with a checkpoint shadow-git, which dies
  * with the task loop. "Undo sync" is not optional — a sync rewrites app code
  * from a plan the user may only half-agree with — so the capability is
  * re-implemented here on git primitives that touch neither the user's index nor

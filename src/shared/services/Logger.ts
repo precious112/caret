@@ -1,78 +1,83 @@
 /**
- * Simple Logger utility for the extension's backend code.
+ * Process-wide logging for Caret's non-UI code.
+ *
+ * Static rather than injected because it is called from everywhere, including
+ * places with no obvious owner to thread a logger through: codemods, file
+ * watchers, spawned-tool wrappers. Output goes to registered subscribers rather
+ * than straight to the console, so the desktop host can route it into its own
+ * log file and the test suite can capture it.
+ *
+ * A logger must never be the reason something fails, so every path here
+ * swallows its own errors.
  */
+type Subscriber = (line: string) => void
+
+type Level = "ERROR" | "WARN" | "INFO" | "LOG" | "DEBUG" | "TRACE"
+
+/** Extra arguments are dropped below this bar unless IS_DEV is set. */
+const ALWAYS_DETAILED: ReadonlySet<Level> = new Set<Level>(["ERROR", "WARN"])
+
 export class Logger {
-	private static isVerbose = process.env.IS_DEV === "true"
+	static #subscribers = new Set<Subscriber>()
 
-	private static subscribers: Set<(msg: string) => void> = new Set()
+	/** Receive every line. Safe to call more than once. */
+	static subscribe(subscriber: Subscriber): void {
+		Logger.#subscribers.add(subscriber)
+	}
 
-	private static output(msg: string): void {
-		for (const subscriber of Logger.subscribers) {
-			try {
-				subscriber(msg)
-			} catch {
-				// ignore errors from subscribers
-			}
-		}
+	static error(message: string, ...args: unknown[]): void {
+		Logger.#emit("ERROR", message, args)
+	}
+	static warn(message: string, ...args: unknown[]): void {
+		Logger.#emit("WARN", message, args)
+	}
+	static info(message: string, ...args: unknown[]): void {
+		Logger.#emit("INFO", message, args)
+	}
+	static log(message: string, ...args: unknown[]): void {
+		Logger.#emit("LOG", message, args)
+	}
+	static debug(message: string, ...args: unknown[]): void {
+		Logger.#emit("DEBUG", message, args)
+	}
+	static trace(message: string, ...args: unknown[]): void {
+		Logger.#emit("TRACE", message, args)
 	}
 
 	/**
-	 * Register a callback to receive log output messages.
+	 * Renders one argument for the log line.
+	 *
+	 * An Error gets its stack: JSON.stringify turns an Error into "{}", which
+	 * once reduced a whole certification run's evidence to the string
+	 * "uncaught exception:" with nothing after it.
 	 */
-	static subscribe(outputFn: (msg: string) => void) {
-		Logger.subscribers.add(outputFn)
-	}
-
-	static error(message: string, ...args: any[]) {
-		Logger.#output("ERROR", message, undefined, args)
-	}
-
-	static warn(message: string, ...args: any[]) {
-		Logger.#output("WARN", message, undefined, args)
-	}
-
-	static log(message: string, ...args: any[]) {
-		Logger.#output("LOG", message, undefined, args)
-	}
-
-	static debug(message: string, ...args: any[]) {
-		Logger.#output("DEBUG", message, undefined, args)
-	}
-
-	static info(message: string, ...args: any[]) {
-		Logger.#output("INFO", message, undefined, args)
-	}
-
-	static trace(message: string, ...args: any[]) {
-		Logger.#output("TRACE", message, undefined, args)
-	}
-
-	static #output(level: string, message: string, error: Error | undefined, args: any[]) {
+	static #render(arg: unknown): string {
+		if (arg instanceof Error) return arg.stack ?? String(arg)
+		if (typeof arg === "string") return arg
 		try {
-			let fullMessage = message
-			// ERROR and WARN always carry their arguments. They used to be
-			// verbose-only, so in any non-dev build `Logger.error("uncaught
-			// exception:", err)` logged a bare label — a full certification run
-			// died with that as its entire evidence. And an Error must not go
-			// through JSON.stringify, which yields "{}": it gets its stack.
-			const attach = args.length > 0 && (Logger.isVerbose || level === "ERROR" || level === "WARN")
-			if (attach) {
-				fullMessage += ` ${args
-					.map((arg) => {
-						if (arg instanceof Error) return arg.stack ?? String(arg)
-						if (typeof arg === "string") return arg
-						try {
-							return JSON.stringify(arg)
-						} catch {
-							return String(arg)
-						}
-					})
-					.join(" ")}`
-			}
-			const errorSuffix = error?.message ? ` ${error.message}` : ""
-			Logger.output(`${level} ${fullMessage}${errorSuffix}`.trimEnd())
+			return JSON.stringify(arg) ?? String(arg)
 		} catch {
-			// do nothing if Logger fails
+			return String(arg)
+		}
+	}
+
+	static #emit(level: Level, message: string, args: unknown[]): void {
+		try {
+			// ERROR and WARN always carry their arguments. They were once
+			// verbose-only, which meant a production build logged the label and
+			// threw away the cause.
+			const detailed = args.length > 0 && (process.env.IS_DEV === "true" || ALWAYS_DETAILED.has(level))
+			const detail = detailed ? ` ${args.map(Logger.#render).join(" ")}` : ""
+			const line = `${level} ${message}${detail}`.trimEnd()
+			for (const subscriber of Logger.#subscribers) {
+				try {
+					subscriber(line)
+				} catch {
+					// A broken subscriber must not silence the others.
+				}
+			}
+		} catch {
+			// Logging is never worth throwing over.
 		}
 	}
 }

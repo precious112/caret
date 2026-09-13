@@ -184,6 +184,3 @@ Apache-2.0. Free forever, runs on your machine, no key and no account. The only
 thing Caret sends anywhere is anonymous usage and crash data, and one click
 turns it off. [docs/telemetry.md](docs/telemetry.md) lists exactly what is and
 is not collected.
-
-Caret began as a fork of [Cline](https://github.com/cline/cline), also
-Apache-2.0.

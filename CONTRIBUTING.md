@@ -1,13 +1,13 @@
-# Contributing to Cline
+# Contributing to Caret
 
-We're thrilled you're interested in contributing to Cline. Whether you're fixing a bug, adding a feature, or improving our docs, every contribution makes Cline smarter! To keep our community vibrant and welcoming, all members must adhere to our [Code of Conduct](CODE_OF_CONDUCT.md).
+We're thrilled you're interested in contributing to Caret. Whether you're fixing a bug, adding a feature, or improving our docs, every contribution makes Caret smarter! To keep our community vibrant and welcoming, all members must adhere to our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting Bugs or Issues
 
-Bug reports help make Cline better for everyone! Before creating a new issue, please [search existing ones](https://github.com/cline/cline/issues) to avoid duplicates. When you're ready to report a bug, head over to our [issues page](https://github.com/cline/cline/issues/new/choose) where you'll find a template to help you with filling out the relevant information.
+Bug reports help make Caret better for everyone! Before creating a new issue, please [search existing ones](https://github.com/precious112/caret/issues) to avoid duplicates. When you're ready to report a bug, head over to our [issues page](https://github.com/precious112/caret/issues/new/choose) where you'll find a template to help you with filling out the relevant information.
 
 <blockquote class='warning-note'>
-     🔐 <b>Important:</b> If you discover a security vulnerability, please use the <a href="https://github.com/cline/cline/security/advisories/new">Github security tool to report it privately</a>.
+     🔐 <b>Important:</b> If you discover a security vulnerability, please use the <a href="https://github.com/precious112/caret/security/advisories/new">Github security tool to report it privately</a>.
 </blockquote>
 
 
@@ -15,7 +15,7 @@ Bug reports help make Cline better for everyone! Before creating a new issue, pl
 
 All contributions must begin with a GitHub Issue, unless the change is for small bug fixes, typo corrections, minor wording improvements, or simple type fixes that don't change functionality.
 **For features and contributions**:
-- First check the [Feature Requests discussions board](https://github.com/cline/cline/discussions/categories/feature-requests) for similar ideas
+- First check the [Feature Requests discussions board](https://github.com/precious112/caret/discussions) for similar ideas
 - If your idea is new, create a new feature request  
 - Wait for approval from core maintainers before starting implementation
 - Once approved, feel free to begin working on a PR with the help of our community!
@@ -25,9 +25,9 @@ All contributions must begin with a GitHub Issue, unless the change is for small
 
 ## Deciding What to Work On
 
-Looking for a good first contribution? Check out issues labeled ["good first issue"](https://github.com/cline/cline/labels/good%20first%20issue) or ["help wanted"](https://github.com/cline/cline/labels/help%20wanted). These are specifically curated for new contributors and areas where we'd love some help!
+Looking for a good first contribution? Check out issues labeled ["good first issue"](https://github.com/precious112/caret/labels/good%20first%20issue) or ["help wanted"](https://github.com/precious112/caret/labels/help%20wanted). These are specifically curated for new contributors and areas where we'd love some help!
 
-We also welcome contributions to our [documentation](https://github.com/cline/cline/tree/main/docs)! Whether it's fixing typos, improving existing guides, or creating new educational content - we'd love to build a community-driven repository of resources that helps everyone get the most out of Cline. You can start by diving into `/docs` and looking for areas that need improvement.
+We also welcome contributions to our [documentation](https://github.com/precious112/caret/tree/main/docs)! Whether it's fixing typos, improving existing guides, or creating new educational content - we'd love to build a community-driven repository of resources that helps everyone get the most out of Caret. You can start by diving into `/docs` and looking for areas that need improvement.
 
 ## Development Setup
 
@@ -36,11 +36,11 @@ We also welcome contributions to our [documentation](https://github.com/cline/cl
 
 1. Clone the repository _(Requires [git-lfs](https://git-lfs.com/))_:
     ```bash
-    git clone https://github.com/cline/cline.git
+    git clone https://github.com/precious112/caret.git
     ```
 2. Open the project in VSCode:
     ```bash
-    code cline
+    code caret
     ```
 3. Install the necessary dependencies for the extension and webview-gui:
     ```bash
@@ -125,7 +125,7 @@ We also welcome contributions to our [documentation](https://github.com/cline/cl
 
 ## Writing and Submitting Code
 
-Anyone can contribute code to Cline, but we ask that you follow these guidelines to ensure your contributions can be smoothly integrated:
+Anyone can contribute code to Caret, but we ask that you follow these guidelines to ensure your contributions can be smoothly integrated:
 
 1. **Keep Pull Requests Focused**
 
@@ -150,7 +150,7 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
 
     **End-to-End (E2E) Testing**
     
-    Cline includes comprehensive E2E tests using Playwright that simulate real user interactions with the extension in VS Code:
+    Caret includes comprehensive E2E tests using Playwright that simulate real user interactions with the extension in VS Code:
     
     - **Running E2E tests:**
       ```bash
@@ -173,7 +173,7 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
       - Element inspection and selector validation
     
     - **Test environment:**
-      - Automated VS Code setup with Cline extension loaded
+      - Automated VS Code setup with Caret extension loaded
       - Mock API server for backend testing
       - Temporary workspaces with test fixtures
       - Video recording for failed tests
@@ -206,4 +206,4 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
 
 By submitting a pull request, you agree that your contributions will be licensed under the same license as the project ([Apache 2.0](LICENSE)).
 
-Remember: Contributing to Cline isn't just about writing code - it's about being part of a community that's shaping the future of AI-assisted development. Let's build something amazing together! 🚀
+Remember: Contributing to Caret isn't just about writing code - it's about being part of a community that's shaping the future of AI-assisted development. Let's build something amazing together! 🚀

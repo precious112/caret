@@ -21,14 +21,6 @@ function splitLines(text: string): string[] {
 	return text.split(/\r?\n/)
 }
 
-export interface GitCommit {
-	hash: string
-	shortHash: string
-	subject: string
-	author: string
-	date: string
-}
-
 async function checkGitRepo(cwd: string): Promise<boolean> {
 	try {
 		await execGit(["rev-parse", "--git-dir"], { cwd })
@@ -55,220 +47,6 @@ async function checkGitRepoHasCommits(cwd: string): Promise<boolean> {
 		return false
 	}
 }
-
-export async function searchCommits(query: string, cwd: string): Promise<GitCommit[]> {
-	try {
-		const isInstalled = await checkGitInstalled()
-		if (!isInstalled) {
-			Logger.error("Git is not installed")
-			return []
-		}
-
-		const isRepo = await checkGitRepo(cwd)
-		if (!isRepo) {
-			Logger.error("Not a git repository")
-			return []
-		}
-
-		// Check if repo has any commits
-		if (!(await checkGitRepoHasCommits(cwd))) {
-			// No commits yet in the repository
-			return []
-		}
-
-		// Search commits by hash or message, limiting to 10 results
-		const { stdout } = await execGit(
-			["log", "-n", "10", "--format=%H%n%h%n%s%n%an%n%ad", "--date=short", `--grep=${query}`, "--regexp-ignore-case"],
-			{ cwd },
-		)
-
-		let output = stdout
-		if (!output.trim() && /^[a-f0-9]+$/i.test(query)) {
-			// If no results from grep search and query looks like a hash, try searching by hash
-			const { stdout: hashStdout } = await execGit(
-				["log", "-n", "10", "--format=%H%n%h%n%s%n%an%n%ad", "--date=short", "--author-date-order", query],
-				{ cwd },
-			).catch(() => ({ stdout: "" }))
-
-			if (!hashStdout.trim()) {
-				return []
-			}
-
-			output = hashStdout
-		}
-
-		const commits: GitCommit[] = []
-		const lines = splitLines(output.trim()).filter((line) => line !== "--")
-
-		for (let i = 0; i < lines.length; i += 5) {
-			commits.push({
-				hash: lines[i],
-				shortHash: lines[i + 1],
-				subject: lines[i + 2],
-				author: lines[i + 3],
-				date: lines[i + 4],
-			})
-		}
-
-		return commits
-	} catch (error) {
-		Logger.error("Error searching commits:", error)
-		return []
-	}
-}
-
-export async function getCommitInfo(hash: string, cwd: string): Promise<string> {
-	try {
-		const isInstalled = await checkGitInstalled()
-		if (!isInstalled) {
-			return "Git is not installed"
-		}
-
-		const isRepo = await checkGitRepo(cwd)
-		if (!isRepo) {
-			return "Not a git repository"
-		}
-
-		// Check if repo has any commits
-		if (!(await checkGitRepoHasCommits(cwd))) {
-			return "Repository has no commits yet"
-		}
-
-		// Get commit info, stats, and diff separately
-		const { stdout: info } = await execGit(["show", "--format=%H%n%h%n%s%n%an%n%ad%n%b", "--no-patch", hash], {
-			cwd,
-		})
-		const [fullHash, shortHash, subject, author, date, body] = splitLines(info.trim())
-
-		const { stdout: stats } = await execGit(["show", "--stat", "--format=", hash], { cwd })
-
-		const { stdout: diff } = await execGit(["show", "--format=", hash], { cwd })
-
-		const summary = [
-			`Commit: ${shortHash} (${fullHash})`,
-			`Author: ${author}`,
-			`Date: ${date}`,
-			`\nMessage: ${subject}`,
-			body ? `\nDescription:\n${body}` : "",
-			"\nFiles Changed:",
-			stats.trim(),
-			"\nFull Changes:",
-		].join("\n")
-
-		const output = summary + "\n\n" + diff.trim()
-		return truncateOutput(output)
-	} catch (error) {
-		Logger.error("Error getting commit info:", error)
-		return `Failed to get commit info: ${error instanceof Error ? error.message : String(error)}`
-	}
-}
-
-export async function getWorkingState(cwd: string): Promise<string> {
-	try {
-		const isInstalled = await checkGitInstalled()
-		if (!isInstalled) {
-			return "Git is not installed"
-		}
-
-		const isRepo = await checkGitRepo(cwd)
-		if (!isRepo) {
-			return "Not a git repository"
-		}
-
-		// Get status of working directory
-		const { stdout: status } = await execGit(["status", "--short"], { cwd })
-		if (!status.trim()) {
-			return "No changes in working directory"
-		}
-
-		// Check if repo has any commits before trying to diff against HEAD
-		let diff = ""
-		if (await checkGitRepoHasCommits(cwd)) {
-			// Only run git diff if there are commits
-			const { stdout: diffOutput } = await execGit(["diff", "HEAD"], { cwd })
-			diff = diffOutput
-		} else {
-			// No commits yet, use status output only
-			return `Working directory changes (new repository):\n\n${status}`
-		}
-		const output = `Working directory changes:\n\n${status}\n\n${diff}`.trim()
-		return truncateOutput(output)
-	} catch (error) {
-		Logger.error("Error getting working state:", error)
-		return `Failed to get working state: ${error instanceof Error ? error.message : String(error)}`
-	}
-}
-
-export async function getGitDiff(cwd: string, stagedOnly = false): Promise<string> {
-	try {
-		const isInstalled = await checkGitInstalled()
-		if (!isInstalled) {
-			throw new Error("Git is not installed")
-		}
-
-		const isRepo = await checkGitRepo(cwd)
-		if (!isRepo) {
-			throw new Error("Not a git repository")
-		}
-
-		let diff = ""
-		let command = "git --no-pager diff --staged --diff-filter=d"
-		if (await checkGitRepoHasCommits(cwd)) {
-			// Only run git diff if there are commits
-			const { stdout: staged } = await execGit(["--no-pager", "diff", "--staged", "--diff-filter=d"], { cwd })
-			diff = staged.trim()
-		}
-
-		if (!stagedOnly && !diff) {
-			command = "git --no-pager diff HEAD --diff-filter=d"
-			const { stdout: unstaged } = await execGit(["--no-pager", "diff", "HEAD", "--diff-filter=d"], { cwd })
-			diff = unstaged.trim()
-		}
-
-		if (!diff) {
-			throw new Error("No changes in workspace for commit message")
-		}
-
-		return truncateOutput(`'${command}' Output:\n\n${diff}`.trim())
-	} catch (error) {
-		throw error
-	}
-}
-
-export async function getGitRemoteUrls(cwd: string): Promise<string[]> {
-	try {
-		const isInstalled = await checkGitInstalled()
-		if (!isInstalled) {
-			return []
-		}
-
-		const isRepo = await checkGitRepo(cwd)
-		if (!isRepo) {
-			return []
-		}
-
-		const { stdout } = await execGit(["remote", "-v"], { cwd })
-		if (!stdout.trim()) {
-			return []
-		}
-
-		// Parse output to extract unique URLs
-		// git remote -v output format: "remoteName remoteUrl (fetch|push)"
-		const remotes = splitLines(stdout.trim())
-			.filter((line) => line.includes("(fetch)")) // Only fetch URLs to avoid duplicates
-			.map((line) => {
-				const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)$/)
-				return match ? { name: match[1], url: match[2] } : null
-			})
-			.filter((remote): remote is { name: string; url: string } => remote !== null)
-
-		return remotes.map((remote) => `${remote.name}: ${remote.url}`)
-	} catch (error) {
-		Logger.error("Error getting git remotes:", error)
-		return []
-	}
-}
-
 export async function getLatestGitCommitHash(cwd: string): Promise<string | null> {
 	try {
 		const isInstalled = await checkGitInstalled()
@@ -458,24 +236,21 @@ export async function assessSyncGitState(
 }
 
 /**
- * True when `.caret/` has uncommitted changes — modified OR untracked (new
- * pages). `git status --porcelain` lists both; `git diff --quiet` alone would
- * miss untracked files.
+ * Whether anything under the design layer is uncommitted, staged or not.
+ *
+ * Private: the only caller is assessSyncGitState, which has already confirmed
+ * git is installed and this is a repo, so there is nothing to re-check here.
  */
-export async function hasUncommittedDesignChanges(cwd: string): Promise<boolean> {
-	if (!(await checkGitInstalled()) || !(await checkGitRepo(cwd))) {
-		return false
-	}
+async function hasUncommittedDesignChanges(cwd: string): Promise<boolean> {
 	try {
 		const { stdout } = await execGit(["status", "--porcelain", "--", ...DESIGN_CONTENT_DIRS], { cwd })
 		return stdout.trim().length > 0
 	} catch (error) {
-		Logger.error("Error checking uncommitted design changes:", error)
+		Logger.warn(`[git] could not read design-layer status: ${error}`)
 		return false
 	}
 }
 
-/** Whether `ref` resolves to a commit object in this repo. */
 async function commitExists(cwd: string, ref: string): Promise<boolean> {
 	try {
 		await execGit(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd })

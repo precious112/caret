@@ -489,7 +489,7 @@ function Composer(props: ComposerProps) {
 }
 
 /**
- * The Plan/Act toggle — Cline's gesture, deliberately.
+ * The Plan/Act toggle.
  *
  * In Plan the conversation's turns run read-only and the reply is a plan; in
  * Act they edit. Flipping to Act with a settled plan IS the approval — no

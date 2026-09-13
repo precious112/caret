@@ -1,6 +1,6 @@
 # Networking & Proxy Support
 
-To ensure Cline works correctly in all environments (VSCode, JetBrains, CLI) and with various network configurations (especially corporate proxies), strictly follow these guidelines for all network activity.
+To ensure Caret works on every network, especially behind corporate proxies, follow these guidelines for all network activity.
 
 In extension code, do NOT use the global `fetch` or a default `axios` instance. (Note, `shared/net.ts` is exempt from these rules because it sets up the fetch wrappers.) In Webview code, you SHOULD use global `fetch`.
 

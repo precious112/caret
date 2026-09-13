@@ -42,7 +42,7 @@ export async function migrateProject(projectPath: string): Promise<MigrationRepo
 
 /**
  * The pending-sync record changed shape: `taskId` became `syncId`, and
- * `preSyncCheckpoint` (a Cline checkpoint hash) became `preSyncSnapshot` (a git
+ * `preSyncCheckpoint` (a shadow-git checkpoint hash) became `preSyncSnapshot` (a git
  * commit). An old record cannot be translated — the checkpoint shadow-git it
  * pointed at is gone with the task loop — so it is dropped rather than carried
  * forward as a rollback target that would silently do nothing.

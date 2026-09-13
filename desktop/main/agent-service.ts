@@ -142,7 +142,7 @@ export class AgentService {
 	/**
 	 * The Plan/Act toggle's landing point, and where a flip becomes an approval.
 	 *
-	 * Flipping to Act with a settled plan IS the user saying "do it" — Cline's
+	 * Flipping to Act with a settled plan IS the user saying "do it" — the
 	 * semantics, chosen deliberately over an extra confirm button. The two
 	 * guards that keep that safe both live in `settledPlan()`: it is null while
 	 * a turn streams (a flip racing a turn's end can only change mode), and a
