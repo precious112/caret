@@ -14,6 +14,7 @@ import * as path from "path"
 
 import { Logger } from "@/shared/services/Logger"
 import { systemSpawnEnv } from "../spawn-env"
+import { emitDesignEvent } from "../telemetry-hooks"
 import { generateEntryFiles } from "./entry-template"
 import { generateViteConfig } from "./vite-config-template"
 
@@ -30,6 +31,46 @@ const REQUIRED_DEPS: Record<string, string> = {
 }
 
 const VITE_BOOT_TIMEOUT_MS = 30_000
+
+/**
+ * Thrown when the canvas cannot start for a reason the user has to fix, as
+ * opposed to a bug. Carries text meant to be shown, not logged.
+ */
+export class ShellPrerequisiteError extends Error {
+	constructor(
+		message: string,
+		readonly remedyUrl: string,
+	) {
+		super(message)
+		this.name = "ShellPrerequisiteError"
+	}
+}
+
+/**
+ * Fails with something the user can act on when `node` is not on PATH.
+ *
+ * The canvas is a Vite dev server, and Vite is spawned with system node. On a
+ * developer's machine that is always there, which is exactly why this went
+ * unnoticed: every machine Caret was tested on had it. On an ordinary computer
+ * it usually does not, and the spawn then fails with ENOENT before Vite writes
+ * a single line — so `vite.log` is created, stays empty, and the failure reads
+ * as "the canvas is broken" rather than "a dependency is missing".
+ */
+async function assertNodeAvailable(): Promise<void> {
+	const found = await new Promise<boolean>((resolve) => {
+		const probe = child_process.spawn("node", ["--version"], { stdio: "ignore", env: systemSpawnEnv() })
+		probe.on("error", () => resolve(false))
+		probe.on("close", (code) => resolve(code === 0))
+	})
+	if (found) return
+
+	emitDesignEvent("canvas_blocked", { reason: "node_missing" })
+	throw new ShellPrerequisiteError(
+		"Caret needs Node.js to run the live canvas, and it is not installed on this computer. " +
+			"Install Node.js 20 or newer, then reopen the project.",
+		"https://nodejs.org/en/download",
+	)
+}
 
 export class RenderingShell {
 	private viteProcess: child_process.ChildProcess | null = null
@@ -51,7 +92,7 @@ export class RenderingShell {
 	}
 
 	getUrl(): string | null {
-		return this.port === null ? null : `http://localhost:${this.port}/`
+		return this.port === null ? null : `http://127.0.0.1:${this.port}/`
 	}
 
 	isRunning(): boolean {
@@ -61,6 +102,8 @@ export class RenderingShell {
 	/** Installs missing dependencies if needed, regenerates the shell, boots Vite. */
 	async start(): Promise<number> {
 		const caretDir = path.join(this.workspacePath, ".caret")
+
+		await assertNodeAvailable()
 
 		if (await this.needsInstall(caretDir)) {
 			Logger.info("[design] Installing .caret dependencies...")
@@ -164,10 +207,18 @@ export class RenderingShell {
 			const logStream: WriteStream = createWriteStream(path.join(cwd, "vite.log"), { flags: "w" })
 
 			this.stoppingIntentionally = false
+			// 127.0.0.1, never "localhost". Vite resolves "localhost" and binds the
+			// FIRST address it gets, which on this machine is ::1 and ::1 only —
+			// measured, nothing listens on 127.0.0.1 at all. macOS then reaches it
+			// because Chromium also prefers ::1, and Windows does not: it connects
+			// to 127.0.0.1, finds nothing, and the canvas never loads while Vite
+			// sits there healthy and logs nothing wrong. Pinning both the bind and
+			// the URL to a literal address takes DNS out of the path entirely.
+			//
 			// No --port: Vite auto-increments from 5173 when the port is taken, which
 			// is what keeps several open projects from colliding. The chosen port is
 			// read back from stdout below rather than assumed.
-			const proc = child_process.spawn("node", [viteEntry, "--host", "localhost"], {
+			const proc = child_process.spawn("node", [viteEntry, "--host", "127.0.0.1"], {
 				cwd,
 				stdio: "pipe",
 				env: systemSpawnEnv(),
@@ -178,6 +229,7 @@ export class RenderingShell {
 			const timeout = setTimeout(() => {
 				if (!resolved) {
 					resolved = true
+					emitDesignEvent("canvas_blocked", { reason: "vite_boot_timeout" })
 					reject(new Error("Vite server did not start within 30 seconds"))
 				}
 			}, VITE_BOOT_TIMEOUT_MS)
@@ -187,7 +239,7 @@ export class RenderingShell {
 				Logger.info(`[vite] ${output.trim()}`)
 				logStream.write(output)
 
-				const match = output.match(/Local:\s+http:\/\/localhost:(\d+)/)
+				const match = output.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)/)
 				if (match && !resolved) {
 					resolved = true
 					clearTimeout(timeout)
@@ -213,6 +265,7 @@ export class RenderingShell {
 				this.port = null
 				if (wasRunning && !this.stoppingIntentionally) {
 					Logger.error(`[design] Vite dev server exited unexpectedly (code ${code})`)
+					emitDesignEvent("canvas_blocked", { reason: "vite_exited", code: code ?? -1 })
 					this.onUnexpectedExit()
 				}
 			})
@@ -221,6 +274,10 @@ export class RenderingShell {
 				if (!resolved) {
 					resolved = true
 					clearTimeout(timeout)
+					// No event existed for this, so the one failure that makes the
+					// whole product useless was the one thing analytics could not
+					// see. Reason only, never a path or a message.
+					emitDesignEvent("canvas_blocked", { reason: "vite_spawn_failed" })
 					reject(err)
 				}
 			})
@@ -244,9 +301,15 @@ function runNpmInstall(cwd: string): Promise<void> {
 			if (code === 0) {
 				resolve()
 			} else {
+				emitDesignEvent("canvas_blocked", { reason: "install_failed", code })
 				reject(new Error(`npm install failed (exit ${code}): ${stderr}`))
 			}
 		})
-		proc.on("error", reject)
+		proc.on("error", (err) => {
+			// npm is npm.cmd on Windows and absent entirely without Node, so this
+			// is the same missing-prerequisite story one step earlier.
+			emitDesignEvent("canvas_blocked", { reason: "npm_missing" })
+			reject(err)
+		})
 	})
 }

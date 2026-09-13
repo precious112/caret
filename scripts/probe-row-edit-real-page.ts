@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 							(v) =>
 								v.webContents &&
 								!v.webContents.isDestroyed() &&
-								v.webContents.getURL().startsWith("http://localhost"),
+								v.webContents.getURL().startsWith("http://127.0.0.1"),
 						)
 						if (found) wc = found.webContents
 					}

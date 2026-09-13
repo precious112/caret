@@ -42,7 +42,7 @@ async function main(): Promise<void> {
 		let chrome = await app.firstWindow({ timeout: 60_000 })
 		const deadline = Date.now() + 120_000
 		while (Date.now() < deadline) {
-			const found = app.windows().find((page) => !page.url().startsWith("http://localhost"))
+			const found = app.windows().find((page) => !page.url().startsWith("http://127.0.0.1"))
 			if (found) {
 				chrome = found
 				const mounted = await found

@@ -1039,7 +1039,7 @@ async function main(): Promise<void> {
 					const canvas = views.find((v) => v.webContents && !v.webContents.isDestroyed())
 					if (!canvas) return null
 					const url = canvas.webContents.getURL()
-					if (!url.startsWith("http://localhost")) return null
+					if (!url.startsWith("http://127.0.0.1")) return null
 					const frames = await canvas.webContents
 						.executeJavaScript("document.querySelectorAll('iframe').length")
 						.catch(() => 0)
@@ -1253,7 +1253,7 @@ async function main(): Promise<void> {
 					const win = BrowserWindow.getAllWindows()[0]
 					const views = (win?.contentView?.children ?? []) as any[]
 					const url = views.find((v) => v.webContents && !v.webContents.isDestroyed())?.webContents.getURL() ?? ""
-					return url.startsWith("http://localhost") ? new URL(url).origin : null
+					return url.startsWith("http://127.0.0.1") ? new URL(url).origin : null
 				}),
 			60_000,
 		)
@@ -1575,7 +1575,7 @@ async function main(): Promise<void> {
 					const win = BrowserWindow.getAllWindows()[0]
 					const views = (win?.contentView?.children ?? []) as any[]
 					const url = views.find((v) => v.webContents && !v.webContents.isDestroyed())?.webContents.getURL() ?? ""
-					return url.startsWith("http://localhost") ? new URL(url).origin : null
+					return url.startsWith("http://127.0.0.1") ? new URL(url).origin : null
 				}),
 			60_000,
 		)
@@ -2142,7 +2142,7 @@ async function main(): Promise<void> {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -2368,7 +2368,7 @@ async function main(): Promise<void> {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -2549,7 +2549,7 @@ async function main(): Promise<void> {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -2649,7 +2649,7 @@ async function main(): Promise<void> {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -2880,7 +2880,7 @@ export default function ListDemo() {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -3092,7 +3092,7 @@ export default function ShaderDemo() {
 					const views = (win?.contentView?.children ?? []) as any[]
 					const source = views
 						.map((v) => (v.webContents && !v.webContents.isDestroyed() ? v.webContents.getURL() : ""))
-						.find((u: string) => u.startsWith("http://localhost"))
+						.find((u: string) => u.startsWith("http://127.0.0.1"))
 					if (!source) return null
 					const base = new URL(source).origin
 					const probe = new BrowserWindow({
@@ -3321,7 +3321,7 @@ export default function ShaderDemo() {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -3519,7 +3519,7 @@ export default function ShaderDemo() {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -4296,7 +4296,7 @@ export default function CatalogDemo() {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -4448,7 +4448,7 @@ export default function CatalogDemo() {
 						(v) =>
 							v.webContents &&
 							!v.webContents.isDestroyed() &&
-							v.webContents.getURL().startsWith("http://localhost"),
+							v.webContents.getURL().startsWith("http://127.0.0.1"),
 					)
 					if (!canvas) return { probeFailed: "no canvas view" }
 					const frame = canvas.webContents.mainFrame.frames.find((f: any) => f.url.includes("page=align-demo"))
@@ -5074,7 +5074,7 @@ export default function CatalogDemo() {
 					const win = BrowserWindow.getAllWindows()[0]
 					const views = (win?.contentView?.children ?? []) as any[]
 					const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-					if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+					if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 					if (!canvas) await new Promise((r) => setTimeout(r, 500))
 				}
 				if (!canvas) return { error: "the canvas view never mounted" }
@@ -5184,7 +5184,7 @@ export default function CatalogDemo() {
 					for (const win of BrowserWindow.getAllWindows()) {
 						for (const view of (win?.contentView?.children ?? []) as any[]) {
 							const wc = view?.webContents
-							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 							const clicked = await wc
 								.executeJavaScript(
 									`(() => { const b = document.querySelector('[data-testid="explore-cancel-${target}"]'); if (!b) return false; b.click(); return true })()`,
@@ -5248,7 +5248,7 @@ export default function CatalogDemo() {
 				for (const win of BrowserWindow.getAllWindows()) {
 					for (const view of (win?.contentView?.children ?? []) as any[]) {
 						const wc = view?.webContents
-						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 						const list = await wc.executeJavaScript(`window.__EXPLORE_STATUSES__ ?? null`).catch(() => null)
 						if (list) return list as Array<{ n: string; p: string }>
 					}
@@ -5281,7 +5281,7 @@ export default function CatalogDemo() {
 					for (const win of BrowserWindow.getAllWindows()) {
 						for (const view of (win?.contentView?.children ?? []) as any[]) {
 							const wc = view?.webContents
-							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 							const result = await wc
 								.executeJavaScript(
 									`(async () => {
@@ -5328,7 +5328,7 @@ export default function CatalogDemo() {
 					for (const win of BrowserWindow.getAllWindows()) {
 						for (const view of (win?.contentView?.children ?? []) as any[]) {
 							const wc = view?.webContents
-							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+							if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 							const clicked = await wc
 								.executeJavaScript(
 									`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
@@ -5412,7 +5412,7 @@ export default function CatalogDemo() {
 				const win = BrowserWindow.getAllWindows()[0]
 				const views = (win?.contentView?.children ?? []) as any[]
 				const found = views.find((v) => v.webContents && !v.webContents.isDestroyed())
-				if (found && found.webContents.getURL().startsWith("http://localhost")) canvas = found
+				if (found && found.webContents.getURL().startsWith("http://127.0.0.1")) canvas = found
 				if (!canvas) await new Promise((r) => setTimeout(r, 500))
 			}
 			if (!canvas) return { error: "the canvas view never mounted" }
@@ -5513,7 +5513,7 @@ export default function CatalogDemo() {
 				for (const win of BrowserWindow.getAllWindows()) {
 					for (const view of (win?.contentView?.children ?? []) as any[]) {
 						const wc = view?.webContents
-						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 						const clicked = await wc
 							.executeJavaScript(
 								`(() => { const b = document.querySelector('[data-testid="${useTestId}"]'); if (!b) return false; b.click(); return true })()`,
@@ -5645,7 +5645,7 @@ export default function CatalogDemo() {
 				for (const win of BrowserWindow.getAllWindows()) {
 					for (const view of (win?.contentView?.children ?? []) as any[]) {
 						const wc = view?.webContents
-						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://localhost")) continue
+						if (!wc || wc.isDestroyed() || !wc.getURL().startsWith("http://127.0.0.1")) continue
 						const clicked = await wc
 							.executeJavaScript(
 								`(() => {

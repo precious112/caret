@@ -29,7 +29,7 @@ import * as fs from "node:fs"
 import { app, BrowserWindow } from "electron"
 import { settleScript } from "../desktop/main/page-settle"
 
-const SHELL = process.env.SHELL_URL || "http://localhost:5199"
+const SHELL = process.env.SHELL_URL || "http://127.0.0.1:5199"
 const PAGE_ID = process.env.PAGE_ID || "fold-landing"
 const OUT = "/tmp/fullpage-frames"
 const FRAME_H = 900

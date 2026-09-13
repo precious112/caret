@@ -58,7 +58,7 @@ async function main(): Promise<void> {
 	console.log(`fixture ${root}\nbooting the shell (first run installs deps, ~60s)…`)
 	const shell = new RenderingShell(root)
 	const port = await shell.start()
-	const url = `http://localhost:${port}/`
+	const url = `http://127.0.0.1:${port}/`
 	console.log(`shell at ${url}`)
 
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "caret-canvasclick-shell-"))
