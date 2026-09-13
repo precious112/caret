@@ -13,6 +13,8 @@ beforePack: build/before-pack.cjs
 # Ad-hoc signs the macOS bundle. See the file for why `identity: null` alone is
 # not enough — it means "skip", and an unsigned arm64 binary will not launch.
 afterPack: build/after-pack.cjs
+# Verifies the signature electron-builder just applied. Runs after signApp.
+afterSign: build/after-sign.cjs
 
 files:
   - out/**/*
@@ -50,14 +52,31 @@ mac:
   target:
     - target: zip
       arch: [arm64, x64]
-  # Ad-hoc signing is mandatory on Apple Silicon and free: an unsigned arm64
-  # binary will not execute at all, and the failure surfaces as "the app is
-  # damaged", which reads as a corrupt download rather than a signing issue.
-  identity: null
-  # Hardened runtime and notarization need a paid Developer ID. The hooks are
-  # configured so adding the certificate later is a secrets change rather than a
-  # pipeline rebuild.
-  hardenedRuntime: false
+  # NO `identity: null` here, deliberately. It means "skip signing ALWAYS", even
+  # when CSC_LINK is set, and after-pack.cjs stands down as soon as it sees a
+  # certificate. Together those would have produced a bundle with no signature
+  # at all on the first signed build. Unsigned builds are selected by the
+  # environment instead:
+  #
+  #   unsigned:  CSC_IDENTITY_AUTO_DISCOVERY=false npm run package
+  #              -> electron-builder skips, after-pack.cjs ad-hoc signs.
+  #              Ad-hoc is mandatory on Apple Silicon: an arm64 Mach-O with no
+  #              valid signature will not execute, and the failure reads as
+  #              "the app is damaged", i.e. a corrupt download.
+  #
+  #   signed:    CSC_LINK + CSC_KEY_PASSWORD (+ APPLE_* to notarize)
+  #              -> electron-builder signs with the hardened runtime and the
+  #              entitlements below, then notarizes and staples.
+  #
+  # The hardened runtime only applies during electron-builder's own signing
+  # step, so leaving it on costs the unsigned path nothing.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # `true` reads APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID from
+  # the environment and is a no-op when they are absent, so an unsigned build
+  # does not try to reach Apple.
+  notarize: true
   gatekeeperAssess: false
   extendInfo:
     NSAppleEventsUsageDescription: Caret opens files in your editor.

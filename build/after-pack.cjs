@@ -28,10 +28,12 @@ exports.default = async function afterPack(context) {
 
 	if (context.electronPlatformName !== "darwin") return
 
-	// A real identity is configured — let electron-builder do the signing.
-	if (process.env.CSC_LINK || process.env.CSC_NAME) return
-
 	const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+
+	// electron-builder signs AFTER this hook (macPackager.js calls afterPack,
+	// then doSignAfterPack), so a real certificate is handled in
+	// build/after-sign.cjs. Nothing to do here but stand aside.
+	if (process.env.CSC_LINK || process.env.CSC_NAME) return
 
 	// Deep, force, ad-hoc ("-"). Deep is required because the Electron
 	// Framework and the helper apps are nested bundles with their own
