@@ -36,7 +36,10 @@ regenerated away the next time you ask for something.
 Free, runs on your machine, no account. Needs [Node.js](https://nodejs.org/en/download)
 installed for the live canvas. This repo holds the **source**; the
 **downloads** are at
-[caret-desktop](https://github.com/precious112/caret-desktop).
+[caret-desktop](https://github.com/precious112/caret-desktop), which is also
+where the issues and stars live. The two are split for historical reasons
+only, from when Caret was a VS Code fork, and **we are merging them as soon as
+the current release settles**.
 
 ---
 
